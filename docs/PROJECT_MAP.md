@@ -1,13 +1,19 @@
 # 项目索引（PROJECT MAP）
 
-> 最后更新：2026-09-17
-> 状态：**M1 项目骨架完成**，待进入 M2 自动播放开发
+> 最后更新：2026-09-17 21:52
+> 状态：**M2 完成**，油猴脚本 v0.1.0（自动播放 + 断点续播）已可安装实测
 
 ---
 
-## 一、项目一句话
+## 〇、快速上手
 
-智慧树网课助手：自动播放 + 断点续播 + AI 自动答题（油猴脚本形态）。
+```bash
+npm run build     # 构建 → dist/zhihuishu-helper.user.js
+npm test          # 71 项逻辑单测
+```
+
+装脚本：浏览器装 Tampermonkey → 把 `dist/zhihuishu-helper.user.js` 拖进浏览器窗口。
+详见 [`docs/10-M2使用说明.md`](10-M2使用说明.md)。
 
 ---
 
@@ -23,24 +29,38 @@
 
 ---
 
-## 三、代码地图（待开发）
+## 三、代码地图（v0.1.0 已实现）
 
 ```
-src/
-├── zhihuishu-helper.user.js     ← 主入口（油猴脚本头 + 调度）
-├── core/
-│   ├── adapter.js               站点适配层
-│   ├── player.js                播放控制
-│   ├── resume.js                断点续播
-│   ├── questions.js             题目采集
-│   ├── solver.js                答案求解
-│   ├── filler.js                答案回填
-│   ├── panel.js                 悬浮控制台
-│   └── scheduler.js             主循环调度
-├── api/
-│   ├── tiku.js                  题库客户端
-│   └── llm.js                   LLM 客户端
-└── config.js                    默认配置
+src/                              # 源码（8 模块，按序拼装）
+├── 00-config.js       ✅       配置层：GM存储 + 倍速夹逼 + 日志缓冲
+├── 01-util.js         ✅       工具层：节流/可见性/等待/文本处理
+├── 02-adapter.js      ✅       适配层：5套页面自动识别 + 统一目录 API
+├── 03-player.js       ✅       播放层：静音/倍速/防暂停/卡死检测/回退重试
+├── 04-resume.js       ✅       续播层：GM持久化/过期清理/时长换算
+├── 05-scheduler.js    ✅       调度层：2s主循环 + 三级守卫 + 结束判定
+├── 06-panel.js        ✅       面板层：Shadow DOM 悬浮控制台
+├── 07-main.js         ✅       入口层：初始化 + SPA监听 + window.zhs
+├── 08-questions.js    ⬜ M4   题目采集（弹题/作业/考试）
+├── 09-solver.js       ⬜ M4   答案求解（题库通道）
+├── 10-llm.js          ⬜ M5   LLM 通道 + 投票
+└── 11-filler.js       ⬜ M4   答案回填 + 校验
+
+build.js               ✅       构建：src/*.js → dist/*.user.js
+test/run.js            ✅       单测：71 项断言（jsdom）
+tools/snapshot.sh      ✅       快照：三层保护
+dist/                  ✅       产物（git 忽略）
+```
+
+### 运行时 API（Console 可调）
+
+```js
+zhs.stats()        // 课程完成统计
+zhs.logs()         // 全部日志
+zhs.start() / zhs.stop()
+zhs.next()         // 手动切下一节
+zhs.clearResume()  // 清除续播记录
+zhs.config({speed: 1.8})
 ```
 
 ---
@@ -98,9 +118,19 @@ LLM（DeepSeek）→ 生成 3 次 → 投票取众数
 
 ---
 
-## 六、下一步（M2）
+## 六、里程碑进度
 
-1. 写 `src/zhihuishu-helper.user.js` 骨架（脚本头 + 配置 + 日志）
-2. 实现 `adapter.js` 站点识别 + `player.js` 播放控制
-3. 本地做**逻辑单测**（不启真实浏览器）
-4. 交给瑞宝宝在浏览器里实测
+- [x] M0 情报侦察（5 套页面结构 + 8 个参考项目）
+- [x] M1 项目骨架（文档 + 快照机制）
+- [x] **M2 自动播放 + 断点续播 + 悬浮面板（v0.1.0，71 项测试全绿）**
+- [ ] M4 AI 答题——题库通道
+- [ ] M5 AI 答题——LLM 通道 + 投票
+- [ ] M6 面板打磨 + 习惯分
+
+## 七、下一步（M4）
+
+1. 写 `08-questions.js`：采集弹题（`#playTopic-dialog`）/ 作业（`.subject_node`）
+2. 写 `09-solver.js`：对接 TikuAdapter（`:8060/adapter-service/search`）
+3. 写 `11-filler.js`：答案回填 + 200ms 后校验
+4. 加对应单测
+
