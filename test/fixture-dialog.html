@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>仿真智慧树弹题（用于截屏测试）</title>
+<style>
+  body { margin: 0; font-family: "Microsoft YaHei", sans-serif; background: #f5f5f5; }
+  .header { height: 56px; background: #2c3e50; color: #fff; display: flex; align-items: center; padding: 0 20px; }
+  .main { display: flex; height: calc(100vh - 56px); }
+  .left { flex: 1; padding: 16px; position: relative; }
+  .player { width: 100%; height: 420px; background: #000; border-radius: 6px; }
+  video { width: 100%; height: 100%; }
+  .right { width: 300px; background: #fff; border-left: 1px solid #e0e0e0; }
+
+  /* 弹题弹窗 —— 模拟智慧树真实结构 */
+  #playTopic-dialog {
+    position: absolute; top: 60px; left: 50%; transform: translateX(-50%);
+    width: 560px; background: #fff; border-radius: 8px; padding: 22px 26px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.25); z-index: 100;
+  }
+  .topic-title { font-size: 15px; font-weight: 500; color: #222; margin-bottom: 16px; line-height: 1.6; }
+  .el-pager { display: flex; gap: 8px; margin-bottom: 14px; }
+  .el-pager .number {
+    width: 28px; height: 28px; border-radius: 4px; background: #f0f0f0; color: #666;
+    display: flex; align-items: center; justify-content: center; font-size: 13px; cursor: pointer;
+  }
+  .el-pager .number.active { background: #185FA5; color: #fff; }
+  .topic .radio ul { list-style: none; margin: 0; padding: 0; }
+  .topic .radio ul li {
+    padding: 11px 14px; margin-bottom: 8px; border: 1px solid #e0e0e0; border-radius: 6px;
+    cursor: pointer; font-size: 13px; color: #333; display: flex; align-items: center; gap: 10px;
+  }
+  .topic .radio ul li:hover { border-color: #185FA5; background: #f7fbff; }
+  .topic .radio ul li.picked { border-color: #1D9E75; background: #eaf7f2; }
+  .radio-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #ccc; flex: 0 0 14px; }
+  .li.picked .radio-dot { border-color: #1D9E75; background: #1D9E75; }
+  .topic-actions { margin-top: 18px; display: flex; justify-content: flex-end; gap: 10px; }
+  .btn, .close-btn {
+    padding: 8px 22px; border-radius: 5px; border: none; cursor: pointer; font-size: 13px;
+  }
+  .btn { background: #185FA5; color: #fff; }
+  .close-btn { background: #f0f0f0; color: #666; }
+</style>
+</head>
+<body>
+
+<div class="header"><h1>智慧树 · 课中弹题（仿真页面，仅供测试）</h1></div>
+
+<div class="main">
+  <div class="left">
+    <div class="player"><video id="v" muted playsinline></video></div>
+
+    <div id="playTopic-dialog">
+      <div class="topic-title">下列关于 TCP 三次握手的说法，正确的是（）</div>
+
+      <div class="el-pager">
+        <span class="number active">1</span>
+        <span class="number">2</span>
+      </div>
+
+      <div class="topic">
+        <div class="radio">
+          <ul>
+            <li><span class="radio-dot"></span>三次握手可以防止已失效的连接请求突然传送到服务器</li>
+            <li><span class="radio-dot"></span>三次握手的第二次握手由客户端发起</li>
+            <li><span class="radio-dot"></span>三次握手的主要目的是加密传输数据</li>
+            <li><span class="radio-dot"></span>三次握手完成后端口立即关闭</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="topic-actions">
+        <button class="close-btn">关闭</button>
+        <button class="btn">提交</button>
+      </div>
+    </div>
+  </div>
+  <div class="right"></div>
+</div>
+
+<script src="./fixture-media.js"></script>
+<script>
+// 仿真视频：打桩有限时长，避免 duration=Infinity 干扰守卫与倍速逻辑
+const video = document.getElementById('v');
+window.__FixtureMedia.stub(video, 300);
+video.muted = true;
+const canvas = document.createElement('canvas');
+canvas.width = 640; canvas.height = 360;
+const ctx = canvas.getContext('2d');
+ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0, 0, 640, 360);
+ctx.fillStyle = '#eee'; ctx.font = '20px "Microsoft YaHei"';
+ctx.fillText('视频被弹题中断（测试）', 50, 100);
+
+// 第二页内容（切换分页时替换）
+const page2 = {
+  title: '以下关于 HTTP 与 HTTPS 的说法，错误的是（）',
+  options: [
+    'HTTPS 在 HTTP 基础上加入了 TLS/SSL 加密',
+    'HTTPS 默认使用 443 端口',
+    'HTTPS 的传输速度一定比 HTTP 慢一倍',
+    'HTTPS 可以防止中间人篡改内容'
+  ]
+};
+
+// 分页切换
+document.querySelectorAll('.el-pager .number').forEach((num, i) => {
+  num.addEventListener('click', () => {
+    document.querySelectorAll('.el-pager .number').forEach((n) => n.classList.remove('active'));
+    num.classList.add('active');
+    if (i === 1) {
+      document.querySelector('.topic-title').textContent = page2.title;
+      document.querySelectorAll('.topic .radio ul li').forEach((li, j) => {
+        li.classList.remove('picked');
+        li.childNodes[1].nodeValue = page2.options[j];
+      });
+    }
+    console.log('[页面] 切到第 ' + (i + 1) + ' 页');
+  });
+});
+
+// 选项点击
+document.querySelectorAll('.topic .radio ul li').forEach((li) => {
+  li.addEventListener('click', () => {
+    li.classList.add('picked');
+    console.log('[页面] 选中：' + li.textContent.trim().slice(0, 20));
+  });
+});
+
+// 关闭
+function closeDialog() {
+  document.getElementById('playTopic-dialog').style.display = 'none';
+  console.log('[页面] 弹题已关闭');
+}
+document.querySelector('.close-btn').addEventListener('click', closeDialog);
+// 真实平台点「提交」后也会关掉弹窗，仿真同样处理
+document.querySelector('.btn').addEventListener('click', closeDialog);
+</script>
+
+</body>
+</html>

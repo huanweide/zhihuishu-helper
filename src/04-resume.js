@@ -41,7 +41,13 @@
 
   const Resume = {
     _saveThrottled: null,
-    _bound: false,
+    _boundVideo: null,      // 当前绑定的 video 元素
+    _bindId: -1,            // 绑定序号：防止旧监听器写入
+    _bindSeq: 0,            // 自增计数器
+    _lastDuration: 0,       // 上次记录的时长，用于换源时的比例换算
+    _onTimeUpdate: null,
+    _onPause: null,
+    _onUnload: null,
     _restored: false,
 
     /** 保存当前进度（节流由调用方控制） */
@@ -103,29 +109,108 @@
 
     /**
      * 绑定 video：监听 timeupdate 定期保存
+     *
+     * 踩坑记录（真 bug，截屏测试抓出）：
+     *   早期版本把「构造节流函数」写在「已绑定就返回」这条守卫**之前**，
+     *   而 07-main 里 bindVideo 会被调用两次 —— 第二次调用虽然什么都没绑，
+     *   却把 this._saveThrottled 覆盖成了一个**没被任何事件触发的**新函数，
+     *   于是已经挂上的 timeupdate 监听器指向了那个死函数，进度永远存不下来。
+     *
+     * 现在的做法：
+     *   1. 守卫放最前面，重复调用立即返回，不产生任何副作用
+     *   2. 每次绑定存一个绑定 id，监听器回调只认「当前这一次」的绑定
+     *   3. 顺带支持 duration 变化时的按比例换算（换清晰度/换视频源场景）
      */
     bindVideo(video, courseId, lessonKey) {
-      if (!video || !courseId) return;
-      this._saveThrottled = U.throttle(() => {
-        if (video.paused) return;
-        if (!ZHS.config.resume) return;
-        this.save(courseId, lessonKey, video.currentTime, video.duration);
-      }, Number(ZHS.config.saveIntervalMs) || 5000);
+      if (!video || !courseId) return false;
 
-      if (this._bound && this._boundVideo === video) return;
+      // 守卫前置：同一个 video 重复绑定直接返回（视频元素被替换时才会真正重绑）
+      if (this._boundVideo === video) return true;
+
+      // 解绑旧的：视频元素被换掉了，旧监听留在旧元素上没意义
+      this._detach();
+
+      const bindId = ++this._bindSeq;
       this._boundVideo = video;
-      this._bound = true;
+      this._bindId = bindId;
 
-      video.addEventListener('timeupdate', () => {
-        if (this._saveThrottled) this._saveThrottled();
-      });
-      video.addEventListener('pause', () => {
-        // 暂停时立刻存一次，防止关页面丢进度
-        if (ZHS.config.resume) {
-          this.save(courseId, lessonKey, video.currentTime, video.duration);
+      const saveNow = (reason) => {
+        if (bindId !== this._bindId) return;      // 已被后来的绑定取代
+        if (!ZHS.config.resume) return;
+        if (video.paused) return;
+        const t = video.currentTime;
+        const d = video.duration;
+        if (!Number.isFinite(t) || t < 5) return;
+        // duration 变了（换清晰度/换源）→ 把已记录的时间按比例换算，避免续播跳错位置
+        let saveT = t;
+        let saveD = d;
+        if (Number.isFinite(d) && d > 0 && this._lastDuration > 0 && Math.abs(d - this._lastDuration) > 5) {
+          const ratio = t / d;
+          saveT = Math.round(ratio * this._lastDuration * 10) / 10;
+          saveD = this._lastDuration;
+          ZHS.Log.info('视频时长变化（' + Math.round(this._lastDuration) + 's → ' + Math.round(d)
+            + 's），进度换算后记录为 ' + Math.round(saveT) + 's');
         }
-      });
-      ZHS.Log.debug('已绑定进度记录到视频');
+        if (Number.isFinite(d) && d > 0) this._lastDuration = d;
+        this.save(courseId, lessonKey, saveT, saveD);
+      };
+
+      this._saveThrottled = U.throttle(() => saveNow('timeupdate'),
+        Number(ZHS.config.saveIntervalMs) || 5000);
+
+      this._onTimeUpdate = () => { this._saveThrottled(); };
+      this._onPause = () => {
+        // 暂停时立刻存一次，防止关页面丢进度（绕过节流，直接算）
+        if (bindId !== this._bindId) return;
+        if (!ZHS.config.resume) return;
+        const t = video.currentTime;
+        if (!Number.isFinite(t) || t < 5) return;
+        this.save(courseId, lessonKey, t, video.duration);
+      };
+      this._onUnload = () => {
+        if (bindId !== this._bindId) return;
+        if (!ZHS.config.resume) return;
+        const t = video.currentTime;
+        if (!Number.isFinite(t) || t < 5) return;
+        this.save(courseId, lessonKey, t, video.duration);
+      };
+
+      video.addEventListener('timeupdate', this._onTimeUpdate);
+      video.addEventListener('pause', this._onPause);
+      // 关页面/切后台时兜底存一次
+      try {
+        window.addEventListener('pagehide', this._onUnload);
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') this._onUnload();
+        });
+      } catch (e) { /* 忽略 */ }
+
+      ZHS.Log.debug('已绑定进度记录到视频（bind#' + bindId + '）');
+      return true;
+    },
+
+    /** 解绑当前 video 上的监听 */
+    _detach() {
+      const v = this._boundVideo;
+      if (!v) return;
+      try {
+        if (this._onTimeUpdate) v.removeEventListener('timeupdate', this._onTimeUpdate);
+        if (this._onPause) v.removeEventListener('pause', this._onPause);
+        if (this._onUnload) window.removeEventListener('pagehide', this._onUnload);
+      } catch (e) { /* 忽略 */ }
+      this._boundVideo = null;
+      this._bindId = -1;
+      this._saveThrottled = null;
+    },
+
+    /** 手动落盘一次（供面板/调试用） */
+    flush() {
+      const v = this._boundVideo;
+      if (!v) return false;
+      const t = v.currentTime;
+      if (!Number.isFinite(t) || t < 5) return false;
+      this.save(ZHS.state.courseId, ZHS.state.lessonKey, t, v.duration);
+      return true;
     },
 
     /**

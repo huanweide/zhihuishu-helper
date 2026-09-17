@@ -119,7 +119,19 @@
       <div class="row"><label>静音</label><button class="sw" data-cfg="mute"></button></div>
       <div class="row"><label>断点续播</label><button class="sw" data-cfg="resume"></button></div>
       <div class="row"><label>AI 自动答题</label><button class="sw" data-cfg="autoAnswer"></button></div>
-      <div class="row"><label>倍速</label><input type="range" min="1" max="1.8" step="0.1" data-cfg-num="speed" style="width:110px"><span class="v-speed"></span></div>
+      <div class="row"><label>题库通道</label><button class="sw" data-cfg="bankEnabled"></button></div>
+      <div class="row"><label>LLM 通道</label><button class="sw" data-cfg="llmEnabled"></button></div>
+      <div class="row"><label>答题模式</label>
+        <select class="sel-mode">
+          <option value="both">双通道</option>
+          <option value="bank">仅题库</option>
+          <option value="llm">仅LLM</option>
+        </select>
+      </div>
+      <div class="row"><label>倍速</label><input type="range" min="1" max="1.8" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
+      <div class="row"><label>题库地址</label><input type="text" class="in-bank" placeholder="http://localhost:8060" style="width:150px;font-size:11px"></div>
+      <div class="row"><label>LLM Key</label><input type="password" class="in-key" placeholder="sk-..." style="width:150px;font-size:11px"></div>
+      <div class="row"><label>投票次数</label><input type="number" class="in-vote" min="1" max="5" style="width:50px;font-size:11px"></div>
       <div class="row"><label>调试日志</label><button class="sw" data-cfg="debug"></button></div>
     </div>
   </div>
@@ -127,7 +139,7 @@
     <button class="btn-start pri">启动</button>
     <button class="btn-stop">停止</button>
     <button class="btn-next">下一节</button>
-    <button class="btn-clear">清续播</button>
+    <button class="btn-answer">答题</button>
   </div>
 </div>`;
     },
@@ -178,11 +190,51 @@
         };
       }
 
+      // 答题模式下拉
+      const selMode = box.querySelector('.sel-mode');
+      if (selMode) {
+        selMode.onchange = () => {
+          ZHS.setConfig({ answerMode: selMode.value });
+          ZHS.Log.info('答题模式 = ' + selMode.value);
+        };
+      }
+
+      // 题库地址
+      const inBank = box.querySelector('.in-bank');
+      if (inBank) {
+        inBank.onchange = () => {
+          ZHS.setConfig({ bankUrl: inBank.value.trim() });
+          ZHS.Log.info('题库地址 = ' + inBank.value.trim());
+        };
+      }
+
+      // LLM Key
+      const inKey = box.querySelector('.in-key');
+      if (inKey) {
+        inKey.onchange = () => {
+          ZHS.setConfig({ llmKey: inKey.value.trim() });
+          ZHS.Log.info('LLM Key 已' + (inKey.value.trim() ? '设置' : '清空'));
+        };
+      }
+
+      // 投票次数
+      const inVote = box.querySelector('.in-vote');
+      if (inVote) {
+        inVote.onchange = () => {
+          ZHS.setConfig({ voteTimes: Number(inVote.value) });
+        };
+      }
+
       // 底部按钮
       $('.btn-start').onclick = () => ZHS.Scheduler.start();
       $('.btn-stop').onclick = () => ZHS.Scheduler.stop();
       $('.btn-next').onclick = () => ZHS.Scheduler.gotoNext('手动');
-      $('.btn-clear').onclick = () => ZHS.Resume.clear(ZHS.state.courseId);
+      $('.btn-answer').onclick = () => {
+        const scene = ZHS.Questions.scene();
+        if (scene === 'dialog') ZHS.Answerer.handleDialog();
+        else ZHS.Answerer.handleHomework();
+        this.alert('已触发答题（场景：' + (scene || '未识别') + '）', 'info');
+      };
     },
 
     /** 刷新面板显示 */
@@ -213,6 +265,20 @@
       const speed = box.querySelector('[data-cfg-num="speed"]');
       if (speed && document.activeElement !== speed) speed.value = String(cfg.speed);
       $('.v-speed').textContent = cfg.speed + 'x';
+
+      // 答题设置回填（避免覆盖用户正在输入的框）
+      this._syncInput(box, '.sel-mode', cfg.answerMode);
+      this._syncInput(box, '.in-bank', cfg.bankUrl);
+      this._syncInput(box, '.in-key', cfg.llmKey);
+      this._syncInput(box, '.in-vote', String(cfg.voteTimes));
+    },
+
+    /** 只在值不同且未聚焦时同步输入框 */
+    _syncInput(box, sel, val) {
+      const el = box.querySelector(sel);
+      if (!el) return;
+      if (el === (this._shadow && this._shadow.activeElement)) return;
+      if (String(el.value) !== String(val)) el.value = val;
     },
 
     /** 日志更新回调 */

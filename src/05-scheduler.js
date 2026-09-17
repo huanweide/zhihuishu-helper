@@ -58,7 +58,7 @@
       const video = ZHS.Player.video();
 
       // ===== 守卫 1：验证码 → 停手等用户 =====
-      if (cfg.guardOverlays && U.hasVisible(VERIFY_SELECTORS)) {
+      if (cfg.guardOverlays && U.hasStructurallyVisible(VERIFY_SELECTORS)) {
         if (video && !video.paused) video.pause();
         if (!ZHS.state.pausedByGuard) {
           ZHS.state.pausedByGuard = true;
@@ -71,19 +71,23 @@
         return;
       }
 
-      // ===== 守卫 2：弹题 → 暂停交给答题模块 =====
-      if (cfg.guardOverlays && U.hasVisible(QUESTION_SELECTORS)) {
+      // ===== 守卫 2：弹题 → 暂停并交给答题模块 =====
+      if (cfg.guardOverlays && U.hasStructurallyVisible(QUESTION_SELECTORS)) {
         if (video && !video.paused) video.pause();
-        ZHS.Log.debug('检测到弹题遮挡，等待答题模块处理');
-        // 交给答题模块（M4/M5 实现），这里先只观察
-        if (!cfg.autoAnswer && ZHS.panel) {
-          ZHS.panel.alert('检测到课中弹题，当前未开启自动答题', 'warn');
+        if (cfg.autoAnswer && ZHS.Answerer) {
+          await ZHS.Answerer.handleDialog();
+          // 答完后等弹窗关闭再继续
+          await U.waitUntilHidden(QUESTION_SELECTORS, 30000);
+          ZHS.Log.debug('弹题已处理，恢复播放');
+        } else {
+          ZHS.Log.debug('检测到弹题遮挡，等待答题模块处理');
+          if (ZHS.panel) ZHS.panel.alert('检测到课中弹题，未开启自动答题', 'warn');
         }
         return;
       }
 
       // ===== 守卫 3：其他阻塞弹窗 → 尝试关闭 =====
-      if (cfg.guardOverlays && U.hasVisible(BLOCK_SELECTORS)) {
+      if (cfg.guardOverlays && U.hasStructurallyVisible(BLOCK_SELECTORS)) {
         const btn = document.querySelector('.ss2077-custom-dialog .close, .ss2077-custom-dialog .btn');
         if (btn) {
           btn.click();
@@ -169,6 +173,7 @@
       // 重置状态
       ZHS.Player.resetRetry();
       ZHS.Resume.reset();
+      if (ZHS.Answerer) ZHS.Answerer.reset();
       ZHS.state.videoEl = null;
 
       await U.sleep(3000);

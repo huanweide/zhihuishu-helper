@@ -57,6 +57,34 @@
       return rect.width > 0 && rect.height > 0;
     },
 
+    /**
+     * 结构可见性：只排除 display:none / visibility:hidden / opacity:0，
+     * 不要求有尺寸。
+     *
+     * 为什么要两个判定：
+     *  - isVisible 用于「必须真能点到」的场景（比如按钮）
+     *  - isStructurallyVisible 用于「元素存在即算出现」的场景（比如弹题容器），
+     *    因为智慧树有些容器在特定布局下尺寸暂时为 0，但内容已经渲染好了，
+     *    用 isVisible 会误判成"没出现"，导致弹题漏处理。
+     */
+    isStructurallyVisible(el) {
+      if (!el) return false;
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      const opacity = Number.parseFloat(style.opacity || '1');
+      if (!(opacity > 0.05)) return false;
+      return true;
+    },
+
+    /** 选择器组中是否有任一结构可见元素 */
+    hasStructurallyVisible(selector) {
+      const list = document.querySelectorAll(selector);
+      for (const el of list) {
+        if (Util.isStructurallyVisible(el)) return true;
+      }
+      return false;
+    },
+
     /** 选择器组中是否有任一可见元素 */
     hasVisible(selector) {
       const list = document.querySelectorAll(selector);
@@ -77,11 +105,11 @@
       return null;
     },
 
-    /** 等待选择器组全部不可见 */
+    /** 等待选择器组全部不可见（结构判定） */
     async waitUntilHidden(selector, timeoutMs = 600000, interval = 500) {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        if (!Util.hasVisible(selector)) return true;
+        if (!Util.hasStructurallyVisible(selector)) return true;
         await Util.sleep(interval);
       }
       return false;
