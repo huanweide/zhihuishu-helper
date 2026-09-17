@@ -26,30 +26,38 @@ npm test          # 71 项逻辑单测
 | [`docs/02-技术方案.md`](02-技术方案.md) | 模块架构、三条主线的详细设计、Prompt 模板、风险对策 | 开发时对照实现 |
 | [`docs/03-踩坑记录.md`](03-踩坑记录.md) | 实测遇到的问题与解决 | 遇到 bug 先翻这里 |
 | [`docs/90-快照与回溯.md`](90-快照与回溯.md) | 快照机制说明 + 恢复步骤 | 想回退代码时 |
+| [`docs/11-测试报告.md`](11-测试报告.md) | 两层测试体系、覆盖明细、抓出的真 bug | 想了解测试怎么跑 |
 
 ---
 
-## 三、代码地图（v0.1.0 已实现）
+## 三、代码地图（v0.1.0）
 
 ```
-src/                              # 源码（8 模块，按序拼装）
+src/                              # 源码（14 模块，按序拼装）
 ├── 00-config.js       ✅       配置层：GM存储 + 倍速夹逼 + 日志缓冲
-├── 01-util.js         ✅       工具层：节流/可见性/等待/文本处理
+├── 01-util.js         ✅       工具层：节流/两种可见性/等待/文本处理
 ├── 02-adapter.js      ✅       适配层：5套页面自动识别 + 统一目录 API
 ├── 03-player.js       ✅       播放层：静音/倍速/防暂停/卡死检测/回退重试
-├── 04-resume.js       ✅       续播层：GM持久化/过期清理/时长换算
+├── 04-resume.js       ✅       续播层：GM持久化/过期清理/时长换算/换源比例换算
 ├── 05-scheduler.js    ✅       调度层：2s主循环 + 三级守卫 + 结束判定
-├── 06-panel.js        ✅       面板层：Shadow DOM 悬浮控制台
+├── 06-panel.js        ✅       面板层：Shadow DOM 悬浮控制台（状态/日志/设置）
 ├── 07-main.js         ✅       入口层：初始化 + SPA监听 + window.zhs
-├── 08-questions.js    ⬜ M4   题目采集（弹题/作业/考试）
-├── 09-solver.js       ⬜ M4   答案求解（题库通道）
-├── 10-llm.js          ⬜ M5   LLM 通道 + 投票
-└── 11-filler.js       ⬜ M4   答案回填 + 校验
+├── 08-questions.js    ✅ M4   题目采集（弹题/作业/hike 三场景 + 题型推断）
+├── 09-bank.js         ✅ M4   题库通道：TikuAdapter 协议 + 答案归一化
+├── 10-llm.js          ✅ M5   LLM 通道：OpenAI 兼容 + 多次投票
+├── 11-solver.js       ✅ M5   求解编排：题库优先 → LLM 兜底 → 随机保底 + 缓存
+├── 12-filler.js       ✅ M4   回填层：多重兜底点击 + 防重复点击取消
+└── 13-answerer.js     ✅ M5   答题编排：弹题签名防抖 + 分页/批量作答
 
-build.js               ✅       构建：src/*.js → dist/*.user.js
-test/run.js            ✅       单测：71 项断言（jsdom）
-tools/snapshot.sh      ✅       快照：三层保护
-dist/                  ✅       产物（git 忽略）
+build.js                     ✅   构建：src/*.js → dist/*.user.js
+test/run.js                  ✅   逻辑单测：160 项断言（jsdom）
+test/screenshot.js           ✅   截屏测试：51 项断言（真实 Chrome + 11 张截图）
+test/fixture-media.js        ✅   媒体打桩（解决 duration=Infinity）
+test/fixture-player.html     ✅   仿真播放页
+test/fixture-dialog.html     ✅   仿真弹题页
+tools/probe.js               ✅   一次性诊断脚本
+tools/snapshot.sh            ✅   快照：三层保护
+dist/                        ✅   产物（git 忽略）
 ```
 
 ### 运行时 API（Console 可调）
@@ -122,15 +130,28 @@ LLM（DeepSeek）→ 生成 3 次 → 投票取众数
 
 - [x] M0 情报侦察（5 套页面结构 + 8 个参考项目）
 - [x] M1 项目骨架（文档 + 快照机制）
-- [x] **M2 自动播放 + 断点续播 + 悬浮面板（v0.1.0，71 项测试全绿）**
-- [ ] M4 AI 答题——题库通道
-- [ ] M5 AI 答题——LLM 通道 + 投票
+- [x] M2 自动播放 + 断点续播 + 悬浮面板
+- [x] **M4 AI 答题——题库通道 + 双通道编排**
+- [x] **M5 AI 答题——LLM 通道 + 投票 + 端到端截屏测试**
 - [ ] M6 面板打磨 + 习惯分
 
-## 七、下一步（M4）
+**当前门禁：逻辑单测 160/160 + 截屏测试 51/51 = 211 项全绿**（v0.1.0）
 
-1. 写 `08-questions.js`：采集弹题（`#playTopic-dialog`）/ 作业（`.subject_node`）
-2. 写 `09-solver.js`：对接 TikuAdapter（`:8060/adapter-service/search`）
-3. 写 `11-filler.js`：答案回填 + 200ms 后校验
-4. 加对应单测
+## 七、下一步（M6）
+
+1. 面板打磨：答题记录页、题库/LLM 通道健康检测按钮、答题结果回看
+2. 习惯分：观看时长统计、每日学习报告
+3. 真实站点验证：装进 Tampermonkey，在真实智慧树页面上跑一轮
+4. 验证码场景（`yidun_popup`）的人工介入提示优化
+
+## 八、测试怎么跑
+
+```bash
+npm run test        # 逻辑单测（jsdom）        —— 160 项
+npm run test:shot   # 截屏测试（真实 Chrome）  —— 51 项 + 11 张截图
+npm run test:all    # 构建 + 两层测试全跑
+npm run probe       # 诊断：GM 存储 / 视频桩 / 日志实际状态
+```
+
+详见 [`docs/11-测试报告.md`](11-测试报告.md)。
 
