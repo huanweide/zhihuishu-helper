@@ -54,3 +54,6 @@ build/
 Thumbs.db
 __pycache__/
 *.pyc
+node_modules/
+dist/
+package-lock.json
