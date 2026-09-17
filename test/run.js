@@ -874,6 +874,9 @@ Promise.all([_n3, _n4]).then(() => {
     ok('含 GM_setValue 授权', src.includes('@grant        GM_setValue'));
     ok('含 GM_xmlhttpRequest 授权（跨域调 API）', src.includes('@grant        GM_xmlhttpRequest'));
     ok('含 @connect localhost（题库）', src.includes('@connect      localhost'));
+    // @match 域名覆盖（漏一个 = 脚本注入不进去，功能全废）
+    ok('@match 覆盖 zhihuishu.com', /@match\s+\*:\/\/\*\.zhihuishu\.com\/\*/.test(src));
+    ok('@match 覆盖 polymas.com（AI课程中心）', /@match\s+\*:\/\/\*\.polymas\.com\/\*/.test(src));
     ok('含 6 套页面适配', src.includes('wisdom') && src.includes('fusion') && src.includes('hike') && src.includes('legacy') && src.includes('card2025') && src.includes('polymas'));
     ok('含弹题选择器', src.includes('#playTopic-dialog'));
     ok('含作业页选择器', src.includes('.subject_node'));

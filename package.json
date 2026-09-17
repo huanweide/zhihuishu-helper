@@ -8,6 +8,9 @@
     "test": "node test/run.js",
     "test:shot": "node test/screenshot.js",
     "test:all": "node build.js && node test/run.js && node test/screenshot.js",
+    "install-page": "node tools/make-install-page.js",
+    "verify-install": "node tools/verify-install-page.js",
+    "release": "node build.js && node tools/make-install-page.js && node tools/verify-install-page.js && node test/run.js && node test/screenshot.js",
     "probe": "node tools/probe.js"
   },
   "license": "MIT",

@@ -60,6 +60,10 @@ build/
 Thumbs.db
 __pycache__/
 *.pyc
-node_modules/
-dist/
 package-lock.json
+
+# 开发过程中的临时文件
+.install-tmp.txt
+.verify-*.js
+.*-tmp.*
+.tmp/

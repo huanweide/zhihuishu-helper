@@ -18,6 +18,8 @@ const HEADER = `// ==UserScript==
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题
 // @author       ReTri
 // @match        *://*.zhihuishu.com/*
+// @match        *://*.polymas.com/*
+// @match        *://*.zhihuishu.cn/*
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
 // @grant        GM_setValue
 // @grant        GM_getValue
