@@ -1,0 +1,56 @@
+# 凭据类：永久禁止入 Git
+.env
+.env.*
+!.env.example
+!.env.template
+
+# 密钥 / 证书
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.priv
+id_rsa
+id_ecdsa
+id_ed25519
+.ssh/
+
+# 通用凭据文件
+credentials.json
+credentials.yaml
+service-account*.json
+auth.json
+tokens.json
+token.json
+secrets.json
+secret*.json
+*.secret
+*.token
+*.session
+cookies.json
+*.cookies
+
+# 本项目：智慧树登录态
+bili_auth*.json
+zhs_cookies*.json
+
+# 参考项目（第三方源码，只读，不入库）
+reference/
+
+# 快照文件（体积大，不进 git；用 tar/bundle 单独存放）
+snapshot/*.tar.gz
+snapshot/*.bundle
+snapshot/*.zip
+
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
