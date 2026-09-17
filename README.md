@@ -194,13 +194,13 @@ zhihuishu-helper/
 │   ├── 01-侦察报告.md      # 平台页面结构与选择器明细
 │   ├── 02-技术方案.md      # 详细设计（本 README 第四章的展开）
 │   ├── 03-踩坑记录.md      # 20 个实测问题（现象/根因/解决/来源）
-│   ├── 11-测试报告.md      # 两层测试体系 + 51 项断言明细
+│   ├── 11-测试报告.md      # 两层测试体系 + 断言明细
 │   ├── 20-使用说明.md      # 安装、面板、控制台 API、排障手册
 │   └── 90-快照与回溯.md    # 三层快照机制
 ├── src/                   # 正式源码（14 模块，按序拼装）
 ├── test/                  # 测试：逻辑单测 + 截屏测试 + 真实站点测试
 │   ├── run.js             #   逻辑单测 160 项（jsdom）
-│   ├── screenshot.js      #   截屏测试 51 项（puppeteer-core + Chrome）
+│   ├── screenshot.js      #   截屏测试 70 项（puppeteer-core + Chrome）
 │   ├── live-run.js        #   真实站点测试入口（login/recon/e2e）
 │   ├── fixture-media.js   #   媒体打桩（解决 duration=Infinity）
 │   └── fixture-*.html     #   仿真页面
@@ -217,7 +217,7 @@ zhihuishu-helper/
 ```bash
 node build.js                                    # 构建
 node test/run.js                                 # 逻辑单测（160 项）
-node test/screenshot.js                          # 截屏测试（51 项）
+node test/screenshot.js                          # 截屏测试（70 项）
 node test/live-run.js login                      # 真实站点：人工登录
 node test/live-run.js e2e                        # 真实站点：端到端测试
 ```
@@ -234,10 +234,12 @@ node test/live-run.js e2e                        # 真实站点：端到端测�
 - [x] **M4 AI 答题（F3）：题库通道 + 双通道编排**
 - [x] **M5 AI 答题（F3）：LLM 通道 + 投票 + 端到端截屏测试**
 - [x] **v0.1.0 首个可用版本：211 项测试全绿**
+- [x] **v0.2.0 自动化闭环：三态识别 + 自动跳未看完 + 全完成总结 + 弹题自动关闭 + polymas 适配**
+- [x] **v0.2.1 闭环加固：启动预检 + 抗改版结构兜底 + 修 3 处真 bug，293 项测试全绿**
 - [ ] M7 真实站点端到端验证（需登录态）
 - [ ] M8 面板打磨：答题记录页、通道健康检测、习惯分统计
 
-**测试门禁**：逻辑单测 160/160 + 截屏测试 51/51 = **211 项全绿**
+**测试门禁**：逻辑单测 223/223 + 截屏测试 70/70 = **293 项全绿**
 
 ---
 
