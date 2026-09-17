@@ -186,16 +186,43 @@ storage 必须写在**顶层 window**（`window.top.localStorage`）才能跨课
 
 ```
 zhihuishu-helper/
-├── README.md            # 本文件：调研结论 + 方案设计
+├── README.md              # 本文件：调研结论 + 方案设计
+├── CHANGELOG.md           # 更新日志（含踩坑与限制）
+├── build.js               # 构建：src/*.js 按序拼装 → dist/*.user.js
 ├── docs/
-│   ├── 01-侦察报告.md    # 平台页面结构与选择器明细
-│   ├── 02-技术方案.md    # 详细设计（本 README 第四章的展开）
-│   └── 03-踩坑记录.md    # 实测问题与解决
-├── src/                 # 正式源码（待开发）
-├── reference/           # 参考项目源码（只读，git 忽略）
-├── snapshot/            # 项目快照（可回溯）
-└── .gitignore
+│   ├── PROJECT_MAP.md     # 项目索引：文档地图 + 代码地图 + 速查
+│   ├── 01-侦察报告.md      # 平台页面结构与选择器明细
+│   ├── 02-技术方案.md      # 详细设计（本 README 第四章的展开）
+│   ├── 03-踩坑记录.md      # 20 个实测问题（现象/根因/解决/来源）
+│   ├── 11-测试报告.md      # 两层测试体系 + 51 项断言明细
+│   ├── 20-使用说明.md      # 安装、面板、控制台 API、排障手册
+│   └── 90-快照与回溯.md    # 三层快照机制
+├── src/                   # 正式源码（14 模块，按序拼装）
+├── test/                  # 测试：逻辑单测 + 截屏测试 + 真实站点测试
+│   ├── run.js             #   逻辑单测 160 项（jsdom）
+│   ├── screenshot.js      #   截屏测试 51 项（puppeteer-core + Chrome）
+│   ├── live-run.js        #   真实站点测试入口（login/recon/e2e）
+│   ├── fixture-media.js   #   媒体打桩（解决 duration=Infinity）
+│   └── fixture-*.html     #   仿真页面
+├── tools/
+│   ├── snapshot.sh        #   三层快照
+│   └── probe.js           #   内部状态诊断
+├── dist/                  # 构建产物（git 忽略）
+├── reference/             # 参考项目源码 + 实测抓取（只读，git 忽略）
+└── snapshot/              # 项目快照（tar/bundle，git 忽略）
 ```
+
+### 快速开始
+
+```bash
+node build.js                                    # 构建
+node test/run.js                                 # 逻辑单测（160 项）
+node test/screenshot.js                          # 截屏测试（51 项）
+node test/live-run.js login                      # 真实站点：人工登录
+node test/live-run.js e2e                        # 真实站点：端到端测试
+```
+
+安装使用见 **[`docs/20-使用说明.md`](docs/20-使用说明.md)**。
 
 ---
 
@@ -203,11 +230,14 @@ zhihuishu-helper/
 
 - [x] M0 情报侦察：摸清智慧树 5 套页面结构 + 参考项目调研
 - [x] M1 项目骨架：目录、文档、Git 快照机制
-- [ ] M2 自动播放（F1）：油猴脚本 v0.1
-- [ ] M3 断点续播（F2）：storage 持久化 + 恢复
-- [ ] M4 AI 答题（F3）：题库通道
-- [ ] M5 AI 答题（F3）：LLM 通道 + 投票
-- [ ] M6 控制面板 UI + 配置项
+- [x] **M2 自动播放（F1）+ 断点续播（F2）+ 控制面板（F6）**
+- [x] **M4 AI 答题（F3）：题库通道 + 双通道编排**
+- [x] **M5 AI 答题（F3）：LLM 通道 + 投票 + 端到端截屏测试**
+- [x] **v0.1.0 首个可用版本：211 项测试全绿**
+- [ ] M7 真实站点端到端验证（需登录态）
+- [ ] M8 面板打磨：答题记录页、通道健康检测、习惯分统计
+
+**测试门禁**：逻辑单测 160/160 + 截屏测试 51/51 = **211 项全绿**
 
 ---
 

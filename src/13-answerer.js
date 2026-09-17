@@ -10,11 +10,20 @@
   const Answerer = {
     _running: false,
     _lastDialogSig: '',
+    _failCount: 0,          // 同一弹题连续处理失败次数
+    _cooldownUntil: 0,      // 退避截止时间戳
 
     /** 弹题处理（课中） */
     async handleDialog() {
       if (this._running) return;
       if (!ZHS.config.autoAnswer) return;
+
+      // 退避期内不重试（防止关闭失败导致死循环作答）
+      if (Date.now() < this._cooldownUntil) {
+        ZHS.Log.debug('弹题处理处于退避期，跳过（还剩 '
+          + Math.ceil((this._cooldownUntil - Date.now()) / 1000) + ' 秒）');
+        return;
+      }
 
       const root = ZHS.Questions.Dialog.root();
       if (!root) return;
@@ -58,8 +67,62 @@
       }
 
       await U.sleep(500);
-      ZHS.Questions.Dialog.close();
-      this._lastDialogSig = '';   // 重置，允许下次处理
+
+      // N4：按配置决定是否自动关闭弹题
+      if (ZHS.config.autoCloseDialog === false) {
+        ZHS.Log.info('已作答完成（自动关闭已关闭，请手动关闭弹题）');
+        this._lastDialogSig = '';
+        return;
+      }
+      await this.closeDialogAndResume();
+    },
+
+    /**
+     * 关闭弹题并恢复播放（N4 需求）
+     * 策略：点关闭 → 校验是否真关了 → 没关就重试（最多 3 次，每次间隔递增）
+     */
+    async closeDialogAndResume() {
+      const Q = ZHS.Questions.Dialog;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const ok = Q.close();
+        await U.sleep(700 * attempt);
+
+        if (!Q.stillPresent()) {
+          ZHS.Log.info('弹题已关闭' + (attempt > 1 ? '（第 ' + attempt + ' 次尝试）' : ''));
+          this._lastDialogSig = '';   // 重置，允许下次处理新弹题
+          this._failCount = 0;
+          this._cooldownUntil = 0;
+          this._resumePlay();
+          return true;
+        }
+        ZHS.Log.warn('弹题关闭失败，重试第 ' + attempt + ' 次');
+      }
+
+      // 3 次都失败 → 进入退避，避免死循环反复作答同一题
+      this._failCount++;
+      const backoff = Math.min(30 * this._failCount, 180);   // 30s → 60s → ... 上限 3 分钟
+      this._cooldownUntil = Date.now() + backoff * 1000;
+      ZHS.Log.warn('弹题自动关闭失败（累计 ' + this._failCount + ' 次），退避 ' + backoff + ' 秒后重试');
+      if (ZHS.panel) ZHS.panel.alert('弹题关闭失败，' + backoff + ' 秒后重试；若持续失败请手动点掉', 'warn');
+      return false;
+    },
+
+    /** 恢复播放（弹题处理完后） */
+    _resumePlay() {
+      try {
+        const v = ZHS.Player && ZHS.Player.video();
+        if (!v) return;
+        const cfg = ZHS.config;
+        if (cfg.mute) ZHS.Player.mute(v);
+        ZHS.Player.setSpeed(v, cfg.speed);
+        if (v.paused) {
+          const p = v.play();
+          if (p && p.catch) p.catch(() => { /* 自动播放策略拦截，忽略 */ });
+          ZHS.Log.info('弹题关闭后已恢复播放');
+        }
+      } catch (e) {
+        ZHS.Log.debug('恢复播放异常：' + e.message);
+      }
     },
 
     async _solveCurrentPage(root) {
@@ -158,7 +221,11 @@
     },
 
     /** 重置弹题签名（切课后调用） */
-    reset() { this._lastDialogSig = ''; },
+    reset() {
+      this._lastDialogSig = '';
+      this._failCount = 0;
+      this._cooldownUntil = 0;
+    },
   };
 
   ZHS.Answerer = Answerer;

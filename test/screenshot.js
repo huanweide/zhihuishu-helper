@@ -255,9 +255,32 @@ async function shot(page, name) {
         const h = document.getElementById('zhs-helper-panel');
         return h.shadowRoot.textContent.replace(/\s+/g, ' ');
       });
-      ok('设置页含答题开关', cfgText.includes('AI 自动答题'));
+      ok('设置页含答题开关', cfgText.includes('自动答题'));
       ok('设置页含题库地址', cfgText.includes('题库地址'));
-      ok('设置页含 LLM Key', cfgText.includes('LLM Key'));
+      ok('设置页含 API Key', cfgText.includes('API Key'));
+
+      // 加强断言：直接查真实 DOM 控件（不靠文本）
+      const cfgFields = await page.evaluate(() => {
+        const h = document.getElementById('zhs-helper-panel');
+        if (!h || !h.shadowRoot) return null;
+        const q = (s) => !!h.shadowRoot.querySelector(s);
+        return {
+          swAutoAnswer: q('.sw[data-cfg="autoAnswer"]'),
+          swAutoClose: q('.sw[data-cfg="autoCloseDialog"]'),
+          swSkipFinished: q('.sw[data-cfg="skipFinished"]'),
+          inKey: q('.in-key'),
+          inBase: q('.in-base'),
+          inModel: q('.in-model'),
+          btnTest: q('.btn-lmtest'),
+        };
+      });
+      ok('存在自动答题开关', !!(cfgFields && cfgFields.swAutoAnswer));
+      ok('存在答完自动关闭开关（N4）', !!(cfgFields && cfgFields.swAutoClose));
+      ok('存在跳过已完成开关（N2）', !!(cfgFields && cfgFields.swSkipFinished));
+      ok('存在 API Key 输入框', !!(cfgFields && cfgFields.inKey));
+      ok('存在 API 地址输入框（N5）', !!(cfgFields && cfgFields.inBase));
+      ok('存在模型名输入框（N5）', !!(cfgFields && cfgFields.inModel));
+      ok('存在测试连接按钮（N5）', !!(cfgFields && cfgFields.btnTest));
 
       await page.close();
     }
@@ -476,6 +499,94 @@ async function shot(page, name) {
       );
       ok('日志记录了恢复流程', resumeLogs.length > 0, JSON.stringify(resumeLogs.slice(-3)));
       console.log('    [恢复日志] ' + resumeLogs.slice(-3).join(' | '));
+
+      await page.close();
+    }
+
+    // ============================================================
+    // T5：新功能可视化验证（N1 三态 / N3 总结面板）
+    // ============================================================
+    console.log('\n--- T5 新功能可视化（N1 三态 / N3 总结） ---');
+    {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      page.on('pageerror', (e) => console.log('    [页面错误] ' + e.message));
+
+      // 造一个含三种状态的目录页
+      const t5url = 'file:///' + path.join(__dirname, 'fixture-player.html').replace(/\\/g, '/')
+        + '?recruitAndCourseId=t5demo';
+      await page.goto(t5url, { waitUntil: 'domcontentloaded' });
+      await page.evaluate(`(function(){
+        document.body.innerHTML =
+          '<div class="course-name">三态演示课程</div>' +
+          '<div class="chapter-tree-74">' +
+            '<div class="child-info hasvideo current"><span class="child-name" title="第一节 已完成">第一节 已完成</span><i class="child-check"></i></div>' +
+            '<div class="child-info hasvideo"><span class="child-name" title="第二节 看了一半">第二节 看了一半</span><div role="progressbar" aria-valuenow="45"></div></div>' +
+            '<div class="child-info hasvideo"><span class="child-name" title="第三节 没看">第三节 没看</span></div>' +
+            '<div class="child-info hasvideo" aria-disabled="true"><span class="child-name" title="第四节 未解锁">第四节 未解锁</span><i class="lock-icon"></i></div>' +
+          '</div>' +
+          '<video></video>';
+      })()`);
+
+      await page.evaluate(buildInjectableScript());
+      await new Promise((r) => setTimeout(r, 2500));
+
+      // N1：三态统计
+      const tri = await page.evaluate(() => {
+        const C = window.ZHS.Catalog;
+        return { bd: C.breakdown(), scan: C.scan().map((s) => ({ t: s.title, st: s.status })) };
+      });
+      console.log('    ' + JSON.stringify(tri.bd));
+      ok('N1 统计 total=4', tri.bd.total === 4, String(tri.bd.total));
+      ok('N1 统计 done=1', tri.bd.done === 1, String(tri.bd.done));
+      ok('N1 统计 undone=2', tri.bd.undone === 2, String(tri.bd.undone));
+      ok('N1 统计 locked=1', tri.bd.locked === 1, String(tri.bd.locked));
+      ok('N1 scan 状态正确', tri.scan.map((s) => s.st).join(',') === 'done,undone,undone,locked',
+        tri.scan.map((s) => s.st).join(','));
+
+      // 面板上应显示「未看完」和「未解锁」两行
+      await new Promise((r) => setTimeout(r, 1200));
+      const panelTri = await page.evaluate(() => {
+        const h = document.getElementById('zhs-helper-panel');
+        if (!h || !h.shadowRoot) return null;
+        const q = (s) => { const e = h.shadowRoot.querySelector(s); return e ? e.textContent.trim() : null; };
+        return { undone: q('.s-undone'), locked: q('.s-locked'), cprog: q('.s-cprog') };
+      });
+      console.log('    面板：' + JSON.stringify(panelTri));
+      ok('面板显示未看完节数', !!(panelTri && /2/.test(panelTri.undone || '')), panelTri && panelTri.undone);
+      ok('面板显示未解锁节数', !!(panelTri && /1/.test(panelTri.locked || '')), panelTri && panelTri.locked);
+
+      await page.screenshot({ path: path.join(SHOT_DIR, 'T5-01-三态识别.png') });
+
+      // N3：触发总结面板
+      await page.evaluate(() => {
+        const S = window.ZHS.Scheduler;
+        S._navCount = 5;
+        window.ZHS.state.answeredCount = 12;
+        window.ZHS.state.startedAt = Date.now() - 3660000;   // 约 1 小时
+        return S.finishAll('测试演示');
+      });
+      await new Promise((r) => setTimeout(r, 1500));
+
+      const rp = await page.evaluate(() => {
+        const h = document.getElementById('zhs-helper-panel');
+        if (!h || !h.shadowRoot) return null;
+        const el = h.shadowRoot.querySelector('.report');
+        return {
+          shown: !!(el && el.classList.contains('show')),
+          text: el ? el.textContent.replace(/\s+/g, ' ').slice(0, 200) : null,
+          report: window.ZHS.Scheduler.lastReport(),
+        };
+      });
+      console.log('    总结面板：' + (rp && rp.text));
+      ok('N3 总结面板已显示', !!(rp && rp.shown));
+      ok('N3 面板含完成情况', !!(rp && /完成情况/.test(rp.text || '')), rp && rp.text);
+      ok('N3 面板含总耗时', !!(rp && /总耗时/.test(rp.text || '')), rp && rp.text);
+      ok('N3 报告含已答题数', !!(rp && rp.report && rp.report.已答题数 === 12),
+        rp && rp.report && String(rp.report.已答题数));
+      ok('N3 运行已停止', await page.evaluate(() => window.ZHS.state.running === false));
+
+      await page.screenshot({ path: path.join(SHOT_DIR, 'T5-02-完成总结.png') });
 
       await page.close();
     }

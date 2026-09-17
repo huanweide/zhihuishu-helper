@@ -177,15 +177,62 @@
     close() {
       const r = this.root();
       if (!r) return false;
-      const btn = r.querySelector('#playTopic-dialog .close-btn, #playTopic-dialog .btn, .close-btn, .btn');
-      if (btn) {
-        btn.click();
-        ZHS.Log.info('已关闭弹题弹窗');
-        return true;
+
+      // 按优先级找关闭按钮（智慧树弹题的关闭控件在多个位置出现过）
+      const CANDIDATES = [
+        '#playTopic-dialog .close-btn',
+        '#playTopic-dialog .el-dialog__close',
+        '#playTopic-dialog .close',
+        '#playTopic-dialog .topic-close',
+        '.close-btn',
+        '.el-dialog__close',
+        '.topic-close',
+      ];
+
+      for (const sel of CANDIDATES) {
+        let btn = null;
+        try { btn = r.querySelector ? r.querySelector(sel) : null; } catch (e) { /* 越界忽略 */ }
+        // root 可能是 document（iframe 场景），此时从全局找
+        if (!btn && r !== document) {
+          try { btn = document.querySelector(sel); } catch (e) { /* 忽略 */ }
+        }
+        if (btn) {
+          try {
+            btn.click();
+            ZHS.Log.info('已点击关闭按钮：' + sel);
+            return true;
+          } catch (e) {
+            ZHS.Log.debug('关闭按钮点击异常：' + e.message);
+          }
+        }
       }
-      // 兜底：Esc
+
+      // 兜底 1：从弹题容器往上找「关闭/确定/提交/我知道了」文本按钮
+      const scope = (r.querySelectorAll ? r : document);
+      const btns = Array.from(scope.querySelectorAll('button, a, span, div'))
+        .filter((el) => {
+          const t = U.normText(el.innerText || el.textContent || '');
+          return t === '关闭' || t === '确定' || t === '提交' || t === '我知道了' || t === '知道了' || t === '继续学习';
+        });
+      if (btns.length) {
+        // 优先最内层（文本最短的）
+        btns.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+        try {
+          btns[0].click();
+          ZHS.Log.info('已点击文本关闭按钮：' + U.normText(btns[0].innerText || ''));
+          return true;
+        } catch (e) { /* 继续兜底 */ }
+      }
+
+      // 兜底 2：Esc
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+      ZHS.Log.debug('未找到关闭按钮，已派发 Esc');
       return false;
+    },
+
+    /** 弹题是否仍存在 */
+    stillPresent() {
+      return this.present();
     },
   };
 

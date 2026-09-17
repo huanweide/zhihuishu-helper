@@ -55,6 +55,24 @@
   background: #fff; cursor: pointer; font-size: 11px; color: #2C2C2A; }
 .foot button:hover { background: #F1EFE8; }
 .foot button.pri { background: #185FA5; color: #fff; border-color: #185FA5; }
+.inp { width: 152px; font-size: 11px; padding: 2px 4px; border: 1px solid rgba(0,0,0,.18);
+  border-radius: 4px; background: #fff; color: #2C2C2A; }
+.mini-btn { font-size: 10px; padding: 2px 7px; border: 1px solid rgba(0,0,0,.18);
+  border-radius: 4px; background: #fff; cursor: pointer; color: #2C2C2A; }
+.mini-btn:hover { background: #F1EFE8; }
+.mini-btn.ok { background: #E6F4EC; border-color: #1D9E75; color: #0C4A2F; }
+.mini-btn.bad { background: #FCEBEB; border-color: #A32D2D; color: #501313; }
+.hint { font-size: 10px; color: #888780; padding: 2px 0 6px; line-height: 1.45; }
+/* 完成总结弹层 */
+.report { margin: 0 12px 10px; padding: 10px 11px; border-radius: 8px; background: #E6F1FB;
+  border: 1px solid #B5D4F4; display: none; }
+.report.show { display: block; }
+.report h4 { margin: 0 0 7px; font-size: 12px; color: #042C53; font-weight: 600; }
+.report .line { display: flex; justify-content: space-between; font-size: 11px; padding: 2px 0; color: #042C53; }
+.report .line b { font-weight: 600; }
+.report .line span:first-child { color: #185FA5; }
+.report .close-rp { margin-top: 7px; width: 100%; padding: 4px 0; font-size: 11px;
+  border: 1px solid #185FA5; background: #fff; color: #185FA5; border-radius: 5px; cursor: pointer; }
 `;
 
   const Panel = {
@@ -100,6 +118,7 @@
     <button data-tab="cfg">设置</button>
   </div>
   <div class="alert"></div>
+  <div class="report"></div>
   <div class="body">
     <div class="pane on" data-pane="home">
       <div class="kv"><span>运行状态</span><span class="s-run">—</span></div>
@@ -107,6 +126,8 @@
       <div class="kv"><span>当前课时</span><span class="s-lesson">—</span></div>
       <div class="kv"><span>视频进度</span><span class="s-vprog">—</span></div>
       <div class="kv"><span>课程完成</span><span class="s-cprog">—</span></div>
+      <div class="kv"><span>未看完</span><span class="s-undone">—</span></div>
+      <div class="kv"><span>未解锁</span><span class="s-locked">—</span></div>
       <div class="kv"><span>已答题数</span><span class="s-ans">0</span></div>
       <div class="kv"><span>本次运行</span><span class="s-uptime">—</span></div>
     </div>
@@ -116,22 +137,46 @@
     <div class="pane" data-pane="cfg">
       <div class="row"><label>自动播放</label><button class="sw" data-cfg="autoPlay"></button></div>
       <div class="row"><label>自动下一节</label><button class="sw" data-cfg="autoNext"></button></div>
+      <div class="row"><label>跳过已完成</label><button class="sw" data-cfg="skipFinished"></button></div>
       <div class="row"><label>静音</label><button class="sw" data-cfg="mute"></button></div>
       <div class="row"><label>断点续播</label><button class="sw" data-cfg="resume"></button></div>
-      <div class="row"><label>AI 自动答题</label><button class="sw" data-cfg="autoAnswer"></button></div>
+      <div class="row"><label>倍速</label><input type="range" min="1" max="1.8" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
+
+      <div style="margin:9px 0 3px;font-size:11px;font-weight:600;color:#185FA5">AI 答题</div>
+      <div class="row"><label>自动答题</label><button class="sw" data-cfg="autoAnswer"></button></div>
+      <div class="row"><label>答完自动关闭</label><button class="sw" data-cfg="autoCloseDialog"></button></div>
       <div class="row"><label>题库通道</label><button class="sw" data-cfg="bankEnabled"></button></div>
       <div class="row"><label>LLM 通道</label><button class="sw" data-cfg="llmEnabled"></button></div>
       <div class="row"><label>答题模式</label>
-        <select class="sel-mode">
+        <select class="sel-mode inp">
           <option value="both">双通道</option>
           <option value="bank">仅题库</option>
           <option value="llm">仅LLM</option>
         </select>
       </div>
-      <div class="row"><label>倍速</label><input type="range" min="1" max="1.8" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
-      <div class="row"><label>题库地址</label><input type="text" class="in-bank" placeholder="http://localhost:8060" style="width:150px;font-size:11px"></div>
-      <div class="row"><label>LLM Key</label><input type="password" class="in-key" placeholder="sk-..." style="width:150px;font-size:11px"></div>
-      <div class="row"><label>投票次数</label><input type="number" class="in-vote" min="1" max="5" style="width:50px;font-size:11px"></div>
+      <div class="row"><label>题库地址</label><input type="text" class="in-bank inp" placeholder="http://localhost:8060"></div>
+      <div class="row"><label>投票次数</label><input type="number" class="in-vote inp" min="1" max="5" style="width:60px"></div>
+
+      <div style="margin:9px 0 3px;font-size:11px;font-weight:600;color:#185FA5">模型接口（OpenAI 兼容）</div>
+      <div class="hint">填 Key 后可用任意兼容接口：DeepSeek / 通义 / Kimi / 本地 Ollama 等</div>
+      <div class="row"><label>API 地址</label><input type="text" class="in-base inp" placeholder="https://api.deepseek.com"></div>
+      <div class="row"><label>模型名</label><input type="text" class="in-model inp" placeholder="deepseek-chat" list="model-list">
+        <datalist id="model-list">
+          <option value="deepseek-chat"></option>
+          <option value="deepseek-reasoner"></option>
+          <option value="qwen-plus"></option>
+          <option value="moonshot-v1-8k"></option>
+        </datalist>
+      </div>
+      <div class="row"><label>API Key</label><input type="password" class="in-key inp" placeholder="sk-..."></div>
+      <div class="row"><label></label>
+        <span>
+          <button class="mini-btn btn-lmtest">测试连接</button>
+          <button class="mini-btn btn-savekey">保存</button>
+        </span>
+      </div>
+      <div class="hint s-keymsg"></div>
+
       <div class="row"><label>调试日志</label><button class="sw" data-cfg="debug"></button></div>
     </div>
   </div>
@@ -217,6 +262,67 @@
         };
       }
 
+      // API 地址（BaseURL）
+      const inBase = box.querySelector('.in-base');
+      if (inBase) {
+        inBase.onchange = () => {
+          const v = inBase.value.trim() || 'https://api.deepseek.com';
+          ZHS.setConfig({ llmBaseUrl: v });
+          ZHS.Log.info('API 地址 = ' + v);
+        };
+      }
+
+      // 模型名
+      const inModel = box.querySelector('.in-model');
+      if (inModel) {
+        inModel.onchange = () => {
+          const v = inModel.value.trim() || 'deepseek-chat';
+          ZHS.setConfig({ llmModel: v });
+          ZHS.Log.info('模型 = ' + v);
+        };
+      }
+
+      // 测试连接
+      const btnTest = box.querySelector('.btn-lmtest');
+      if (btnTest) {
+        btnTest.onclick = async () => {
+          // 先把当前输入落盘，再测
+          if (inBase) ZHS.setConfig({ llmBaseUrl: inBase.value.trim() || 'https://api.deepseek.com' });
+          if (inModel) ZHS.setConfig({ llmModel: inModel.value.trim() || 'deepseek-chat' });
+          if (inKey) ZHS.setConfig({ llmKey: inKey.value.trim() });
+
+          btnTest.textContent = '测试中…';
+          btnTest.className = 'mini-btn btn-lmtest';
+          const r = await ZHS.LLM.test();
+          btnTest.textContent = r.ok ? '连接正常' : '连接失败';
+          btnTest.className = 'mini-btn btn-lmtest ' + (r.ok ? 'ok' : 'bad');
+          const msg = box.querySelector('.s-keymsg');
+          if (msg) msg.textContent = r.msg;
+          ZHS.Log[r.ok ? 'info' : 'warn']('模型连通性：' + r.msg);
+        };
+      }
+
+      // 保存 Key
+      const btnSave = box.querySelector('.btn-savekey');
+      if (btnSave) {
+        btnSave.onclick = () => {
+          if (inBase) ZHS.setConfig({ llmBaseUrl: inBase.value.trim() || 'https://api.deepseek.com' });
+          if (inModel) ZHS.setConfig({ llmModel: inModel.value.trim() || 'deepseek-chat' });
+          if (inKey) ZHS.setConfig({ llmKey: inKey.value.trim() });
+          this.alert('模型配置已保存', 'info');
+          ZHS.Log.info('模型配置已保存：' + ZHS.config.llmModel + ' @ ' + ZHS.config.llmBaseUrl);
+        };
+      }
+
+      // 总结弹层关闭
+      const closeRp = box.querySelector('.close-rp');
+      if (closeRp) {
+        closeRp.onclick = () => {
+          const rp = box.querySelector('.report');
+          if (rp) rp.classList.remove('show');
+        };
+      }
+
       // 投票次数
       const inVote = box.querySelector('.in-vote');
       if (inVote) {
@@ -253,6 +359,17 @@
       $('.s-vprog').textContent = v ? (ZHS.Player.percent(v) + '% · ' + Math.round(v.currentTime) + 's') : '—';
       const st = ZHS.Catalog.stats();
       $('.s-cprog').textContent = st.done + '/' + st.total + ' (' + st.percent + '%)';
+
+      // 三态明细（N1 需求）
+      const bd = ZHS.Catalog.breakdown();
+      const undoneEl = $('.s-undone');
+      if (undoneEl) {
+        undoneEl.textContent = bd.undone + ' 节';
+        undoneEl.style.color = bd.undone === 0 ? '#1D9E75' : '#854F0B';
+      }
+      const lockedEl = $('.s-locked');
+      if (lockedEl) lockedEl.textContent = bd.locked + ' 节';
+
       $('.s-ans').textContent = String(ZHS.state.answeredCount);
       const mins = Math.floor((Date.now() - ZHS.state.startedAt) / 60000);
       $('.s-uptime').textContent = mins + ' 分钟';
@@ -271,6 +388,55 @@
       this._syncInput(box, '.in-bank', cfg.bankUrl);
       this._syncInput(box, '.in-key', cfg.llmKey);
       this._syncInput(box, '.in-vote', String(cfg.voteTimes));
+      this._syncInput(box, '.in-base', cfg.llmBaseUrl);
+      this._syncInput(box, '.in-model', cfg.llmModel);
+    },
+
+    /**
+     * 展示「全部看完」总结报告（N3 需求）
+     */
+    showReport(report) {
+      if (!report) return;
+      // 兜底：面板未挂载时先挂载，避免总结报告静默丢失
+      if (!this._shadow || !this._root || !document.contains(this._root)) {
+        try { this.mount(); } catch (e) { /* 挂载失败则放弃显示 */ }
+      }
+      if (!this._shadow) return;
+      const box = this._shadow.querySelector('.wrap');
+      if (!box) return;
+      const rp = box.querySelector('.report');
+      if (!rp) return;
+
+      const rows = [
+        ['课程', report.课程名],
+        ['页面版本', report.页面版本],
+        ['完成情况', report.已完成 + ' / ' + report.总节点 + '（' + report.完成度 + '）'],
+        ['未看完', report.未完成 + ' 节'],
+        ['未解锁', report.未解锁 + ' 节'],
+        ['本次切换课时', report.本次切换课时数 + ' 次'],
+        ['已答题数', report.已答题数 + ' 题'],
+        ['答题通道', report.答题通道],
+        ['总耗时', report.总耗时],
+        ['结束时间', report.结束时间],
+      ];
+
+      // 标题按真实结果动态判定：不能只有 25% 完成度还写「全部看完」
+      const allDone = Number(report.未完成) === 0 && Number(report.总节点) > 0
+        && Number(report.已完成) >= Number(report.总节点);
+      const head = allDone ? '全部课程已看完' : '运行已结束（仍有未完成课程）';
+      const headColor = allDone ? '#042C53' : '#854F0B';
+
+      rp.innerHTML = '<h4 style="color:' + headColor + '">' + this._esc(head) + '</h4>'
+        + rows.map(([k, v]) => '<div class="line"><span>' + k + '</span><b>' + this._esc(String(v)) + '</b></div>').join('')
+        + '<button class="close-rp">知道了</button>';
+      rp.classList.add('show');
+
+      const btn = rp.querySelector('.close-rp');
+      if (btn) btn.onclick = () => rp.classList.remove('show');
+
+      // 切到状态页让用户看到
+      box.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === 'home'));
+      box.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.dataset.pane === 'home'));
     },
 
     /** 只在值不同且未聚焦时同步输入框 */

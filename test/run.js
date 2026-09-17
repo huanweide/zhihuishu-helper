@@ -25,6 +25,19 @@ function eq(name, actual, expected) {
 }
 
 // ============ 构造最小 DOM 环境 ============
+// 记录所有创建过的环境，便于统一清理（否则残留定时器会干扰后续断言）
+const ALL_ENVS = [];
+
+/** 停止所有环境里的定时器（测试组之间调用，保证互不干扰） */
+function stopAllTimers() {
+  for (const env of ALL_ENVS) {
+    try {
+      const ZHS = env.win.ZHS;
+      if (ZHS && ZHS.Scheduler && ZHS.Scheduler.stop) ZHS.Scheduler.stop();
+    } catch (e) { /* 忽略 */ }
+  }
+}
+
 function makeEnv(html, url) {
   const { JSDOM } = require('jsdom');
   const dom = new JSDOM(html, {
@@ -50,6 +63,7 @@ function makeEnv(html, url) {
       console.log('  [加载 ' + f + ' 出错] ' + e.message);
     }
   }
+  ALL_ENVS.push({ dom, win });
   return { dom, win, store };
 }
 
@@ -526,8 +540,332 @@ console.log('\n=== 19. 续播绑定（回归：重复绑定吞掉监听器） ==
   eq('解绑后节流函数清空', R._saveThrottled, null);
 }
 
-console.log('\n=== 20. 构建产物完整性 ===');
+console.log('\n=== 20. 目录三态识别（N1：已完成 / 未完成 / 未解锁） ===');
 {
+  const html = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo current">
+    <span class="child-name" title="第一节 已看完">第一节 已看完</span>
+    <i class="child-check"></i>
+  </div>
+  <div class="child-info hasvideo">
+    <span class="child-name" title="第二节 看了一半">第二节 看了一半</span>
+    <div role="progressbar" aria-valuenow="42"></div>
+  </div>
+  <div class="child-info hasvideo">
+    <span class="child-name" title="第三节 没看">第三节 没看</span>
+  </div>
+  <div class="child-info hasvideo" aria-disabled="true">
+    <span class="child-name" title="第四节 未解锁">第四节 未解锁</span>
+    <i class="lock-icon"></i>
+  </div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=n1');
+  const C = win.ZHS.Catalog;
+  const S = win.ZHS.STATUS;
+
+  eq('识别为 wisdom', C.adapter.name, 'wisdom');
+  eq('条目数 4', C.items().length, 4);
+
+  eq('第1节 状态=done', C.statusOf(C.items()[0]), S.DONE);
+  eq('第2节 状态=undone（部分进度）', C.statusOf(C.items()[1]), S.UNDONE);
+  eq('第3节 状态=undone', C.statusOf(C.items()[2]), S.UNDONE);
+  eq('第4节 状态=locked（aria-disabled）', C.statusOf(C.items()[3]), S.LOCKED);
+
+  const bd = C.breakdown();
+  eq('统计 done=1', bd.done, 1);
+  eq('统计 undone=2', bd.undone, 2);
+  eq('统计 locked=1', bd.locked, 1);
+  eq('统计 total=4', bd.total, 4);
+  eq('未全完成 allDone=false', bd.allDone, false);
+
+  // scan 返回带状态的清单
+  const sc = C.scan();
+  eq('scan 返回 4 条', sc.length, 4);
+  eq('scan 首条状态为 done', sc[0].status, S.DONE);
+  eq('scan 首条含标题', sc[0].title, '第一节 已看完');
+
+  // pending 只含未完成未锁的
+  eq('pending 有 2 条', C.pending().length, 2);
+}
+
+console.log('\n=== 21. 跳过已完成与未解锁（N2） ===');
+{
+  const html = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo current"><span class="child-name" title="A已完成">A</span><i class="child-check"></i></div>
+  <div class="child-info hasvideo"><span class="child-name" title="B已完成">B</span><i class="child-check"></i></div>
+  <div class="child-info hasvideo"><span class="child-name" title="C未完成">C</span></div>
+  <div class="child-info hasvideo" aria-disabled="true"><span class="child-name" title="D未解锁">D</span></div>
+  <div class="child-info hasvideo"><span class="child-name" title="E未完成">E</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=n2');
+  const C = win.ZHS.Catalog;
+  const items = C.items();
+
+  // 从 A 出发：应跳过已完成的 B，落到 C（而不是停在 B）
+  eq('跳过 B 直接到 C', C.itemTitle(C.findNext(items[0])), 'C未完成');
+  // 从 C 出发：应跳过未解锁的 D，落到 E
+  eq('跳过未解锁 D 直接到 E', C.itemTitle(C.findNext(items[2])), 'E未完成');
+  // 从 E 出发：后面没有了，回头补漏找到 C
+  eq('末尾回头补漏到 C', C.itemTitle(C.findNext(items[4])), 'C未完成');
+
+  // 全部完成时 findNext 返回 null
+  const html2 = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo"><span class="child-name" title="A">A</span><i class="child-check"></i></div>
+  <div class="child-info hasvideo"><span class="child-name" title="B">B</span><i class="child-check"></i></div>
+</div>
+<video></video>
+</body></html>`;
+  const env2 = makeEnv(html2, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=n2b');
+  const C2 = env2.win.ZHS.Catalog;
+  eq('全完成时 findNext 为 null', C2.findNext(null), null);
+  eq('全完成时 allDone=true', C2.breakdown().allDone, true);
+}
+
+console.log('\n=== 22. 全完成总结报告（N3） ===');
+stopAllTimers();   // 清掉前面各组残留的定时器，避免干扰本组断言
+const _n3 = (async () => {
+  const html = `<html><body>
+<div class="course-name">测试课程</div>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo"><span class="child-name" title="A">A</span><i class="child-check"></i></div>
+  <div class="child-info hasvideo"><span class="child-name" title="B">B</span><i class="child-check"></i></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=n3');
+  const S = win.ZHS.Scheduler;
+  const ZHS = win.ZHS;
+
+  // 等 main.js 的异步 boot() 跑完（它内部有 waitFor video + Resume.restore）
+  // 否则 boot 的第 7 步 Scheduler.start() 会在 finishAll 之后才执行，把状态冲掉
+  await new Promise((r) => setTimeout(r, 600));
+
+  // 手工置位，让 finishAll 有内容可写
+  ZHS.state.answeredCount = 7;
+  ZHS.state.startedAt = Date.now() - 125000;   // 约 2 分 5 秒
+  S._navCount = 3;
+
+  // 人为造出「正在运行」的状态，验证 finishAll 能把它关掉
+  S.stop();
+  ZHS.state.running = true;
+  S._timer = setInterval(() => {}, 100000);
+
+  await S.finishAll('测试触发');
+
+  const immRunning = ZHS.state.running;
+  const immTimer = S._timer;
+
+  const rp = S.lastReport();
+  ok('生成总结报告', !!rp);
+  ok('完成数正确', rp && rp.已完成 === 2, rp && String(rp.已完成));
+  ok('总节点正确', rp && rp.总节点 === 2, rp && String(rp.总节点));
+  ok('完成度 100%', rp && rp.完成度 === '100%', rp && rp.完成度);
+  ok('含已答题数', rp && rp.已答题数 === 7, rp && String(rp.已答题数));
+  ok('含本次切换课时数', rp && rp.本次切换课时数 === 3, rp && String(rp.本次切换课时数));
+  ok('含总耗时', rp && /分/.test(rp.总耗时), rp && rp.总耗时);
+  ok('含结束时间', rp && !!rp.结束时间, rp && rp.结束时间);
+  ok('触发原因已记录', rp && rp.触发原因 === '测试触发', rp && rp.触发原因);
+  ok('finishAll 把运行态关掉', immRunning === false, String(immRunning));
+  ok('finishAll 清掉了定时器', immTimer === null, immTimer ? '仍有定时器' : '');
+})();
+
+console.log('\n=== 23. 答完自动关闭弹题（N4） ===');
+{
+  const html = `<html><body>
+<div id="playTopic-dialog">
+  <div class="topic-title">测试题：1+1=?</div>
+  <div class="topic"><ul>
+    <li class="topic-item"><input type="radio" name="q">A. 1</li>
+    <li class="topic-item"><input type="radio" name="q">B. 2</li>
+  </ul></div>
+  <button class="close-btn">关闭</button>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=n4');
+  const D = win.ZHS.Questions.Dialog;
+
+  eq('弹题存在', D.present(), true);
+
+  // 给关闭按钮打桩：点击后移除弹题（模拟真实关闭）
+  const btn = win.document.querySelector('#playTopic-dialog .close-btn');
+  let clicked = false;
+  btn.addEventListener('click', () => {
+    clicked = true;
+    const el = win.document.getElementById('playTopic-dialog');
+    if (el) el.remove();
+  });
+
+  const ok1 = D.close();
+  eq('close() 返回 true', ok1, true);
+  eq('关闭按钮被点击', clicked, true);
+  eq('关闭后弹题不再存在', D.stillPresent(), false);
+}
+
+console.log('\n=== 24. 弹题关闭失败退避（N4 防死循环） ===');
+const _n4 = (async () => {
+  const html = `<html><body>
+<div id="playTopic-dialog">
+  <div class="topic-title">关不掉的题</div>
+  <div class="topic"><ul><li class="topic-item">A</li></ul></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=n4b');
+  const A = win.ZHS.Answerer;
+
+  // 没有可点的关闭按钮 / 点击无效 → 应进入退避
+  const r = await A.closeDialogAndResume();
+  eq('关闭失败返回 false', r, false);
+  eq('失败计数 +1', A._failCount, 1);
+  eq('已设置退避截止时间', A._cooldownUntil > Date.now(), true);
+
+  // 退避期内 handleDialog 应直接跳过
+  const before = win.ZHS.state.answeredCount;
+  await A.handleDialog();
+  eq('退避期内不重复作答', win.ZHS.state.answeredCount, before);
+
+  // reset 清空退避
+  A.reset();
+  eq('reset 后失败计数归零', A._failCount, 0);
+  eq('reset 后退避解除', A._cooldownUntil, 0);
+})();
+
+console.log('\n=== 25. 启动预检（N1：开跑前全量体检） ===');
+{
+  const html = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo"><span class="child-name">第一节 已完成</span><i class="child-check"></i></div>
+  <div class="child-info hasvideo"><span class="child-name">第二节 看了一半</span></div>
+  <div class="child-info hasvideo"><span class="child-name">第三节 没看</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=pf');
+  const S = win.ZHS.Scheduler;
+
+  eq('有 preflight 方法', typeof S.preflight, 'function');
+  const bd = S.preflight();
+  ok('预检返回统计对象', !!bd, String(bd));
+  eq('预检识别总节点 3', bd && bd.total, 3);
+  eq('预检识别已完成 1', bd && bd.done, 1);
+  eq('预检识别未看完 2', bd && bd.undone, 2);
+  eq('预检识别未全完成', bd && bd.allDone, false);
+
+  // 日志里应留下体检结论
+  const logs = win.ZHS.Log.all().map((e) => e.text).join('\n');
+  ok('日志含课程体检', /课程体检/.test(logs), logs.slice(-200));
+  ok('日志列出待学清单', /待学 1/.test(logs), logs.slice(-200));
+}
+
+console.log('\n=== 26. skipFinished 开关真正生效（N2） ===');
+{
+  const html = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo current"><span class="child-name">第一节 已完成</span><i class="child-check"></i></div>
+  <div class="child-info hasvideo"><span class="child-name">第二节 已完成</span><i class="child-check"></i></div>
+  <div class="child-info hasvideo"><span class="child-name">第三节 没看</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=sk');
+  const S = win.ZHS.Scheduler;
+  const cat = win.ZHS.Catalog;
+
+  const all = cat.items();
+  const first = all[0];
+
+  // skipFinished = true（默认）：从第 1 节往后，应直接跳到第 3 节（跳过已完成的第 2 节）
+  win.ZHS.setConfig({ skipFinished: true });
+  const nSkip = cat.findNext(first);
+  eq('开启时跳过已完成 → 命中第三节', cat.itemTitle(nSkip), '第三节 没看');
+
+  // skipFinished = false：按顺序推进，应命中紧邻的第 2 节（已完成也不跳）
+  win.ZHS.setConfig({ skipFinished: false });
+  const nOrder = S._nextInOrder(first, cat);
+  eq('关闭时按顺序 → 命中第二节', cat.itemTitle(nOrder), '第二节 已完成');
+
+  win.ZHS.setConfig({ skipFinished: true });   // 还原
+}
+
+console.log('\n=== 27. 总结面板标题随真实结果动态变化（防撒谎） ===');
+{
+  const html = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo"><span class="child-name">A</span></div>
+  <div class="child-info hasvideo"><span class="child-name">B</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=tp');
+  const P = win.ZHS.panel;
+
+  // 场景 1：真的全看完了 → 标题应为「全部课程已看完」
+  P.showReport({
+    课程名: 'X', 页面版本: 'wisdom', 总节点: 2, 已完成: 2, 未完成: 0, 未解锁: 0,
+    完成度: '100%', 本次切换课时数: 2, 已答题数: 5, 答题通道: '-', 总耗时: '1 分 0 秒',
+    结束时间: '2026/9/17 22:00:00',
+  });
+  let host = win.document.getElementById('zhs-helper-panel');
+  let txt = host.shadowRoot.querySelector('.report').textContent;
+  ok('全完成时标题为「全部课程已看完」', txt.includes('全部课程已看完'), txt.slice(0, 40));
+
+  // 场景 2：只完成 50% → 标题不能撒谎
+  P.showReport({
+    课程名: 'X', 页面版本: 'wisdom', 总节点: 4, 已完成: 2, 未完成: 2, 未解锁: 0,
+    完成度: '50%', 本次切换课时数: 1, 已答题数: 0, 答题通道: '-', 总耗时: '1 分 0 秒',
+    结束时间: '2026/9/17 22:00:00',
+  });
+  host = win.document.getElementById('zhs-helper-panel');
+  txt = host.shadowRoot.querySelector('.report').textContent;
+  ok('未全完成时标题不撒谎', !txt.includes('全部课程已看完'), txt.slice(0, 60));
+  ok('未全完成时给出正确提示', txt.includes('仍有未完成课程'), txt.slice(0, 60));
+}
+
+console.log('\n=== 28. 结构兜底扫描（平台改版/未知域名救命稻草） ===');
+{
+  // 模拟一个完全不认识结构的「新平台」课程页：类名全是随机字符串
+  const html = `<html><body>
+<div id="app">
+  <div class="xz9f2k">
+    <div class="qw-a1">第一章 绪论</div>
+    <div class="qw-a1">第二章 基础概念</div>
+    <div class="qw-a1">第三章 进阶应用</div>
+    <div class="qw-a1">第四章 实战练习</div>
+  </div>
+</div>
+<video></video>
+</body></html>`;
+  // 用 polymas 域名触发 polymas 适配器（其预设选择器全部不命中）
+  const { win } = makeEnv(html, 'https://hike-teaching-center.polymas.com/stu-hike/agent-course-hike/ai-course-center');
+  const cat = win.ZHS.Catalog;
+
+  const items = cat.items();
+  ok('兜底扫描能捞到条目', items.length >= 4, '实得 ' + items.length);
+
+  const titles = items.map((el) => cat.itemTitle(el));
+  ok('兜底条目名可读', titles.includes('第一章 绪论'), JSON.stringify(titles).slice(0, 160));
+
+  // 三态在兜底模式下也要能用
+  const bd = cat.breakdown();
+  ok('兜底模式能统计', bd.total >= 4, JSON.stringify(bd));
+  eq('兜底模式未完成数正确', bd.undone, bd.total);
+  eq('兜底模式全未完成', bd.allDone, false);
+
+  // 日志应留下兜底启用提示
+  const logs = win.ZHS.Log.all().map((e) => e.text).join('\n');
+  ok('日志含兜底扫描提示', /结构兜底扫描/.test(logs), logs.slice(-200));
+}
+
+console.log('\n=== 29. 构建产物完整性 ===');
+Promise.all([_n3, _n4]).then(() => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');
@@ -536,25 +874,32 @@ console.log('\n=== 20. 构建产物完整性 ===');
     ok('含 GM_setValue 授权', src.includes('@grant        GM_setValue'));
     ok('含 GM_xmlhttpRequest 授权（跨域调 API）', src.includes('@grant        GM_xmlhttpRequest'));
     ok('含 @connect localhost（题库）', src.includes('@connect      localhost'));
-    ok('含 5 套页面适配', src.includes('wisdom') && src.includes('fusion') && src.includes('hike') && src.includes('legacy'));
+    ok('含 6 套页面适配', src.includes('wisdom') && src.includes('fusion') && src.includes('hike') && src.includes('legacy') && src.includes('card2025') && src.includes('polymas'));
     ok('含弹题选择器', src.includes('#playTopic-dialog'));
     ok('含作业页选择器', src.includes('.subject_node'));
     ok('含题库接口路径', src.includes('/adapter-service/search'));
     ok('含答案归一化', src.includes('function normalize'));
+    ok('含三态识别 statusOf', src.includes('statusOf'));
+    ok('含总结报告 finishAll', src.includes('finishAll'));
+    ok('含弹题自动关闭 closeDialogAndResume', src.includes('closeDialogAndResume'));
     ok('IIFE 包裹（不污染全局）', src.includes("'use strict'"));
   } else {
     console.log('  （未构建，跳过产物检查）');
   }
-}
 
-// ==================================================
-console.log('\n' + '='.repeat(50));
-console.log(`通过 ${pass} / 失败 ${fail}`);
-if (failures.length) {
-  console.log('\n失败项：');
-  failures.forEach((f) => console.log('  · ' + f));
+  // ==================================================
+  console.log('\n' + '='.repeat(50));
+  console.log(`通过 ${pass} / 失败 ${fail}`);
+  if (failures.length) {
+    console.log('\n失败项：');
+    failures.forEach((f) => console.log('  · ' + f));
+    process.exit(1);
+  } else {
+    console.log('全部通过 ✓');
+    process.exit(0);
+  }
+}).catch((e) => {
+  console.error('\n异步测试异常：' + e.message);
+  console.error(e.stack);
   process.exit(1);
-} else {
-  console.log('全部通过 ✓');
-  process.exit(0);
-}
+});

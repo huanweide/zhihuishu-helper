@@ -13,6 +13,7 @@
     // F1 自动播放
     autoPlay: true,
     autoNext: true,
+    skipFinished: true,  // 自动跳过已完成/未解锁节点
     speed: 1.5,          // 倍速，硬上限 1.8
     mute: true,          // 静音
     nextDelayMin: 2,     // 切课随机延迟下限（秒），模拟人类
@@ -37,6 +38,7 @@
     answerDelay: 3,      // 答题前延迟（秒）
     answerDialog: true,  // 课中弹题自动答
     answerHomework: false,// 作业页自动答（谨慎，默认关）
+    autoCloseDialog: true,// 答完题自动关闭弹题（N4）
 
     // 通用
     debug: true,         // 控制台详细日志
@@ -114,7 +116,7 @@
   window.__ZHS_HELPER__ = true;
 
   const ZHS = {
-    version: '0.1.0',
+    version: '0.2.1',
     DEFAULTS,
     get config() { return getConfig(); },
     setConfig: saveConfig,

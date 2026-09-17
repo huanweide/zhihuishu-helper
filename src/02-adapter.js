@@ -31,6 +31,7 @@
       progressAttr: 'aria-valuenow',
       container: '.chapter-tree-74',
       courseTitle: '.course-name',
+      locked: '.lock-icon, .icon-lock, [class*="lock"]',
     },
     fusion: {
       name: 'fusion',
@@ -41,6 +42,7 @@
       title: '.item-name',
       container: '.chapter-content',
       courseTitle: '.course-name',
+      locked: '[class*="lock"]',
     },
     hike: {
       name: 'hike',
@@ -52,6 +54,7 @@
       progress: '.rate',
       container: '.el-tree',
       courseTitle: '.course-name',
+      locked: '.el-icon-lock, [class*="lock"]',
     },
     legacy: {
       name: 'legacy',
@@ -63,6 +66,7 @@
       progress: '.progress-num',
       container: '.clearfix',
       courseTitle: '.source-name',
+      locked: '[class*="lock"]',
     },
     card2025: {
       name: 'card2025',
@@ -73,19 +77,96 @@
       title: '.video-title, .common-text',
       container: '.section-item-collapse-info',
       courseTitle: '.header-title-wrap',
+      locked: '[class*="lock"]',
+    },
+    // polymas 系（智慧树新形态教学中心，Vue3 + Aliplayer）
+    polymas: {
+      name: 'polymas',
+      label: '智慧树·AI课程中心',
+      item: '[class*="course-node"], [class*="chapter-item"], .catalog-item, [class*="lesson-item"]',
+      active: '[class*="course-node"].active, [class*="chapter-item"].active, .catalog-item.active, [class*="lesson-item"].active',
+      finish: '[class*="finish"], [class*="complete"], [class*="done"]',
+      title: '[class*="title"], span[title]',
+      progress: '[class*="progress"], [role="progressbar"]',
+      container: '#main',
+      courseTitle: '[class*="course-name"], [class*="title"]',
+      locked: '[class*="lock"], [class*="disabled"]',
     },
   };
 
-  /** 按域名推断候选适配器顺序 */
+  /**
+   * 通用兜底扫描器（适配器选择器全部落空时启用）
+   *
+   * 思路：不猜具体类名，而是从「结构特征」反推哪些元素像课程目录条目：
+   *   1. 兄弟节点成群（≥3 个同构兄弟）→ 像列表
+   *   2. 每个节点里有可读文本（课时名）
+   *   3. 节点不是纯容器（自身文本占比不能太低，太高则是大容器）
+   *   4. 优先取「文本长度适中（2~60 字）」且可点击的节点
+   *
+   * 这样即使 polymas 改版换类名，也能捞到目录。
+   */
+  function sniffItems() {
+    const out = [];
+    const seen = new Set();
+
+    // 候选容器：页面上所有元素，按「子元素数量」筛出像列表的
+    const all = document.querySelectorAll('div, li, a');
+    const groups = new Map();   // key = 父节点，value = 子节点数组
+
+    for (const el of all) {
+      const parent = el.parentElement;
+      if (!parent) continue;
+      if (!groups.has(parent)) groups.set(parent, []);
+      groups.get(parent).push(el);
+    }
+
+    for (const [, kids] of groups) {
+      if (kids.length < 3) continue;                 // 少于 3 个不成列表
+      // 同构判定：标签名 + class 主体一致
+      const sig = (el) => el.tagName + '|' + String(el.className || '').split(/\s+/).slice(0, 2).join('.');
+      const sigs = new Set(kids.map(sig));
+      if (sigs.size > 2) continue;                   // 结构太杂，不像同级列表
+
+      for (const el of kids) {
+        if (seen.has(el)) continue;
+        const txt = U.normText(el.innerText || el.textContent);
+        if (!txt) continue;
+        if (txt.length < 2 || txt.length > 80) continue;   // 太短不可能是课时名，太长是大容器
+        // 排除明显是导航/表单的
+        if (/登录|注册|首页|我的|设置|退出/.test(txt) && txt.length < 8) continue;
+        seen.add(el);
+        out.push(el);
+      }
+    }
+
+    // 按 DOM 顺序返回，保证「下一节」的方向正确
+    return out.sort((a, b) => {
+      const pos = a.compareDocumentPosition(b);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
+  }
+
   function candidates() {
     const host = location.hostname;
-    if (host === 'hike.zhihuishu.com') return [ADAPTERS.hike];
+    if (host.includes('polymas.com')) return [ADAPTERS.polymas, ADAPTERS.hike, ADAPTERS.wisdom];
+    if (host === 'hike.zhihuishu.com') return [ADAPTERS.hike, ADAPTERS.polymas];
     if (host.includes('fusioncourseh5')) return [ADAPTERS.fusion, ADAPTERS.wisdom, ADAPTERS.legacy];
     if (host.includes('studywisdomh5')) return [ADAPTERS.card2025, ADAPTERS.fusion];
     if (host.includes('studyplush5')) return [ADAPTERS.wisdom, ADAPTERS.card2025];
     // studyvideoh5 及其他 → 智慧版优先，旧版兜底
-    return [ADAPTERS.wisdom, ADAPTERS.legacy, ADAPTERS.fusion, ADAPTERS.card2025];
+    return [ADAPTERS.wisdom, ADAPTERS.legacy, ADAPTERS.fusion, ADAPTERS.card2025, ADAPTERS.polymas];
   }
+
+  /**
+   * 条目状态枚举
+   *   done   已完成
+   *   undone 未完成（可点，需要看）
+   *   locked 未解锁（点不了，前置没完成）
+   *   na     不是可播放条目（纯目录/章节标题）
+   */
+  const STATUS = { DONE: 'done', UNDONE: 'undone', LOCKED: 'locked', NA: 'na' };
 
   /** 探测当前页面用哪套适配器 */
   function detect() {
@@ -146,6 +227,17 @@
           return !children || children.children.length === 0;
         });
       }
+      // 预设选择器全落空 → 启用通用兜底扫描（应对平台改版/新域名）
+      if (!list.length) {
+        const sniffed = sniffItems();
+        if (sniffed.length) {
+          if (!this._sniffed) {
+            this._sniffed = true;
+            ZHS.Log.warn('预设选择器未命中，已启用结构兜底扫描，捞到 ' + sniffed.length + ' 个候选条目');
+          }
+          return sniffed;
+        }
+      }
       return list;
     },
 
@@ -184,16 +276,19 @@
       } catch (e) { /* 选择器兼容 */ }
       // 文本兜底
       const txt = U.normText(el.innerText || el.textContent);
-      return txt.includes('已完成') || txt.includes('已学完');
+      if (txt.includes('已完成') || txt.includes('已学完')) return true;
+      // 进度条达到 100% 也算完成（部分页面没有完成图标）
+      // 注意：这里直接读进度值，不能调 progressOf（它会反向调 isFinished，形成死递归）
+      if (this.adapter.progress && this._readProgress(el) >= 100) return true;
+      return false;
     },
 
-    /** 条目进度百分比 0-100 */
-    progressOf(el) {
-      if (!el) return 0;
-      if (this.isFinished(el)) return 100;
+    /** 纯读进度值（不做完成态判断，避免与 isFinished 相互递归） */
+    _readProgress(el) {
       const ad = this.adapter;
-      if (!ad.progress) return 0;
-      const p = el.querySelector(ad.progress);
+      if (!el || !ad.progress) return 0;
+      let p = null;
+      try { p = el.querySelector(ad.progress); } catch (e) { return 0; }
       if (!p) return 0;
       let raw = ad.progressAttr ? p.getAttribute(ad.progressAttr) : (p.innerText || p.textContent);
       raw = String(raw || '0').replace('%', '').trim();
@@ -202,24 +297,112 @@
       return Math.max(0, Math.min(100, Math.round(n)));
     },
 
-    /** 找下一个未完成的条目 */
+    /** 条目是否未解锁 */
+    isLocked(el) {
+      if (!el) return false;
+      const ad = this.adapter;
+      // 1. 元素自身或内部有锁图标
+      if (ad.locked) {
+        try {
+          if (el.matches && el.matches(ad.locked)) return true;
+          if (el.querySelector(ad.locked)) return true;
+        } catch (e) { /* 忽略非法选择器 */ }
+      }
+      // 2. disabled / 不可点 属性
+      if (el.getAttribute) {
+        if (el.getAttribute('disabled') != null) return true;
+        if (el.getAttribute('aria-disabled') === 'true') return true;
+        if (el.getAttribute('data-locked') === 'true') return true;
+      }
+      // 3. 样式：pointer-events:none 或 明显的禁用态类名
+      try {
+        const cls = String(el.className || '');
+        if (/\b(disabled|is-disabled|lock|locked|forbid|no-permission)\b/i.test(cls)) return true;
+      } catch (e) { /* 忽略 */ }
+      // 4. 文本兜底
+      const txt = U.normText(el.innerText || el.textContent);
+      if (/未解锁|不可学习|暂无权限/.test(txt)) return true;
+      return false;
+    },
+
+    /**
+     * 三态判定
+     * @returns 'done' | 'undone' | 'locked' | 'na'
+     */
+    statusOf(el) {
+      if (!el) return STATUS.NA;
+      if (this.isFinished(el)) return STATUS.DONE;
+      if (this.isLocked(el)) return STATUS.LOCKED;
+      // 有标题且能点到 → 未完成
+      const t = this.itemTitle(el);
+      if (!t) return STATUS.NA;
+      return STATUS.UNDONE;
+    },
+
+    /**
+     * 全量扫描：给每个条目打状态（面板/报告用）
+     * @returns [{ index, title, status, progress, element }]
+     */
+    scan() {
+      return this.items().map((el, i) => ({
+        index: i,
+        title: this.itemTitle(el),
+        status: this.statusOf(el),
+        progress: this.progressOf(el),
+        element: el,
+      }));
+    },
+
+    /** 统计三态数量 */
+    breakdown() {
+      const list = this.scan();
+      const out = { total: 0, done: 0, undone: 0, locked: 0, na: 0 };
+      for (const it of list) {
+        out.total++;
+        out[it.status] = (out[it.status] || 0) + 1;
+      }
+      out.percent = out.total ? Math.round((out.done / out.total) * 100) : 0;
+      out.allDone = out.total > 0 && out.undone === 0;
+      return out;
+    },
+
+    /** 条目进度百分比 0-100（优先读真实进度条，已完成直接 100） */
+    progressOf(el) {
+      if (!el) return 0;
+      if (this.isFinished(el)) return 100;
+      return this._readProgress(el);
+    },
+
+    /**
+     * 找下一个「未完成且未锁」的条目
+     * 策略：当前位置往后找 → 找不到则从头补漏
+     * 跳过 done（已完成）和 locked（未解锁，点了也没用）
+     */
     findNext(fromEl) {
       const all = this.items();
       if (!all.length) return null;
+
+      const pickable = (el) => this.statusOf(el) === STATUS.UNDONE;
+
       let startIdx = 0;
       if (fromEl) {
         const i = all.indexOf(fromEl);
         if (i >= 0) startIdx = i + 1;
       }
-      // 优先当前项之后第一个未完成的
+      // 1. 当前之后
       for (let i = startIdx; i < all.length; i++) {
-        if (!this.isFinished(all[i])) return all[i];
+        if (pickable(all[i])) return all[i];
       }
-      // 从头找（补漏）
-      for (let i = 0; i < all.length; i++) {
-        if (!this.isFinished(all[i])) return all[i];
+      // 2. 从头补漏（前面可能有跳过的）
+      for (let i = 0; i < Math.min(startIdx, all.length); i++) {
+        if (pickable(all[i])) return all[i];
       }
       return null;
+    },
+
+    /** 所有待学条目（未完成 + 未锁） */
+    pending() {
+      return this.items().filter((el) => this.statusOf(el) === STATUS.UNDONE);
     },
 
     /** 找指定名称的条目 */
@@ -257,4 +440,5 @@
   };
 
   ZHS.Catalog = Catalog;
+  ZHS.STATUS = STATUS;
 })();

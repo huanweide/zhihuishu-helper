@@ -37,6 +37,12 @@ cookies.json
 bili_auth*.json
 zhs_cookies*.json
 
+# 真实站点测试用的浏览器 profile（含登录 cookie，绝不能入库）
+.chrome-profile/
+.edge-debug-profile/
+*-debug-profile/
+*.profile/
+
 # 参考项目（第三方源码，只读，不入库）
 reference/
 
