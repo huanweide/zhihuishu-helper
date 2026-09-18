@@ -224,10 +224,28 @@
       <div class="row"><label>断点续播</label><button class="sw" data-cfg="resume"></button></div>
       <div class="row"><label>倍速</label><input type="range" min="1" max="1.8" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
 
+      <div class="row"><label>自动跳课</label><button class="sw" data-cfg="autoCourseHop"></button></div>
+      <div class="hint">本课学完自动去课程中心找下一门</div>
+      <div class="row"><label>自动选课</label><button class="sw" data-cfg="autoCoursePick"></button></div>
+      <div class="hint">在课程中心自动进入未学完的课程</div>
+
       <div style="margin:9px 0 3px;font-size:11px;font-weight:600;color:#185FA5">AI 答题</div>
       <div class="row"><label>自动答题</label><button class="sw" data-cfg="autoAnswer"></button></div>
       <div class="row"><label>课中弹题自动答</label><button class="sw" data-cfg="answerDialog"></button></div>
       <div class="row"><label>作业页自动答</label><button class="sw" data-cfg="answerHomework"></button></div>
+      <div class="row"><label>自动答题（作业/考试）</label><button class="sw" data-cfg="autoExam"></button></div>
+      <div class="hint">默认关闭。仅在你自己点进作业/考试页时生效，不会自动跳转，
+        也不会自动进入任何作业或考试。</div>
+      <div class="row"><label>答完自动提交</label><button class="sw" data-cfg="examSubmit"></button></div>
+      <div class="row"><label>作答章节范围</label>
+        <span>
+          <input type="number" class="in-exfrom inp" data-cfg="examChapterFrom" min="0" max="200" style="width:56px">
+          <span style="font-size:11px;color:#666"> ~ </span>
+          <input type="number" class="in-exto inp" data-cfg="examChapterTo" min="0" max="200" style="width:56px">
+        </span>
+      </div>
+      <div class="hint">0 表示不限，如填 1 和 3 表示只答第 1~3 章。<br>
+        （当前版本多数入口拿不到章节号，拿不到时会按全部作答并在日志里说明）</div>
       <div class="row"><label>答完自动关闭</label><button class="sw" data-cfg="autoCloseDialog"></button></div>
       <div class="row"><label>题库通道</label><button class="sw" data-cfg="bankEnabled"></button></div>
       <div class="row"><label>LLM 通道</label><button class="sw" data-cfg="llmEnabled"></button></div>
@@ -444,6 +462,20 @@
         };
       }
 
+      // 作业/考试：章节范围数字框
+      // 这两个是「整数数值」输入框，沿用项目既有机制（change 事件 + ZHS.setConfig），
+      // 没有发明新绑定方式；用 querySelectorAll 是因为面板可能被重新渲染多份。
+      box.querySelectorAll('input[data-cfg="examChapterFrom"], input[data-cfg="examChapterTo"]').forEach((inp) => {
+        inp.onchange = () => {
+          const key = inp.dataset.cfg;
+          const n = Math.max(0, Math.floor(Number(inp.value) || 0));
+          inp.value = String(n);
+          ZHS.setConfig({ [key]: n });
+          ZHS.Log.info('作答章节范围：' + (ZHS.config.examChapterFrom || 0) +
+            ' ~ ' + (ZHS.config.examChapterTo || 0) + '（0 = 不限）');
+        };
+      });
+
       // 底部按钮（带 loading 态：点击即转圈禁用，完成恢复）
       const withLoading = async (btn, fn) => {
         if (btn.classList.contains('loading')) return;
@@ -639,6 +671,9 @@
       this._syncInput(box, '.sel-stop', cfg.stopMode || 'none');
       this._syncInput(box, '.in-stopmin', String(cfg.stopMinutes));
       this._syncInput(box, '.in-stoples', String(cfg.stopLessons));
+      // 作业/考试章节范围回填
+      this._syncInput(box, '.in-exfrom', String(cfg.examChapterFrom || 0));
+      this._syncInput(box, '.in-exto', String(cfg.examChapterTo || 0));
     },
 
     /**

@@ -432,8 +432,18 @@
             if (ZHS.panel) ZHS.panel.alert('未识别到课程目录，请先进入具体课程的播放页', 'error');
             this.stop();
           } else if (bd.undone === 0) {
-            // 真正全看完 → 出总结并停止
-            await this.finishAll(reason);
+            // 真正全看完：先看是否要「自动跳课」回课程中心找下一门，
+            // 没开开关（或不在学习页 / 模块缺失）就保持原有「出总结并停止」行为。
+            const hub = ZHS.CourseHub;
+            const canHop = cfg.autoCourseHop && hub && !hub.isHubPage();
+            if (canHop) {
+              hub.markCourseDone(ZHS.state.courseId);
+              ZHS.Log.info('[课程中心] 本课程已全部学完，准备返回课程中心寻找下一门课');
+              this.stop();
+              hub.returnToHub();
+            } else {
+              await this.finishAll(reason);
+            }
           } else {
             // 有未完成但找不到（状态识别可能有偏差），停手让人看
             ZHS.Log.warn('还有 ' + bd.undone + ' 节未完成，但无法定位到可点击节点（可能被锁定或选择器不匹配）');

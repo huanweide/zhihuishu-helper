@@ -38,7 +38,17 @@
     answerDelay: 3,      // 答题前延迟（秒）
     answerDialog: true,  // 课中弹题自动答
     answerHomework: false,// 作业页自动答（谨慎，默认关）
-    autoCloseDialog: true,// 答完题自动关闭弹题（N4）
+    autoCloseDialog: true,// 答完自动关闭弹题（N4）
+
+    // ---- 在线作业 / 在线考试（守株待兔模式，见 src/06c-exam.js）----
+    // 用户明确要求：默认关闭，且【绝不自动跳转】到作业/考试页。
+    // 只有用户自己点进作答页（dohomework / doexamination）时才会工作。
+    autoExam: false,        // 默认关：自动答题（作业/考试）
+    examChapterFrom: 0,     // 起始章节，0 = 不限
+    examChapterTo: 0,       // 结束章节，0 = 不限
+    examSubmit: true,       // 答完是否自动提交（受 autoExam 总开关约束）
+    examSubmitDelay: 5,     // 提交前等待秒数（给用户反悔机会）
+
     // 没配 LLM Key / 题库查不到时，是否随机蒙一个答案。
     // 默认【关】：弹题大多计入平时分且很多课程不允许回退重做，
     // 漏答还能回来手工作答，蒙错答却改不回来——宁可漏，不可错。
@@ -48,6 +58,10 @@
     debug: true,         // 控制台详细日志
     panelVisible: true,  // 悬浮面板
     guardOverlays: true, // 弹窗守卫
+
+    // 课程中心调度
+    autoCourseHop: true,  // 自动跳课：本课学完 → 回课程中心选下一门
+    autoCoursePick: true, // 自动选课：在课程中心自动点进未看完的课
 
     // 自动停止（用户需求 1）
     stopMode: 'none',    // none 不限 | minutes 按累计观看时长 | lessons 按完成节数
@@ -63,10 +77,15 @@
    * 导致「代码改了默认但用户端不生效」。
    * 每次重要默认值变更就把 CONFIG_REV +1，并把变更项写进 FORCE_UPGRADE。
    */
-  const CONFIG_REV = 3;
+  const CONFIG_REV = 5;
   const FORCE_UPGRADE = {
     autoAnswer: true,     // v0.3.0：全自动要求，默认开启
     gatedRandom: false,   // v0.3.1：默认不再随机蒙答案（蒙错不可逆），宁漏勿错
+    autoCourseHop: true,  // v0.5.x：课程中心调度新功能，默认开，老用户也强制升级拿到
+    autoCoursePick: true, // v0.5.x：同上
+    // 注意：autoExam 故意【不】放进 FORCE_UPGRADE。
+    // 它的承诺是「默认关闭」，强推会把老用户的 configRev 升级顺便改成 true，
+    // 等于偷偷打开了自动答题 —— 破坏承诺，也会让用户在不知情下被代答。
   };
 
   /** 原始写入（不经过 getConfig，避免迁移递归） */
@@ -154,7 +173,9 @@
   window.__ZHS_HELPER__ = true;
 
   const ZHS = {
-    version: '0.3.0',
+    // 版本号只认 package.json（build.js 会注入 __ZHS_VERSION__）。
+    // 此处不再硬编码，避免与 package.json 漂移（历史遗留的 '0.3.0' 就是这么来的）。
+    version: (typeof __ZHS_VERSION__ !== 'undefined' ? __ZHS_VERSION__ : '0.0.0'),
     DEFAULTS,
     get config() { return getConfig(); },
     setConfig: saveConfig,
