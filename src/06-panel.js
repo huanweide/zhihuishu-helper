@@ -25,6 +25,14 @@
 .qr-box img { width: 180px; height: auto; border: 1px solid rgba(0,0,0,.1); border-radius: 8px; }
 .qr-box div { font-size: 11px; color: #888780; margin-top: 5px; }
 .sf-box { margin-top: 9px; }
+.invite-code { width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 8px 10px; margin: 5px 0 0; border: 1px dashed #85B7EB; border-radius: 8px;
+  background: #F3F8FE; color: #185FA5; cursor: pointer; font-size: 12px; font-weight: 600; }
+.invite-code:hover { background: #E6F1FB; border-style: solid; }
+.invite-code b { font-family: ui-monospace, Consolas, monospace; font-size: 13px; letter-spacing: .5px; color: #0C447C; }
+.invite-code .copy-tip { font-size: 10px; font-weight: 400; color: #888780; }
+.invite-code.copied { background: #E1F5EE; border-color: #5DCAA5; color: #085041; }
+.invite-code.copied .copy-tip { color: #0F6E56; }
 .wrap { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647;
   font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 14px; }
 .mini { width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #1E6FBF, #124E8C);
@@ -285,7 +293,8 @@
     <div class="sf-box">
       <div class="sec-title">🔑 还没有 API Key？免费领硅基流动</div>
       <div class="hint">硅基流动是 DeepSeek / 大模型中转站，稳定且价格友好。用下方邀请链接注册，双方都有额度赠送。</div>
-      <a class="about-link" href="https://cloud.siliconflow.cn/i/axOmWfWi" target="_blank" rel="noopener">🚀 点击注册（邀请码 axOmWfWi）</a>
+      <a class="about-link" href="https://cloud.siliconflow.cn/i/axOmWfWi" target="_blank" rel="noopener">🚀 点击注册（自动带入邀请码）</a>
+      <button type="button" class="invite-code" data-code="axOmWfWi" title="点击复制邀请码">邀请码 <b>axOmWfWi</b> <span class="copy-tip">点击复制</span></button>
     </div>
   </div>
 </div>`;
@@ -512,6 +521,42 @@
         sponsorBtn.onclick = () => {
           const qb = box.querySelector('.qr-box');
           if (qb) qb.style.display = qb.style.display === 'none' ? 'block' : 'none';
+        };
+      }
+
+      // 邀请码一键复制：点一下就把码复制到剪贴板，省得用户手动选中
+      const inviteBtn = box.querySelector('.invite-code');
+      if (inviteBtn) {
+        inviteBtn.onclick = async () => {
+          const code = inviteBtn.getAttribute('data-code') || '';
+          const tip = inviteBtn.querySelector('.copy-tip');
+          let ok = false;
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              await navigator.clipboard.writeText(code);
+              ok = true;
+            }
+          } catch (e) { ok = false; }
+          if (!ok) {
+            // 降级：临时 textarea + execCommand（http 页面 / 旧内核）
+            try {
+              const ta = document.createElement('textarea');
+              ta.value = code;
+              ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+              document.body.appendChild(ta);
+              ta.select();
+              ok = document.execCommand('copy');
+              document.body.removeChild(ta);
+            } catch (e) { ok = false; }
+          }
+          if (tip) tip.textContent = ok ? '已复制 ✓' : '复制失败，请手动选择';
+          inviteBtn.classList.toggle('copied', ok);
+          if (ok) {
+            setTimeout(() => {
+              if (tip) tip.textContent = '点击复制';
+              inviteBtn.classList.remove('copied');
+            }, 2000);
+          }
         };
       }
     },
