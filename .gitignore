@@ -53,7 +53,9 @@ snapshot/*.zip
 
 # 依赖与构建产物
 node_modules/
-dist/
+dist/*
+# 放行油猴脚本本体，供 @updateURL 自动更新命中（其余构建产物仍忽略）
+!dist/zhihuishu-helper.user.js
 build/
 *.log
 .DS_Store
