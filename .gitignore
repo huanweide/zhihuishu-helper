@@ -56,6 +56,8 @@ node_modules/
 dist/*
 # 放行油猴脚本本体，供 @updateURL 自动更新命中（其余构建产物仍忽略）
 !dist/zhihuishu-helper.user.js
+# 实地调试截图：可能含登录态/个人隐私，一律不入仓
+live-shots/
 build/
 *.log
 .DS_Store
@@ -73,3 +75,6 @@ package-lock.json
 # 临时构建输出日志（验证脚本产物，不入库）
 build-out.txt
 *-out.txt
+
+# 调试截图：含登录态，禁止入库
+live-shots/
