@@ -24,7 +24,7 @@
   const BLOCK_SELECTORS = '.ss2077-custom-dialog';
 
   const LOOP_INTERVAL = 2000;   // 主循环间隔
-  const END_SETTLE_MS = 3000;   // 结束后等平台上报进度的时间
+  const END_SETTLE_MS = 8000;   // 结束后等平台打勾+上报进度的时间（拉长：对勾/进度常异步延迟，过短会读不到完成态→误判重播）
   // 切课冷却：刚切完课时页面里可能还是旧的 video 元素（还在 ended 态），
   // 若不设闸会立刻再次判定「已结束」→ 疯狂连跳、一节课都看不完。
   // 这是 playback-flow 走查实测复现的致命 bug（BUG-PB-4）。
@@ -361,39 +361,65 @@
       }
     },
 
-    /** 课时结束处理：校验平台进度再决定下一节 */
+    /**
+     * 课时结束处理：以「右侧栏完成标记」为金标准决定下一节
+     *
+     * 设计铁律（用户核心诉求）：平台在章节列表打的完成标记（对勾）才是真实「看没看完」的信号。
+     * 视频放完、且平台已记录完成 → 立即跳下一节；绝不默认回退重播。
+     * 只有「进度明显偏低（<90%）且右侧栏仍无完成标记」才重播兜底（最多 2 次，由 Player 内部计数），
+     * 其余情况一律跳下一节，彻底消除「看完重看一遍」的体验。
+     */
     async onLessonEnd(video) {
       if (this._navigating) return;
       this._navigating = true;
       try {
-        await U.sleep(END_SETTLE_MS);       // 等平台上报
+        await U.sleep(END_SETTLE_MS);       // 等平台打勾 + 上报进度（拉长到 8s，避免读不到完成态）
 
-        const cur = ZHS.Catalog.current();
-        const progress = cur ? ZHS.Catalog.progressOf(cur) : 0;
+        // 用本轮播放的课时标题找回当前节 DOM（不依赖 .current 类——视频放完后该类可能已转移到下一节）
+        const cur = ZHS.state.lessonKey
+          ? (ZHS.Catalog.findByName(ZHS.state.lessonKey) || ZHS.Catalog.current())
+          : ZHS.Catalog.current();
 
-        if (progress >= 100) {
-          ZHS.Log.info('本课时已完成（平台记录 ' + progress + '%），切换下一节');
+        // 1. 金标准：右侧栏完成标记（对勾/已完成图标/已学完文字）
+        if (cur && ZHS.Catalog.isFinished(cur)) {
+          ZHS.Log.info('本课时已完成（右侧栏已记录完成标记），切换下一节');
           ZHS.Player.resetRetry();
           await this.gotoNext('本课时已完成');
           return;
         }
 
+        const progress = cur ? ZHS.Catalog.progressOf(cur) : 0;
+
+        // 2. 平台进度接近完成（>=95%）→ 视作已完成，跳
+        if (progress >= 95) {
+          ZHS.Log.info('本课时平台记录 ' + progress + '%，判定已完成，切换下一节');
+          ZHS.Player.resetRetry();
+          await this.gotoNext('本课时已完成');
+          return;
+        }
+
+        // 3. 读不到进度（<=0）→ 信任视频已放完，直接跳（绝不重播）
         if (progress <= 0) {
-          // 读不到平台进度（条目未识别 / 进度选择器失配）→ 信任视频已放完，直接切下一节。
-          // 绝不重播：用户核心诉求「看完就下一集」，回退重播只应在明确读到 1~99% 时发生。
           ZHS.Log.warn('平台进度未确认（读到 ' + progress + '%），按视频已放完处理，切换下一节');
           ZHS.Player.resetRetry();
           await this.gotoNext('视频播放完毕');
           return;
         }
 
-        // 1~99：确实只看了一部分 → 回退到记录点重播
-        const retried = await ZHS.Player.retryFromPlatformProgress(video, progress);
-        if (!retried) {
-          ZHS.Log.warn('重试次数用尽，强制切换下一节');
-          ZHS.Player.resetRetry();
-          await this.gotoNext('进度同步失败，跳过');
+        // 4. 仅当进度明显偏低（1~89%）且右侧栏无完成标记时，才重播兜底（最多 2 次）
+        //    这是平台进度确实没同步才需要的补救；其余一律跳，避免「重看一遍」。
+        if (progress < 90) {
+          const retried = await ZHS.Player.retryFromPlatformProgress(video, progress);
+          if (retried) {
+            ZHS.Log.warn('进度仅 ' + progress + '% 且未完成记录，回退重播补齐（平台进度未同步）');
+            return;   // 重播中，下一轮 atEnd 会再次进入本函数
+          }
+          ZHS.Log.warn('重播次数用尽仍不同步，直接跳下一节（不卡死）');
         }
+
+        // 5. 兜底：任何未命中上述分支的情况，都跳下一节，绝不重播
+        ZHS.Player.resetRetry();
+        await this.gotoNext('课时结束，切换下一节');
       } finally {
         this._navigating = false;
       }
