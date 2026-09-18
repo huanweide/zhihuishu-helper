@@ -452,7 +452,12 @@
       if (owned) this._navigating = true;
 
       const cfg = ZHS.config;
-      const cur = ZHS.Catalog.current();
+      // 优先用本轮课时标识 lessonKey 定位当前节（与 onLessonEnd 的 locateCur 保持一致）：
+      // 视频放完后平台的 .current / active 类可能已经转移到下一节，若这里仍用
+      // Catalog.current() 会拿错起点，导致 findNext 跳过已就绪的下一节。
+      const cur = ZHS.state.lessonKey
+        ? (ZHS.Catalog.findByName(ZHS.state.lessonKey) || ZHS.Catalog.current())
+        : ZHS.Catalog.current();
       const cat = ZHS.Catalog;
 
       try {
@@ -633,7 +638,8 @@
 
     /** 切课后重新绑定 video */
     async _rebindAfterNav() {
-      const video = await U.waitFor('video', 20000);
+      let video = await U.waitFor('video', 20000);
+      if (!video && ZHS.Util.findVideoInIframes) video = ZHS.Util.findVideoInIframes(document);
       if (!video) {
         ZHS.Log.warn('切课后未找到视频元素');
         return;

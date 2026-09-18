@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.4
+// @version      0.6.6
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -24,8 +24,13 @@
 // @run-at       document-idle
 // @license      MIT
 // @supportURL   https://github.com/huanweide/zhihuishu-helper/issues
-// @updateURL    https://raw.githubusercontent.com/huanweide/zhihuishu-helper/master/dist/zhihuishu-helper.user.js
-// @downloadURL  https://raw.githubusercontent.com/huanweide/zhihuishu-helper/master/dist/zhihuishu-helper.user.js
+// 分发地址刻意选 jsdelivr 而不是 raw.githubusercontent.com：
+// 实测 master 上已经是新版本时，raw 的 CDN 仍可能回吐上一个版本（2026-09 观察到
+// raw 停在 0.6.3、jsdelivr 已是 0.6.4），油猴「检查更新」就会拿到旧脚本，
+// 表现为「我明明修好了、用户那边还是老样子」。jsdelivr 对同一 tag/分支的回源更及时，
+// 且支持 https://purge.jsdelivr.net 主动清缓存。
+// @updateURL    https://cdn.jsdelivr.net/gh/huanweide/zhihuishu-helper@master/dist/zhihuishu-helper.user.js
+// @downloadURL  https://cdn.jsdelivr.net/gh/huanweide/zhihuishu-helper@master/dist/zhihuishu-helper.user.js
 // ==/UserScript==
 
 (function () {
@@ -33,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.4";
+window.__ZHS_BUILD__.version = "0.6.6";
 
 /* ===== 00-config.js ===== */
 /**
@@ -443,6 +448,32 @@ window.__ZHS_BUILD__.version = "0.6.4";
         if (el) return el;
         await Util.sleep(interval);
       }
+      return null;
+    },
+
+    /**
+     * 跨「同域 iframe」查找 video 元素
+     *
+     * 智慧树部分页面（尤其新形态/微前端容器）会把播放器嵌在 iframe 里，
+     * 顶层 document.querySelector('video') 永远落空 → 脚本判定「无视频」→ 整体不启动，
+     * 表现正是用户说的「功能全无用」。
+     * 顶层找不到时，递归遍历 iframe 的 contentDocument 找 video；跨域 iframe（取不到）
+     * 直接跳过——拿不到控制权就别硬来，至少顶层视频路径不受影响。
+     */
+    findVideoInIframes(doc) {
+      doc = doc || document;
+      try {
+        const frames = doc.querySelectorAll('iframe');
+        for (const f of frames) {
+          let idoc = null;
+          try { idoc = f.contentDocument || (f.contentWindow && f.contentWindow.document); } catch (e) { idoc = null; }
+          if (!idoc) continue;
+          const v = idoc.querySelector('video');
+          if (v) return v;
+          const nested = Util.findVideoInIframes(idoc);   // 嵌套 iframe 递归一层
+          if (nested) return nested;
+        }
+      } catch (e) { /* 安全策略禁止访问 iframe，忽略 */ }
       return null;
     },
 
@@ -1162,6 +1193,9 @@ window.__ZHS_BUILD__.version = "0.6.4";
       const titleKey = this.itemTitle(el);
       let target = el;
       for (let i = 0; i < tries; i++) {
+        // 点击前先确认还没切过去：若上次点击其实已生效（active 只是晚几拍才落到 DOM），
+        // 直接判成功即可，避免「重复点击当前节 → 平台重新加载本节」的怪象。
+        if (this.hasActive(target)) return true;
         this.click(target);
         if (await waitUntil(() => this.hasActive(target), i === 0 ? timeout : timeout * 2, 150)) return true;
         // 节点被 SPA 换掉 → 按标题重定位
@@ -1169,6 +1203,11 @@ window.__ZHS_BUILD__.version = "0.6.4";
           const again = this.findByName(titleKey);
           if (!again) return false;
           target = again;
+        } else {
+          // 同 DOM 节点还在但不是 active，可能点击被遮罩吞掉。下一轮再点前先尝试
+          // 按标题重定位（万一 SPA 静默换过节点但 isConnected 仍是 true）。
+          const again = this.findByName(titleKey);
+          if (again && again !== target) target = again;
         }
       }
       ZHS.Log.warn('点击「' + titleKey + '」' + tries + ' 次仍未见页面切换');
@@ -1210,11 +1249,12 @@ window.__ZHS_BUILD__.version = "0.6.4";
     _lastActiveAt: Date.now(),
     _retryCount: 0,
 
-    /** 取当前 video 元素（缓存 + 校验是否还在文档里） */
+    /** 取当前 video 元素（缓存 + 校验是否还在文档里；顶层找不到再查同域 iframe） */
     video() {
       const cached = ZHS.state.videoEl;
       if (cached && document.contains(cached)) return cached;
-      const v = document.querySelector('video');
+      let v = document.querySelector('video');
+      if (!v && ZHS.Util.findVideoInIframes) v = ZHS.Util.findVideoInIframes(document);
       if (v) ZHS.state.videoEl = v;
       return v;
     },
@@ -2121,7 +2161,12 @@ window.__ZHS_BUILD__.version = "0.6.4";
       if (owned) this._navigating = true;
 
       const cfg = ZHS.config;
-      const cur = ZHS.Catalog.current();
+      // 优先用本轮课时标识 lessonKey 定位当前节（与 onLessonEnd 的 locateCur 保持一致）：
+      // 视频放完后平台的 .current / active 类可能已经转移到下一节，若这里仍用
+      // Catalog.current() 会拿错起点，导致 findNext 跳过已就绪的下一节。
+      const cur = ZHS.state.lessonKey
+        ? (ZHS.Catalog.findByName(ZHS.state.lessonKey) || ZHS.Catalog.current())
+        : ZHS.Catalog.current();
       const cat = ZHS.Catalog;
 
       try {
@@ -2302,7 +2347,8 @@ window.__ZHS_BUILD__.version = "0.6.4";
 
     /** 切课后重新绑定 video */
     async _rebindAfterNav() {
-      const video = await U.waitFor('video', 20000);
+      let video = await U.waitFor('video', 20000);
+      if (!video && ZHS.Util.findVideoInIframes) video = ZHS.Util.findVideoInIframes(document);
       if (!video) {
         ZHS.Log.warn('切课后未找到视频元素');
         return;
@@ -5278,14 +5324,19 @@ window.__ZHS_BUILD__.version = "0.6.4";
     } catch (e) {
       const msg = (e && e.message) || String(e);
       initialized = false;   // 认账只在成功时做，这里保持「未初始化」才能被自愈通道救回
-      ZHS.Log.error('初始化失败（第 ' + bootTries + '/' + BOOT_MAX_TRIES + ' 次）：' + msg);
-      try {
-        if (ZHS.panel) {
-          ZHS.panel.mount();
-          ZHS.panel.alert('脚本启动异常：' + msg + '。可刷新页面重试，或在控制台执行 zhs.boot()', 'error', 15000);
-        }
-      } catch (e2) { /* 连面板都挂不上，只能留在日志里 */ }
-      if (bootTries < BOOT_MAX_TRIES) ZHS.Log.info('将在页面 DOM 变化后自动重试启动');
+      // 区分「还没进播放页（等自愈）」与「真出错」：前者用 info 不刷红，避免误导用户以为坏了
+      if (msg === 'NO_VIDEO_YET') {
+        ZHS.Log.info('尚未进入播放页（无视频元素），进入课程后自动启动');
+      } else {
+        ZHS.Log.error('初始化失败（第 ' + bootTries + '/' + BOOT_MAX_TRIES + ' 次）：' + msg);
+        try {
+          if (ZHS.panel) {
+            ZHS.panel.mount();
+            ZHS.panel.alert('脚本启动异常：' + msg + '。可刷新页面重试，或在控制台执行 zhs.boot()', 'error', 15000);
+          }
+        } catch (e2) { /* 连面板都挂不上，只能留在日志里 */ }
+        if (bootTries < BOOT_MAX_TRIES) ZHS.Log.info('将在页面 DOM 变化后自动重试启动');
+      }
     }
   }
 
@@ -5315,13 +5366,18 @@ window.__ZHS_BUILD__.version = "0.6.4";
     if (ZHS.panel) ZHS.panel.mount();
 
     // 4. 等视频出现（有些页面懒加载）
-    const video = await U.waitFor('video', 30000);
+    let video = await U.waitFor('video', 30000);
+    if (!video && ZHS.Util.findVideoInIframes) video = ZHS.Util.findVideoInIframes(document);
     if (!video) {
-      ZHS.Log.warn('30 秒内未找到视频元素，可能不在播放页');
+      ZHS.Log.warn('30 秒内未找到视频元素（含 iframe 兜底），可能不在播放页');
       if (ZHS.panel) {
         ZHS.panel.alert('未检测到视频，可能尚未进入播放页；面板可正常使用，进播放页后会自动开始', 'warn', 10000);
       }
-      return;
+      // 抛出而非 return：让 boot() 捕获后保持 initialized=false，
+      // 这样从「课程中心页 → 点进课程页出现 video」时，watchSpa 能重新拉起初始化。
+      // 若直接 return，bootOnce 判为「成功返回」，boot() 会把 initialized 误置 true，
+      // 自愈通道永久失效，表现正是用户说的「装了但进了课程页毫无动静」。
+      throw new Error('NO_VIDEO_YET');
     }
     ZHS.state.videoEl = video;
     ZHS.Log.info('视频元素已就绪，时长 ' + Math.round(video.duration || 0) + 's');

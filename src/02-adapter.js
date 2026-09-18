@@ -664,6 +664,9 @@
       const titleKey = this.itemTitle(el);
       let target = el;
       for (let i = 0; i < tries; i++) {
+        // 点击前先确认还没切过去：若上次点击其实已生效（active 只是晚几拍才落到 DOM），
+        // 直接判成功即可，避免「重复点击当前节 → 平台重新加载本节」的怪象。
+        if (this.hasActive(target)) return true;
         this.click(target);
         if (await waitUntil(() => this.hasActive(target), i === 0 ? timeout : timeout * 2, 150)) return true;
         // 节点被 SPA 换掉 → 按标题重定位
@@ -671,6 +674,11 @@
           const again = this.findByName(titleKey);
           if (!again) return false;
           target = again;
+        } else {
+          // 同 DOM 节点还在但不是 active，可能点击被遮罩吞掉。下一轮再点前先尝试
+          // 按标题重定位（万一 SPA 静默换过节点但 isConnected 仍是 true）。
+          const again = this.findByName(titleKey);
+          if (again && again !== target) target = again;
         }
       }
       ZHS.Log.warn('点击「' + titleKey + '」' + tries + ' 次仍未见页面切换');
