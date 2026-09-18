@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>legacy 真实章节结构（自测夹具）</title>
+</head>
+<!--
+  该 fixture 还原「旧版共享课」(studyvideoh5) 的真实章节目录 DOM 结构：
+    条目       .clearfix.video
+    当前项     .clearfix.video.current_play
+    完成标记   .time_icofinish（存在即对勾/已完成）
+    课时名     #lessonOrder [title]
+    进度       .progress-num（文本百分号）
+    锁定       .lock-icon（含 lock 字样即未解锁）
+  结构与 docs/01-侦察报告.md 2.5 节完全一致，仅课时文本为示意。
+  注意：真实页面每个条目的课时名都用 #lessonOrder，故此处重复 id 有意保留以贴近真实。
+-->
+<body>
+  <div class="source-name">高等数学（真实课程名）</div>
+  <div class="clearfix video">
+    <span class="time_icofinish"></span>
+    <em id="lessonOrder" title="1.1 函数概念">1.1 函数概念</em>
+    <span class="progress-num">100%</span>
+  </div>
+  <div class="clearfix video">
+    <span class="time_icofinish"></span>
+    <em id="lessonOrder" title="1.2 极限运算">1.2 极限运算</em>
+    <span class="progress-num">100%</span>
+  </div>
+  <div class="clearfix video current_play">
+    <em id="lessonOrder" title="2.1 导数定义">2.1 导数定义</em>
+    <span class="progress-num">45%</span>
+  </div>
+  <div class="clearfix video lock-icon">
+    <em id="lessonOrder" title="2.2 求导法则">2.2 求导法则</em>
+    <span class="progress-num">0%</span>
+  </div>
+  <div class="clearfix video">
+    <em id="lessonOrder" title="2.3 高阶导数">2.3 高阶导数</em>
+    <span class="progress-num">0%</span>
+  </div>
+  <video id="v" muted playsinline></video>
+  <script src="../fixture-media.js"></script>
+  <script>
+    window.__FixtureMedia.stub(document.getElementById('v'), 300);
+    document.querySelectorAll('.clearfix.video').forEach(function (el) {
+      el.addEventListener('click', function () {
+        document.querySelectorAll('.clearfix.video').forEach(function (x) { x.classList.remove('current_play'); });
+        el.classList.add('current_play');
+      });
+    });
+  </script>
+</body>
+</html>

@@ -11,7 +11,8 @@
     "install-page": "node tools/make-install-page.js",
     "verify-install": "node tools/verify-install-page.js",
     "release": "node build.js && node tools/make-install-page.js && node tools/verify-install-page.js && node test/run.js && node test/screenshot.js",
-    "probe": "node tools/probe.js"
+    "probe": "node tools/probe.js",
+    "e2e": "node tools/e2e-real.js"
   },
   "license": "MIT",
   "dependencies": {
