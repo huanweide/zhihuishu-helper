@@ -528,6 +528,7 @@ window.__ZHS_BUILD__.version = "0.6.2";
       label: '新形态课',
       item: '.file-item',
       active: '.file-item.active',
+      activeClass: 'active',
       finish: '.icon-finish',
       title: 'span[title]',
       progress: '.rate',
@@ -541,7 +542,9 @@ window.__ZHS_BUILD__.version = "0.6.2";
       item: '.clearfix.video',
       active: '.clearfix.video.current_play',
       finish: '.time_icofinish',
-      title: '#lessonOrder',
+      // 旧版共享课的课时名：OCS getChapterName 用 .catalogue_title，
+      // 老页面里还写作 <span id="lessonOrder">。两个都写，命中谁算谁。
+      title: '#lessonOrder, .catalogue_title',
       progress: '.progress-num',
       container: '.clearfix',
       courseTitle: '.source-name',
@@ -564,6 +567,7 @@ window.__ZHS_BUILD__.version = "0.6.2";
       label: '智慧树·AI课程中心',
       item: '[class*="course-node"], [class*="chapter-item"], .catalog-item, [class*="lesson-item"]',
       active: '[class*="course-node"].active, [class*="chapter-item"].active, .catalog-item.active, [class*="lesson-item"].active',
+      activeClass: 'active',
       finish: '[class*="finish"], [class*="complete"], [class*="done"]',
       title: '[class*="title"], span[title]',
       progress: '[class*="progress"], [role="progressbar"]',
@@ -627,20 +631,104 @@ window.__ZHS_BUILD__.version = "0.6.2";
     });
   }
 
-  function candidates() {
+  /**
+   * 域名权重提示（不再是「一锤定音」的硬路由）
+   *
+   * 【2026-09-18 二次修正】我一度把 studyvideoh5 的 hike（.file-item）置顶，
+   * 依据是 GreasyFork 上一个脚本 gf558335；但更权威的 OCS（ocsjs-zhs.ts:81/139/825）
+   * 明确写着 StudyVideoH5 用的是 .clearfix.video（legacy），
+   * 而 .file-item 只出现在「校内课 xnk-study」（同文件 1520/1551 行）。
+   * gf558335 的 @match 是全站通配 *://*.zhihuishu.com/*，它在校内课能跑，
+   * 不代表 studyvideoh5 也是这套结构——这条证据我当时误归属了。
+   *
+   * 根子上的问题是：**按域名硬写优先级这件事本身就不可靠**，平台随时改版，
+   * 昨天的答案今天就变成坑（用户反馈「功能全无用」正是这么来的）。
+   * 所以这里降级为「加分项」，真正拍板交给 detect() 的评分选举：
+   * 谁命中得多、谁能定位到「当前项」，谁上。
+   */
+  function hostBonus(name) {
     const host = location.hostname;
-    if (host.includes('polymas.com')) return [ADAPTERS.polymas, ADAPTERS.hike, ADAPTERS.wisdom];
-    if (host === 'hike.zhihuishu.com') return [ADAPTERS.hike, ADAPTERS.polymas];
-    if (host.includes('fusioncourseh5')) return [ADAPTERS.fusion, ADAPTERS.wisdom, ADAPTERS.legacy];
-    if (host.includes('studywisdomh5')) return [ADAPTERS.card2025, ADAPTERS.fusion];
-    if (host.includes('studyplush5')) return [ADAPTERS.wisdom, ADAPTERS.card2025];
-    // studyvideoh5（旧共享课学习页）→ 按侦察 VERSION_MAP 优先 legacy 结构（.clearfix.video / .time_icofinish），
-    // wisdom（.child-info.hasvideo / .child-check）兜底。两者完成标记都走 isFinished 的通用兜底，
-    // 无论平台用哪套 class 都能识别右侧栏对勾/完成标记。
-    if (host.includes('studyvideoh5')) return [ADAPTERS.legacy, ADAPTERS.wisdom, ADAPTERS.fusion, ADAPTERS.card2025, ADAPTERS.polymas];
-    // 其它域名 → 智慧版优先，旧版兜底
-    return [ADAPTERS.wisdom, ADAPTERS.legacy, ADAPTERS.fusion, ADAPTERS.card2025, ADAPTERS.polymas];
+    if (host.includes('polymas.com')) return name === 'polymas' ? 5 : 0;
+    if (host === 'hike.zhihuishu.com') return name === 'hike' ? 5 : 0;
+    if (host.includes('fusioncourseh5')) return name === 'fusion' ? 5 : 0;
+    if (host.includes('studywisdomh5')) return name === 'card2025' ? 5 : 0;
+    if (host.includes('studyplush5')) return name === 'wisdom' ? 5 : 0;
+    // studyvideoh5：给 legacy（ocsjs 权威）与 wisdom（Autovisor 默认兜底）加分。
+    // 【2026-09-18 三次修正】这里原本给 hike 也加 3 分，但 Autovisor 是独立于 ocsjs 的
+    // 第二个信源，它在 modules/lesson_navigation.py:84-85 把 .file-item 硬锁在 hike 域
+    // （`if "hike.zhihuishu.com" in course_url: return (HIKE_CATALOG,)`，单元素元组），
+    // studyvideoh5 走 :88 的 (WISDOM, LEGACY, FUSION) 兜底，hike 压根不在候选里。
+    // 两个独立项目在同一件事上结论一致 → 给 hike 加分是错的。
+    // 注意：hike 拿 0 分但**不退出候选池**，仍参与评分选举 —— 万一将来真改版成 el-tree，
+    // 评分照样能把它选上来，不会静默失效。这才叫"不赌，也不封闭"。
+    if (host.includes('studyvideoh5')) return (name === 'legacy' || name === 'wisdom') ? 3 : 0;
+    return name === 'wisdom' ? 2 : 0;
   }
+
+  /** 候选池：顺序只作同分时的稳定 tie-break，不再代表优先级 */
+  function candidates() {
+    return [ADAPTERS.legacy, ADAPTERS.hike, ADAPTERS.wisdom, ADAPTERS.fusion, ADAPTERS.card2025, ADAPTERS.polymas];
+  }
+
+  /**
+   * 给一套适配器打分，越高越像「当前页面真正的目录」
+   * 评分维度（按可信度从强到弱）：
+   *   1. 能定位到「当前项」（active / current_play）——+100，这种组合只有真目录才有，
+   *      正是它防住了「某套选择器碰巧在页面别处存在 → 抢占识别」的老 bug
+   *   2. 命中专属容器（.el-tree / .chapter-tree-74 等）——+20，页面骨架对得上
+   *   3. 命中条目数（30 封顶）——每条 +1
+   *   4. 条目能读出课时名——每条 +2，防止命中一堆空壳节点
+   */
+  function scoreAdapter(ad) {
+    let list = [];
+    try { list = Array.from(document.querySelectorAll(ad.item)); } catch (e) { return -1; }
+    if (!list.length) return 0;
+
+    let score = Math.min(list.length, 30);
+    try { if (ad.active && document.querySelector(ad.active)) score += 100; } catch (e) { /* 选择器兼容 */ }
+    try { if (ad.container && document.querySelector(ad.container)) score += 20; } catch (e) { /* 选择器兼容 */ }
+
+    let titled = 0;
+    for (const el of list.slice(0, 30)) {
+      const t = U.normText(el.innerText || el.textContent);
+      if (t && t.length >= 2 && t.length <= 80) titled++;
+    }
+    score += titled * 2;
+    score += hostBonus(ad.name);
+    return score;
+  }
+
+  /** 轮询等待条件成立（SPA 异步切换的通用等待器） */
+  async function waitUntil(fn, timeoutMs, interval) {
+    const deadline = Date.now() + timeoutMs;
+    interval = interval || 150;
+    while (Date.now() < deadline) {
+      let hit = false;
+      try { hit = !!fn(); } catch (e) { hit = false; }
+      if (hit) return true;
+      await U.sleep(interval);
+    }
+    return false;
+  }
+
+  /**
+   * 自动展开折叠的目录树 ——【2026-09-18 实地修正】
+   * 痛点：新版页面目录是 el-tree，章节默认折叠时目标课时根本不在 DOM 里，
+   * 于是「点了也没用」：脚本找不到下一节，即便找到也点不动一个不存在的节点。
+   * 这里在每次取目录之前，把没展开的章节全部点开。
+   */
+  const expandTreeOnce = U.throttle(function () {
+    let opened = 0;
+    try {
+      document.querySelectorAll('.el-tree-node__expand-icon:not(.is-leaf)').forEach((icon) => {
+        const expanded = icon.classList.contains('expanded')
+          || icon.getAttribute('aria-expanded') === 'true';
+        if (!expanded) { icon.click(); opened++; }
+      });
+    } catch (e) { /* 展开失败不影响主流程 */ }
+    if (opened > 0) ZHS.Log.info('已自动展开 ' + opened + ' 个折叠章节');
+    return opened;
+  }, 2000);
 
   /**
    * 条目状态枚举
@@ -651,14 +739,28 @@ window.__ZHS_BUILD__.version = "0.6.2";
    */
   const STATUS = { DONE: 'done', UNDONE: 'undone', LOCKED: 'locked', NA: 'na' };
 
-  /** 探测当前页面用哪套适配器 */
+  /**
+   * 探测当前页面用哪套适配器
+   *
+   * 【2026-09-18 修正】原来是「候选里第一个 querySelector 命中 1 个就算成功」，
+   * 这是导致用户「功能全无用」的直接原因之一：任何一套选择器只要碰巧在页面别处
+   * 存在一两个同名节点，就会抢占成功，真目录被顶掉，后续全部操作打在空气上。
+   * 现在改为评分选举：全部候选各打一次分，取最高且 >0 者。
+   */
   function detect() {
+    let best = null;
+    let bestScore = 0;
+    const detail = [];
     for (const ad of candidates()) {
-      if (document.querySelector(ad.item)) {
-        ZHS.state.siteVersion = ad.name;
-        ZHS.Log.info('页面版本识别为：' + ad.label + ' (' + ad.name + ')');
-        return ad;
-      }
+      const s = scoreAdapter(ad);
+      if (s > 0) detail.push(ad.name + '=' + s);
+      if (s > bestScore) { bestScore = s; best = ad; }
+    }
+    if (best) {
+      ZHS.state.siteVersion = best.name;
+      ZHS.Log.info('页面版本识别为：' + best.label + ' (' + best.name + ')，评分 ' + bestScore
+        + (detail.length > 1 ? '；候选评分 ' + detail.join(' / ') : ''));
+      return best;
     }
     ZHS.state.siteVersion = 'unknown';
     ZHS.Log.warn('未能识别页面版本，将使用通用兜底策略');
@@ -700,6 +802,7 @@ window.__ZHS_BUILD__.version = "0.6.2";
 
     /** 所有章节条目 */
     items() {
+      expandTreeOnce(); // 先把折叠章节展开，否则折叠中的课时不在 DOM 里，取不到也点不到
       const list = Array.from(document.querySelectorAll(this.adapter.item));
       // hike 版过滤掉目录树中间节点（有子节点的不是叶子）
       if (this.adapter.name === 'hike') {
@@ -739,15 +842,27 @@ window.__ZHS_BUILD__.version = "0.6.2";
     /** 取条目名称 */
     itemTitle(el) {
       if (!el) return '';
-      const t = el.querySelector(this.adapter.title);
-      if (t) {
-        const attr = t.getAttribute('title');
+      const ad = this.adapter;
+      const readTxt = (n) => {
+        if (!n) return '';
+        const attr = n.getAttribute && n.getAttribute('title');
         if (attr) return U.normText(attr);
-        return U.normText(t.innerText || t.textContent);
-      }
-      // hike 版的 span[title]
-      const span = el.querySelector('span[title]');
-      if (span) return U.normText(span.getAttribute('title'));
+        return U.normText(n.innerText || n.textContent);
+      };
+      // 纯序号（如 legacy 的 #lessonOrder 只写了 "1.2"）不算课时名
+      const onlyNumber = (s) => !s || /^[\d.\s]*$/.test(s);
+
+      const t = readTxt(el.querySelector(ad.title));
+      if (!onlyNumber(t)) return t;
+
+      // 回退：在通用课时名容器里找第一个像名字的文本
+      const FALLBACK = '.catalogue_title, .video-name, .item-name, .child-name, .file-name, .time, [class*="title"], span[title]';
+      try {
+        for (const n of Array.from(el.querySelectorAll(FALLBACK))) {
+          const s = readTxt(n);
+          if (!onlyNumber(s) && s.length >= 2) return s;
+        }
+      } catch (e) { /* 忽略 */ }
       return U.normText(el.innerText || el.textContent).slice(0, 80);
     },
 
@@ -763,20 +878,42 @@ window.__ZHS_BUILD__.version = "0.6.2";
       try {
         // 1. 适配器专属完成标记（如 wisdom 的 .child-check / legacy 的 .time_icofinish）
         if (ad.finish && el.querySelector(ad.finish)) return true;
+        // 1b. 标记打在 el 自身（1 @346 只有 querySelector 版本）
+        if (ad.finish && el.matches && el.matches(ad.finish)) return true;
       } catch (e) { /* 选择器兼容 */ }
-      // 2. 通用完成标记：各版本对勾/完成图标的 class 变体（finish/done/complete/learned/studied/checkmark 等）
+      // 2. 条目自身带完成态 class（如 .file-item.done）
       try {
-        if (el.querySelector('[class*="finish"], [class*="done"], [class*="complete"], [class*="learned"], [class*="studied"], [class*="checkmark"], [class*="is-finish"]')) {
-          return true;
+        if (/\b(done|finished|completed|is-finish|is-finished|study-done|learned)\b/i.test(String(el.className || ''))) return true;
+      } catch (e) { /* 忽略 */ }
+      // 3. 通用完成标记：必须是「图标型」节点才认
+      //    【2026-09-18 修正】原来只要子树里任一元素 class 含 finish/done/complete 就算完成。
+      //    太宽了：外层容器常叫 "lesson-done-wrap" / "study-finish-box"，一命中就把整条目判成已完成，
+      //    后果是 findNext 找不到「未完成」的节 → 直接弹「全部看完」白屏停止。
+      //    现在限定两种才算：标签是图标类，或该节点本身就是叶子（没有子元素）。
+      try {
+        const BADGE = '[class*="finish"], [class*="done"], [class*="complete"], [class*="learned"], [class*="studied"], [class*="checkmark"], [class*="is-finish"]';
+        for (const n of Array.from(el.querySelectorAll(BADGE))) {
+          const tag = String(n.tagName || '').toLowerCase();
+          if (/^(i|span|em|img|svg|b|strong)$/.test(tag)) return true;
+          if (!n.firstElementChild) return true;   // 空壳容器，可能就是那个勾
         }
       } catch (e) { /* 选择器兼容 */ }
       // 3. 子元素文本兜底（有时完成标记是「已学完」三个字而非图标）
-      const txt = U.normText(el.innerText || el.textContent);
-      if (/(已完成|已学完|已学习|学完|已看完|已学|100\s*%)/.test(txt)) return true;
-      // 4. 进度条达到 100% 也算完成（部分页面没有完成图标）
-      // 注意：这里直接读进度值，不能调 progressOf（它会反向调 isFinished，形成死递归）
-      if (ad.progress && this._readProgress(el) >= 100) return true;
-      return false;
+      // 【2026-09-18 修正】原来是 `/…|100\s*%/` 包含匹配 + 单独的「进度>=100 也算完成」：
+      // 「100% 学习完成」这种进度说明也会命中，下一节的 100% 也会被误判为已完成；
+      // 但视频看完时平台侧常常仍停在 99%，以 100 为门槛会直接卡住不跳。
+      // 故改为：只认独立文本 /^(\d{1,3})%$/，且阈值取 FINISH_PCT —— 由平台自己的低位值决定，不是拍脑袋。
+      const FINISH_PCT = 98;
+      const t = U.normText(el.innerText || el.textContent);
+      if (/(已完成|已学完|已学习|学完|已看完)/.test(t)) return true;
+      if (!ad.progress) {
+        // 该套适配器没有进度选择器 → 只能靠文本百分比（取紧凑纯进度文本）
+        const m = t.match(/^\s*(\d{1,3})\s*%\s*$/);
+        if (m && Number(m[1]) >= FINISH_PCT) return true;
+        return false;
+      }
+      const pct = this._readProgress(el);
+      return pct >= FINISH_PCT;
     },
 
     /** 纯读进度值（不做完成态判断，避免与 isFinished 相互递归） */
@@ -913,18 +1050,92 @@ window.__ZHS_BUILD__.version = "0.6.2";
       return hit || null;
     },
 
-    /** 点击条目（真正触发切换） */
+    /**
+     * 条目是否处于「当前播放」状态
+     * 不单看适配器的 active 选择器（平台一改版就失效），而是三层判定：
+     *   1. 元素自身 class 出现 active / current_play / current / is-active / selected
+     *   2. 元素匹配适配器 active 选择器
+     *   3. 页面上唯一的「当前项」就是它（或互为包含关系）
+     */
+    hasActive(el) {
+      if (!el) return false;
+      const ad = this.adapter;
+      let rawClass = '';
+      try {
+        rawClass = String((el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (el.className || ''));
+      } catch (e) { rawClass = ''; }
+      const cls = rawClass.split(/\s+/);
+      // 1. 本套专属的「当前项」标记（如 legacy 的 current_play、hike 的 active）
+      if (ad.activeClass && cls.indexOf(ad.activeClass) >= 0) return true;
+      // 2. 通用词兜底（Element UI 的 is-current / 播放器 playing 等）
+      if (cls.some((c) => /^(active|current_play|current-play|current|is-active|is-current|selected|playing)$/i.test(c))) {
+        return true;
+      }
+      try { if (ad.active && el.matches && el.matches(ad.active)) return true; } catch (e) { /* 选择器兼容 */ }
+      try {
+        const cur = ad.active ? document.querySelector(ad.active) : null;
+        if (cur && (cur === el || el.contains(cur) || cur.contains(el))) return true;
+      } catch (e) { /* 选择器兼容 */ }
+      return false;
+    },
+
+    /**
+     * 点击条目（真正触发切换）
+     *
+     * 【2026-09-18 修正】原来「优先点内部 a / span[title]」这一步是错的：
+     * Vue 的点击监听绑在目录条目本体（.file-item / .clearfix.video）上，
+     * 点内部一个纯展示用的 span/a 不等于点条目，于是「点了没反应」。
+     * 成熟实现（OCS 的 StudyVideoH5 条目点击）都是直接点条目本体。
+     * 另外补一步 scrollIntoView：部分页面条目不在视口内时不响应点击。
+     */
     click(el) {
       if (!el) return false;
-      // 智慧树用 a 标签承载跳转，优先点内部可点击元素
-      const clickable = el.querySelector('a, .child-name, .item-name, .file-name, span[title]') || el;
       try {
-        clickable.click();
+        if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch (e) { /* 滚动失败不影响点击 */ }
+      try {
+        el.click();
         return true;
       } catch (e) {
+        try {
+          const inner = el.querySelector('a, .child-name, .item-name, .file-name, span[title]');
+          if (inner) { inner.click(); return true; }
+        } catch (e2) { /* 放弃 */ }
         ZHS.Log.error('点击章节失败：', e.message);
         return false;
       }
+    },
+
+    /**
+     * 点击并校验是否真的切过去了
+     *
+     * 智慧树点目录是 SPA 异步切换，active class 往往晚几百毫秒才落到 DOM，
+     * 所以轮询等「目标条目拿到 active」；一直没动静就再点一次
+     * （首次点击常被遮罩层/播放器吞掉），两次都不动才判失败。
+     * SPA 重渲染还可能把节点换掉（detach），失败后按标题重新定位再点。
+     *
+     * @returns {Promise<boolean>} 是否确认已切换
+     */
+    async clickAndVerify(el, opt) {
+      opt = opt || {};
+      const timeout = opt.timeout || 3000;
+      const tries = opt.tries || 2;
+      if (!el) return false;
+
+      const titleKey = this.itemTitle(el);
+      let target = el;
+      for (let i = 0; i < tries; i++) {
+        this.click(target);
+        if (await waitUntil(() => this.hasActive(target), i === 0 ? timeout : timeout * 2, 150)) return true;
+        // 节点被 SPA 换掉 → 按标题重定位
+        if (!target.isConnected) {
+          const again = this.findByName(titleKey);
+          if (!again) return false;
+          target = again;
+        }
+      }
+      ZHS.Log.warn('点击「' + titleKey + '」' + tries + ' 次仍未见页面切换');
+      return false;
     },
 
     /** 全部章节完成度统计 */
@@ -1088,7 +1299,19 @@ window.__ZHS_BUILD__.version = "0.6.2";
       }
       if (!this.hasValidDuration(v)) return false;
       const target = (platformPercent / 100) * v.duration;
-      const back = Math.max(0, target - 5);   // 再多回退 5 秒
+      // 【2026-09-18 修正】原来写成 Math.max(0, target - 5)：
+      // 当平台记录为 0% 时 back 会变成 0，等于整节从头重播 → 用户被死死卡在这一节，
+      // 表现出来就是「永远跳不到下一集」。现在三道闸：
+      //   1. 目标点本身 <= 0（平台压根没记录）→ 回退没有意义，直接放弃，交回上层跳下一节
+      //   2. 回退 5 秒，但不得早于全片末尾 5 秒之前（避免一退退回开头）
+      //   3. 结果必须落在有效区间内
+      if (!(target > 0)) {
+        ZHS.Log.warn('平台记录为 ' + platformPercent + '%，回退点无效，放弃重播直接跳下一节');
+        return false;
+      }
+      const tailFloor = Math.max(0, v.duration - 5);
+      const back = Math.min(Math.max(0, target - 5), tailFloor);
+      if (!Number.isFinite(back) || back < 0 || back > v.duration) return false;
       ZHS.Log.warn(
         '视频已结束但平台仅记录 ' + platformPercent + '%，回退到 ' +
         Math.round(back) + 's 重试（第 ' + (this._retryCount + 1) + ' 次）'
@@ -1782,12 +2005,21 @@ window.__ZHS_BUILD__.version = "0.6.2";
       if (this._navigating) return;
       this._navigating = true;
       try {
-        await U.sleep(END_SETTLE_MS);       // 等平台打勾 + 上报进度（拉长到 8s，避免读不到完成态）
-
         // 用本轮播放的课时标题找回当前节 DOM（不依赖 .current 类——视频放完后该类可能已转移到下一节）
-        const cur = ZHS.state.lessonKey
+        const locateCur = () => (ZHS.state.lessonKey
           ? (ZHS.Catalog.findByName(ZHS.state.lessonKey) || ZHS.Catalog.current())
-          : ZHS.Catalog.current();
+          : ZHS.Catalog.current());
+
+        // 【2026-09-18 修正】原先是「闷头 sleep 8 秒再读一次」的固定等待，两头不讨好：
+        // 平台快的 200ms 就把勾打好了（白等 7.8 秒 × 每一节），慢的 8 秒还没就绪（照样读不到）。
+        // 改成轮询：一看到「完成标记 或 进度够高」立刻往下走，最多等 END_SETTLE_MS 这个上限。
+        const settleDeadline = Date.now() + END_SETTLE_MS;
+        let cur = locateCur();
+        while (Date.now() < settleDeadline) {
+          cur = locateCur();
+          if (cur && (ZHS.Catalog.isFinished(cur) || ZHS.Catalog.progressOf(cur) >= 90)) break;
+          await U.sleep(300);
+        }
 
         // 1. 金标准：右侧栏完成标记（对勾/已完成图标/已学完文字）
         if (cur && ZHS.Catalog.isFinished(cur)) {
@@ -1891,23 +2123,9 @@ window.__ZHS_BUILD__.version = "0.6.2";
           return;
         }
 
-        // 「同目标反复点」检测：记录每次切换目标标识；若与上次失败目标相同则累计，
-        // 不同则清零。健康站点点完下一节会前移 → 目标变化 → 计数归零，不会误停；
-        // 只有「点了没动、next 恒同节」才让计数收敛到 SAME_NAV_MAX → 判失败停手。
-        const _targetKey = cat.itemTitle(next);
-        if (_targetKey === this._navFailKey) {
-          this._navFailCount++;
-        } else {
-          this._navFailKey = _targetKey;
-          this._navFailCount = 1;
-        }
-        if (this._navFailCount >= SAME_NAV_MAX) {
-          ZHS.Log.error('连续 ' + this._navFailCount + ' 次切换目标都是「' + _targetKey + '」且未能前进（疑似平台改版/按钮无反应），已停止自动跳转');
-          if (ZHS.panel) ZHS.panel.alert('切课失败：连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」无效，已停止自动跳转，请手动切换', 'error', 15000);
-          this.stop();
-          return;
-        }
-
+        // （「同目标反复点」的失败计数原先放在这里 —— 2026-09-18 修正后已下移到点击校验之后，
+        //   理由：点击前自增会把「还没点」也算成一次失败，且目标一变就清零，
+        //   反而把「点了没动」这件真正要抓的事掩盖掉。详见下方 clickAndVerify 分支。）
         // 人类化随机延迟（手动触发跳过，点了就要动）
         if (!manual) {
           const delay = 1 + Math.random() * (cfg.nextDelayMax - cfg.nextDelayMin) + cfg.nextDelayMin;
@@ -1927,8 +2145,32 @@ window.__ZHS_BUILD__.version = "0.6.2";
         }
 
         // 记录新课时标识，供续播使用
-        ZHS.state.lessonKey = cat.itemTitle(next);
-        cat.click(next);
+        const _targetKey = cat.itemTitle(next);
+        ZHS.state.lessonKey = _targetKey;
+
+        // 【2026-09-18 关键修正】原来这里是「点一下就走」，点没点中没人管 ——
+        // 这正是用户报的「点了下一节也没用」。现在点完必须验收：
+        // 轮询等目标条目拿到 active（SPA 异步，可能晚几百毫秒），没拿到就再点一次。
+        const switched = await cat.clickAndVerify(next, { timeout: 3000, tries: 2 });
+        if (!switched) {
+          this._navFailCount = (_targetKey === this._navFailKey ? this._navFailCount : 0) + 1;
+          this._navFailKey = _targetKey;
+          ZHS.Log.warn('点击「' + _targetKey + '」后未检测到切换（第 ' + this._navFailCount + ' 次）');
+          if (this._navFailCount >= SAME_NAV_MAX) {
+            ZHS.Log.error('连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」都无反应（疑似平台改版或目录节点不可点），已停止自动跳转');
+            if (ZHS.panel) ZHS.panel.alert('切课失败：连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」无效，已停止自动跳转，请手动切换', 'error', 15000);
+            this.stop();
+            return;
+          }
+          if (ZHS.panel) ZHS.panel.alert('切换「' + _targetKey + '」未生效，正在重试…', 'warn', 6000);
+          this._lastNavAt = Date.now();
+          await this._rebindAfterNav();
+          return;
+        }
+
+        // 确实切过去了 → 失败计数清零
+        this._navFailCount = 0;
+        this._navFailKey = null;
         this._navCount++;
         this._completedThisRun = (this._completedThisRun || 0) + 1;   // 停止条件：完成节数
         this._lastNavAt = Date.now();   // 打时间戳：闸门据此屏蔽旧 video 的残留 ended 态
