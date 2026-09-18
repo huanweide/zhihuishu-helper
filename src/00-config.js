@@ -6,7 +6,21 @@
 (function () {
   'use strict';
 
-  if (window.__ZHS_HELPER__) return;
+  // 重入守卫：同一页面只跑一个实例，避免定时器/监听器叠加。
+  //
+  // 【2026-09-19 修正】原来这里是**无声** return。用户反馈「装了 27 次都没用、面板都没有」：
+  // 若油猴里残留了多份副本（反复导入很容易留下），第一份跑起来就上锁，
+  // 之后装的新版本全部静默退出 —— 谁先跑谁生效，跟版本号无关，用户完全看不到发生了什么。
+  // 现在仍然只跑一个实例（这是对的），但要把「为什么没生效」在控制台说清楚。
+  if (window.__ZHS_HELPER__) {
+    try {
+      const prev = window.__ZHS_HELPER_VERSION__;
+      console.warn('[智慧树助手] 检测到页面已有脚本实例'
+        + (prev ? '（版本 ' + prev + '）' : '')
+        + '，本次注入已退出。若你重复安装了多份，请在油猴里删掉多余副本，只保留一份。');
+    } catch (e) { /* 连控制台都不可用时，绝不能因此中断脚本 */ }
+    return;
+  }
 
   // ============ 默认配置 ============
   const DEFAULTS = {
@@ -255,6 +269,8 @@
   };
 
   window.__ZHS_HELPER__ = true;
+  // 记下版本：页面里若已有实例，守卫处要靠它告诉用户「你装的到底是哪个版本在跑」
+  window.__ZHS_HELPER_VERSION__ = (window.__ZHS_BUILD__ && window.__ZHS_BUILD__.version) || 'unknown';
 
   const ZHS = {
     // 版本号只认 package.json（build.js 注入到 window.__ZHS_BUILD__.version）。

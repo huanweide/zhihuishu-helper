@@ -92,7 +92,11 @@
       item: '[class*="course-node"], [class*="chapter-item"], .catalog-item, [class*="lesson-item"]',
       active: '[class*="course-node"].active, [class*="chapter-item"].active, .catalog-item.active, [class*="lesson-item"].active',
       activeClass: 'active',
-      finish: '[class*="finish"], [class*="complete"], [class*="done"]',
+      // 【2026-09-19 修正】原来是裸通配 `[class*="done"]`，而 isFinished 的第 1 层
+      // 是「命中即完成」、不设任何形态约束。polymas 一旦当选，外层容器
+      // （lesson-done-wrap / study-finish-box 之类）会让整目录瞬间全判完成 → allDone 停摆。
+      // 这里收紧成图标型元素，把误伤堵在源头。
+      finish: 'i[class*="finish"], i[class*="done"], i[class*="complete"], span[class*="finish"], span[class*="done"], [class*="finish-icon"], [class*="done-icon"], .is-finish, .is-done',
       title: '[class*="title"], span[title]',
       progress: '[class*="progress"], [role="progressbar"]',
       container: '#main',
@@ -209,7 +213,18 @@
     if (!list.length) return 0;
 
     let score = Math.min(list.length, 30);
-    try { if (ad.active && document.querySelector(ad.active)) score += 100; } catch (e) { /* 选择器兼容 */ }
+    // 1. 能找到「当前项」是最强信号，但有两个前提，否则会翻车：
+    //    (a) active 元素必须是本套 item 命中的节点之一 —— 页面别处一个 .active 不该给它加满分
+    //    (b) 该节点要真的可见 —— 上一段残留的、display:none 的旧容器不该拿满分
+    //    （旧写法用全页 querySelector 找 active，两套 DOM 并存时公式会塌缩成「只比谁节点多」）
+    try {
+      if (ad.active) {
+        const actives = Array.from(document.querySelectorAll(ad.active));
+        const inList = actives.filter((a) => list.some((el) => el === a || el.contains(a)));
+        if (inList.some((a) => U.isVisible(a))) score += 100;
+        else if (inList.length) score += 40;   // 命中但不可见：降权，不作数
+      }
+    } catch (e) { /* 选择器兼容 */ }
     try { if (ad.container && document.querySelector(ad.container)) score += 20; } catch (e) { /* 选择器兼容 */ }
 
     let titled = 0;
