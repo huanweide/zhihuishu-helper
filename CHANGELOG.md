@@ -4,6 +4,67 @@
 
 ---
 
+## [0.6.0] - 2026-09-18
+
+### 新增
+- **「自动跳课」+「自动选课」（polymas 新平台）** — 新模块 `src/06b-course-hub.js`。
+  解决「线性代数听完直接退出去、检测还有没有没听完的课程、点进去跳到没听完的部分继续听」。
+  - **自动跳课**：本课程全部学完后自动返回课程中心寻找下一门课。
+    钩子插在 `src/05-scheduler.js` 的 `gotoNext` → `bd.undone === 0` 分支（本课看完的唯一出口）。
+  - **自动选课**：在课程中心自动进入未学完的课程。卡片选择器 `.ai-course-center-body div.course-card`，
+    处理虚拟滚动（边滚边收 + 时长上限），整卡可点（平台走 `window.open` 新标签）。
+  - 新增配置项（`src/00-config.js`，`CONFIG_REV` 3 → 4）：`autoCourseHop: true`、`autoCoursePick: true`。
+  - 跨页靠 GM 存储 + intent 会话库（key `zhs-helper-hub`）串联，照 `src/04-resume.js` 的存储范式。
+
+### 修复
+- **【安全】课程中心不再劫持用户点击** —— 早先版本无条件自启动，
+  用户只要打开课程中心页，1.5 秒后课就被点了、还开出新标签。
+  现改为安全入口 `onPageReady()`：**只有两种情形才动手** ——
+  ① `intent.via === 'auto-hop'`（上一门课学完后的自动跳课链，用户已授权）；
+  ② 用户在面板手动点「找下一门课」。其余情况只打日志，绝不动手。
+- **`enterCourse` 成功/失败判断反了** —— 早先用 `isHubPage()` 判断「没跳转成功」，
+  但新标签场景下当前页永远是课程中心，导致恒返回 false，
+  上层据此把一门本来能学的课**永久拉黑**。现改为：click 未抛异常 + intent 写入成功即返回 true；
+  「到底进没进去」只由学习页 `settleIntentOnStudentPage()` 回写确认，不在跳转侧乱猜。
+- **课程标识键不同源** —— 学习页存 `recruitAndCourseId`，中心页按 `data-course-id` 过滤，
+  导致死循环守卫失效。现统一走 `cardIdentity()` 多级兜底 + 课程名降级。
+- **`collectCards()` 卡死** —— 原先只有「30 轮」次数上限，无时长上限；
+  当 `scrollHeight` 不可读（无布局环境）时判不出「到底了没」，空转最长约 9 秒。
+  现加 4 秒总时长上限 + 高度不可读即刻收工。
+- **可见性误判阻断点击** —— `U.isVisible()` 在无布局环境误报 false，
+  原先直接跳过点击导致功能全废。现改为「不可见也照样点一次」，失败再降级点内部元素。
+- **`concurrent pickNext` 假性 null** —— 防重入标志原先让并发第二次调用立即返回 null
+  （`[]` 与「未知」语义混淆，上层会误弹「没有未看完的课程」）。
+  现改为共享 in-flight Promise，后续调用 await 第一轮结果。
+- **版本号漂移** —— `src/00-config.js` 里的 `version: '0.3.0'` 长期未同步。
+  现由 `build.js` 注入 `__ZHS_VERSION__`（源自 package.json），单一来源不再漂移。
+
+### 验证
+- `node test/run.js` → 244 / 0
+- `node tools/verify-exam.js` → 35 / 0
+- `node test/audit-hub-fix.js`（新增，22 项）→ 22 / 0
+  含「打开课程中心零点击」「有授权才点课」「未误拉黑」「源码红线」四组核心断言。
+
+## [未发布]
+- **新增「在线作业/在线考试」自动答题（守株待兔模式，默认关闭）** — 新模块 `src/06c-exam.js`。
+  用户明确要求「不自动进入，默认关闭，剔除自动进入」，故本模块的行为边界是：
+  **只有用户自己点进作业/考试作答页时**才自动答完并提交；**绝不自动跳转**、
+  **绝不在列表页点击任何东西**、**绝不做「答完一个找下一个」的循环**。
+  - 新增配置项（`src/00-config.js`，`CONFIG_REV` 4 → 5）：
+    `autoExam: false`（总开关，默认关）、`examChapterFrom: 0`、`examChapterTo: 0`、
+    `examSubmit: true`、`examSubmitDelay: 5`。
+    **`autoExam` 刻意不进 `FORCE_UPGRADE`** —— 它的承诺是「默认关闭」，强推等于偷偷替用户打开。
+  - 新增设置项（`src/06-panel.js`）：「自动答题（作业/考试）」开关、「答完自动提交」开关、
+    「作答章节范围」两个数字框（沿用既有 `change` 事件 + `ZHS.setConfig` 绑定机制，未发明新机制）。
+  - 复用既有答题能力，不重复造轮子：取答案走 `ZHS.Solver.solve()`（题库优先 → LLM 兜底 → 缓存），
+    选中态自检走 `ZHS.Filler.isChecked()`，答案归一化走 `ZHS.Bank.normalize` / `toIndexes`。
+  - 主观题（填空/问答）自动跳过并 warn，不瞎填；答完提交后**停下**，日志明说「不跳转、不寻找下一个」。
+  - **如实声明的限制**：作业/考试作答页 URL 只有 `recruitId/stuExamId/examId/courseId/schoolId`，
+    **不含章节号**，DOM 也无章节锚点。故「作答章节范围」仅在能从 URL 参数或页面标题解析出章节号时生效；
+    拿不到时退化为「全部作答」并在日志明确写 `未能识别当前作业所属章节…按全部作答`。
+  - 新增验收脚本 `tools/verify-exam.js`（35 项断言，jsdom + 源码还原 DOM），
+    含「默认关闭时零点击」「列表页零点击」「源码无跳转语句」三组红线断言。
+
 ## [0.5.1] — 2026-09-18
 - 邀请码支持一键复制：面板硅基流动栏新增「点击复制」按钮，点一下即把邀请码 `axOmWfWi` 写入剪贴板（含 execCommand 降级兜底），复制成功显示「已复制 ✓」；注册链接文案简化为「点击注册（自动带入邀请码）」。
 

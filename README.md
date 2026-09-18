@@ -197,16 +197,17 @@ zhihuishu-helper/
 │   ├── 11-测试报告.md      # 两层测试体系 + 断言明细
 │   ├── 20-使用说明.md      # 安装、面板、控制台 API、排障手册
 │   └── 90-快照与回溯.md    # 三层快照机制
-├── src/                   # 正式源码（14 模块，按序拼装）
+├── src/                   # 正式源码（16 模块，按序拼装）
 ├── test/                  # 测试：逻辑单测 + 截屏测试 + 真实站点测试
-│   ├── run.js             #   逻辑单测 160 项（jsdom）
+│   ├── run.js             #   逻辑单测 244 项（jsdom）
 │   ├── screenshot.js      #   截屏测试 70 项（puppeteer-core + Chrome）
 │   ├── live-run.js        #   真实站点测试入口（login/recon/e2e）
 │   ├── fixture-media.js   #   媒体打桩（解决 duration=Infinity）
 │   └── fixture-*.html     #   仿真页面
 ├── tools/
 │   ├── snapshot.sh        #   三层快照
-│   └── probe.js           #   内部状态诊断
+│   ├── probe.js           #   内部状态诊断
+│   └── verify-exam.js     #   在线作业/考试作答页验收（35 项断言）
 ├── dist/                  # 构建产物（git 忽略）
 ├── reference/             # 参考项目源码 + 实测抓取（只读，git 忽略）
 └── snapshot/              # 项目快照（tar/bundle，git 忽略）
@@ -236,10 +237,39 @@ node test/live-run.js e2e                        # 真实站点：端到端测�
 - [x] **v0.1.0 首个可用版本：211 项测试全绿**
 - [x] **v0.2.0 自动化闭环：三态识别 + 自动跳未看完 + 全完成总结 + 弹题自动关闭 + polymas 适配**
 - [x] **v0.2.1 闭环加固：启动预检 + 抗改版结构兜底 + 修 3 处真 bug，293 项测试全绿**
+- [x] **M6 在线作业/考试自动答题（守株待兔模式，默认关闭，绝不自动跳转）**
 - [ ] M7 真实站点端到端验证（需登录态）
 - [ ] M8 面板打磨：答题记录页、通道健康检测、习惯分统计
 
-**测试门禁**：逻辑单测 223/223 + 截屏测试 70/70 = **293 项全绿**
+**测试门禁**：逻辑单测 244/244 + 截屏测试 70/70 = **314 项全绿**
+
+### M6 补充说明：为什么是「守株待兔」而不是「主动出击」
+
+用户明确要求：
+
+> 「不要自动进入，可以设置一个设置默认关闭，自动完成待测任务作业考试」
+> 「并不自动进入考试界面跳转，配置剔除自动进入」
+
+所以 `src/06c-exam.js` 的行为边界是：
+
+| 做 | 不做 |
+|---|---|
+| 用户在作业/考试页时自动答完并提交 | ❌ 绝不自动跳转到作业/考试页 |
+| 提供总开关，**默认关闭** | ❌ 不扫描发现未完成作业然后自己跳过去 |
+| 提供章节范围选择 | ❌ 不做「答完一个跳到下一个」的循环 |
+| 只答在范围内、且是客观题的题 | ❌ 主观题（填空/问答）不瞎填，只 warn |
+
+**硬性红线（写进代码注释，勿越界）**：
+不调用 `location.href` / `location.replace` / `window.open`；
+不点击列表页的 `.jobExamComBtn`（开始答题）/ `.course_ewstate`（进入作业）。
+`tools/verify-exam.js` 的 G 组会用正则扫描源码，确保这些红线不被误加回来。
+
+**复用的既有能力**（避免重复造轮子）：
+- 取答案 → `ZHS.Solver.solve({title, options, type})`（内部已实现题库优先 + LLM 兜底 + 缓存 + gatedRandom 策略）
+- 题型识别 → `ZHS.Questions.guessType` 同源的解析逻辑
+- 选中态自检 → `ZHS.Filler.isChecked(el)`
+- 答案归一化 / 字母转索引 → `ZHS.Bank.normalize` / `ZHS.Bank.toIndexes`
+- 请求层 → `ZHS.Bank.request`（GM_xmlhttpRequest 绕 CORS）
 
 ---
 

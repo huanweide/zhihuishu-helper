@@ -41,7 +41,8 @@ const files = fs.readdirSync(SRC)
   .filter((f) => f.endsWith('.js'))
   .sort();
 
-let body = '';
+// 注入版本常量，避免 src 里硬编码版本号与 package.json 漂移
+let body = `\n/* ===== 构建注入 ===== */\nconst __ZHS_VERSION__ = ${JSON.stringify(VER)};\n`;
 for (const f of files) {
   const code = fs.readFileSync(path.join(SRC, f), 'utf8');
   body += `\n/* ===== ${f} ===== */\n` + code.trim() + '\n';
