@@ -158,7 +158,11 @@
     if (host.includes('fusioncourseh5')) return [ADAPTERS.fusion, ADAPTERS.wisdom, ADAPTERS.legacy];
     if (host.includes('studywisdomh5')) return [ADAPTERS.card2025, ADAPTERS.fusion];
     if (host.includes('studyplush5')) return [ADAPTERS.wisdom, ADAPTERS.card2025];
-    // studyvideoh5 及其他 → 智慧版优先，旧版兜底
+    // studyvideoh5（旧共享课学习页）→ 按侦察 VERSION_MAP 优先 legacy 结构（.clearfix.video / .time_icofinish），
+    // wisdom（.child-info.hasvideo / .child-check）兜底。两者完成标记都走 isFinished 的通用兜底，
+    // 无论平台用哪套 class 都能识别右侧栏对勾/完成标记。
+    if (host.includes('studyvideoh5')) return [ADAPTERS.legacy, ADAPTERS.wisdom, ADAPTERS.fusion, ADAPTERS.card2025, ADAPTERS.polymas];
+    // 其它域名 → 智慧版优先，旧版兜底
     return [ADAPTERS.wisdom, ADAPTERS.legacy, ADAPTERS.fusion, ADAPTERS.card2025, ADAPTERS.polymas];
   }
 
@@ -271,18 +275,31 @@
       return U.normText(el.innerText || el.textContent).slice(0, 80);
     },
 
-    /** 条目是否已完成 */
+    /**
+     * 条目是否已完成
+     * 完成判定的「金标准」是平台在章节列表（用户侧栏/右侧栏）打的完成标记（对勾/已完成图标）。
+     * 仅靠视频进度条判断会出问题：视频放完但平台进度条还停在 99% 时，会误判「没看完」→ 重播而非跳节。
+     * 所以优先级：专属完成标记 > 通用完成标记（覆盖各版本 class 变体）> 文本"已完成/已学完" > 进度 100%。
+     */
     isFinished(el) {
       if (!el) return false;
+      const ad = this.adapter;
       try {
-        if (el.querySelector(this.adapter.finish)) return true;
+        // 1. 适配器专属完成标记（如 wisdom 的 .child-check / legacy 的 .time_icofinish）
+        if (ad.finish && el.querySelector(ad.finish)) return true;
       } catch (e) { /* 选择器兼容 */ }
-      // 文本兜底
+      // 2. 通用完成标记：各版本对勾/完成图标的 class 变体（finish/done/complete/learned/studied/checkmark 等）
+      try {
+        if (el.querySelector('[class*="finish"], [class*="done"], [class*="complete"], [class*="learned"], [class*="studied"], [class*="checkmark"], [class*="is-finish"]')) {
+          return true;
+        }
+      } catch (e) { /* 选择器兼容 */ }
+      // 3. 子元素文本兜底（有时完成标记是「已学完」三个字而非图标）
       const txt = U.normText(el.innerText || el.textContent);
-      if (txt.includes('已完成') || txt.includes('已学完')) return true;
-      // 进度条达到 100% 也算完成（部分页面没有完成图标）
+      if (/(已完成|已学完|已学习|学完|已看完|已学|100\s*%)/.test(txt)) return true;
+      // 4. 进度条达到 100% 也算完成（部分页面没有完成图标）
       // 注意：这里直接读进度值，不能调 progressOf（它会反向调 isFinished，形成死递归）
-      if (this.adapter.progress && this._readProgress(el) >= 100) return true;
+      if (ad.progress && this._readProgress(el) >= 100) return true;
       return false;
     },
 

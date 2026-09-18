@@ -13,6 +13,9 @@
   const Answerer = {
     _running: false,
     _lastDialogSig: '',
+    _answeredSig: '',       // 已成功作答完成的弹题签名（去重跳过用）
+    _skippedSigs: null,     // 无通道已跳过的弹题签名集合
+    _lastSkipWarnAt: 0,     // 跳过告警节流时间戳
     _failCount: 0,          // 同一弹题连续处理失败次数
     _cooldownUntil: 0,      // 退避截止时间戳
     _pendingHuman: false,   // 本题未答上/关不掉 → 等人工，期间不再自动关闭和反复告警
@@ -46,8 +49,9 @@
       // 否则按钮看起来就是「点了没反应」。
       const snapshot = ZHS.Questions.Dialog.collect();
       const sig = JSON.stringify(snapshot.map((s) => s.title)).slice(0, 200);
-      if (!manual && sig && sig === this._lastDialogSig) {
-        ZHS.Log.debug('弹题签名未变，跳过重复处理');
+      // 已成功作答完成的弹题才去重跳过；无通道/未答上的弹题仍需每轮重试关闭（避免卡死）
+      if (!manual && sig && sig === this._answeredSig) {
+        ZHS.Log.debug('弹题已作答完成，跳过重复处理');
         return;
       }
       this._lastDialogSig = sig;
@@ -56,7 +60,7 @@
       try {
         const before = ZHS.state.answeredCount;
         ZHS.Log.info('检测到课中弹题，开始自动作答' + (manual ? '（手动触发）' : ''));
-        await this._answerDialog(root);
+        await this._answerDialog(root, sig);
 
         // 用户手动点了「答题」却一题都没答——最常见的原因是没有可用答题通道
         // （未填 API Key / 题库查不到）。此时按策略不该瞎蒙，但必须给用户反馈，
@@ -100,7 +104,10 @@
       return false;
     },
 
-    async _answerDialog(root) {
+    async _answerDialog(root, sig) {
+      // 每次处理新弹题都重置「无通道/无法自检」标记，避免上一题的状态污染本题
+      this._noChannelThisRound = false;
+      this._noSelfCheck = false;
       const pages = Array.from(root.querySelectorAll('.el-pager .number'));
       let anyAnswered = false;
 
@@ -136,13 +143,20 @@
       // 没答上时正确做法：保留弹窗交给用户手动作答，脚本安静等待。
       if (!anyAnswered) {
         // 区分「无通道（无法自检）」与「有通道但选项点击未生效」：
-        // 用户意图「若无法做简单自检则不强制关闭，默认视为已作答」。
-        // 故无通道 / 点击后环境无法自检选中态时，按「默认视为已作答」尝试关闭，
-        // 把"答没答"的最终裁决权交还给平台（平台拒绝未作答会回弹，由退避兜底防死循环）；
-        // 只有「明确有通道、点击也执行了、但选项就是选不中」才转人工，避免瞎蒙错答。
+        // 无通道 / 点击后环境无法自检选中态 → 按"默认视为已作答"尝试关闭弹窗，
+        // 平台拒绝未作答会回弹；此时【不转人工卡死】，恢复播放并继续，
+        // 下一轮主循环仍会重试关闭（节流告警），符合用户「不要停住」要求。
+        // 只有「明确有通道、点击也执行了、但选项就是选不中」才转人工。
         if (this._noChannelThisRound || this._noSelfCheck) {
-          ZHS.Log.warn('无可用答题通道或无法自检选中态，按"默认视为已作答"尝试关闭弹窗（平台拒绝未作答将退避重试）');
-          await this.closeDialogAndResume();
+          const ok = await this.closeDialogAndResume({ noChannel: true });
+          if (ok) {
+            this._answeredSig = sig || '';
+            if (this._skippedSigs) this._skippedSigs.delete(sig || '');
+          } else {
+            // 平台禁止关闭未作答弹窗：不暂停、不卡死，恢复播放并继续，稍后重试
+            this._resumePlay();
+            this._throttledSkipWarn(sig);
+          }
         } else {
           this._pendingHuman = true;
           ZHS.Log.warn('本题有通道但选项点击未生效，平台不允许关闭未作答弹窗，已交由人工处理');
@@ -152,6 +166,7 @@
         }
         return;
       }
+      this._answeredSig = sig || '';   // 标记已作答完成，后续轮次去重跳过
       await this.closeDialogAndResume();
     },
 
@@ -159,7 +174,8 @@
      * 关闭弹题并恢复播放（N4 需求）
      * 策略：点关闭 → 校验是否真关了 → 没关就重试（最多 3 次，每次间隔递增）
      */
-    async closeDialogAndResume() {
+    async closeDialogAndResume(opts) {
+      const noChannel = !!(opts && opts.noChannel);
       const Q = ZHS.Questions.Dialog;
       for (let attempt = 1; attempt <= 3; attempt++) {
         const ok = Q.close();
@@ -177,10 +193,12 @@
         ZHS.Log.warn('弹题关闭失败，重试第 ' + attempt + ' 次');
       }
 
-      // 3 次都失败 → 转人工。平台大概率是因为「未作答」拒绝关闭，
-      // 继续退避重试只会无限循环骚扰（每次都弹「N 秒后重试」）。
-      // 正确做法：明确告知用户手动作答，脚本安静等待，弹窗消失后自动复位。
       this._failCount++;
+      // 无通道场景：不转人工卡死主循环，交由调用方（_answerDialog）恢复播放并继续重试。
+      if (noChannel) return false;
+
+      // 有通道场景（明确需要人工）：平台大概率是因为「未作答」拒绝关闭，
+      // 退避 30s 防反复骚扰，明确告知用户手动作答，脚本安静等待，弹窗消失后自动复位。
       this._cooldownUntil = Date.now() + 30 * 1000;   // 退避 30s，防关不掉的弹窗反复骚扰
       this._lastDialogSig = '';
       this._pendingHuman = true;
@@ -189,6 +207,19 @@
         ZHS.panel.alert('弹窗关不掉？多半是还没作答——请手动选好答案，脚本会继续等你', 'warn', 10000);
       }
       return false;
+    },
+
+    /** 无通道时跳过弹题的节流告警：每 30s 最多提示一次，避免刷屏 */
+    _throttledSkipWarn(sig) {
+      const now = Date.now();
+      if (this._lastSkipWarnAt && now - this._lastSkipWarnAt < 30000) return;
+      this._lastSkipWarnAt = now;
+      if (!this._skippedSigs) this._skippedSigs = new Set();
+      if (sig) this._skippedSigs.add(sig);
+      ZHS.Log.warn('本题无答题通道（未配置大模型密钥或题库查不到），平台又不许关闭未作答弹题，已尝试跳过并继续播放；配置密钥后可在设置页开启自动答题');
+      if (ZHS.panel) {
+        ZHS.panel.alert('本题无答题通道，已尝试跳过并继续播放；如需自动作答请在设置页填写大模型 API Key', 'warn', 10000);
+      }
     },
 
     /** 恢复播放（弹题处理完后） */
@@ -326,6 +357,9 @@
     /** 重置弹题签名（切课后调用） */
     reset() {
       this._lastDialogSig = '';
+      this._answeredSig = '';
+      this._skippedSigs = new Set();
+      this._lastSkipWarnAt = 0;
       this._failCount = 0;
       this._cooldownUntil = 0;
       this._pendingHuman = false;
