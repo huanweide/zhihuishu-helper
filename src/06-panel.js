@@ -160,6 +160,11 @@
 
       this._bind(box);
       this.refresh();
+        // panelVisible=false 时面板默认隐藏（用户仍可点 .mini 唤出）
+        if (ZHS.config.panelVisible === false) {
+          const _p = box.querySelector('.panel');
+          if (_p) _p.classList.remove('show');
+        }
       ZHS.Log.debug('控制面板已挂载');
     },
 
@@ -213,6 +218,8 @@
 
       <div style="margin:9px 0 3px;font-size:11px;font-weight:600;color:#185FA5">AI 答题</div>
       <div class="row"><label>自动答题</label><button class="sw" data-cfg="autoAnswer"></button></div>
+      <div class="row"><label>课中弹题自动答</label><button class="sw" data-cfg="answerDialog"></button></div>
+      <div class="row"><label>作业页自动答</label><button class="sw" data-cfg="answerHomework"></button></div>
       <div class="row"><label>答完自动关闭</label><button class="sw" data-cfg="autoCloseDialog"></button></div>
       <div class="row"><label>题库通道</label><button class="sw" data-cfg="bankEnabled"></button></div>
       <div class="row"><label>LLM 通道</label><button class="sw" data-cfg="llmEnabled"></button></div>
@@ -260,6 +267,7 @@
       <div class="row"><label>观看满（分钟）</label><input type="number" class="in-stopmin inp" min="1" max="1440" style="width:70px"></div>
       <div class="row"><label>完成满（节）</label><input type="number" class="in-stoples inp" min="1" max="200" style="width:70px"></div>
 
+      <div class="row"><label>显示悬浮面板</label><button class="sw" data-cfg="panelVisible"></button></div>
       <div class="row"><label>调试日志</label><button class="sw" data-cfg="debug"></button></div>
     </div>
   </div>
@@ -622,7 +630,7 @@
       const allDone = Number(report.未完成) === 0 && Number(report.总节点) > 0
         && Number(report.已完成) >= Number(report.总节点);
       const undoneN = Number(report.未完成) || 0;
-      const skipN = Number(report.未作答) || 0;
+      const skipN = Number(report.漏答题数) || 0;
 
       let head, headColor;
       if (allDone && skipN === 0) {

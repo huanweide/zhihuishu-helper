@@ -4,6 +4,12 @@
 
 ---
 
+## [0.5.0] — 2026-09-18
+- 修复判断题在课中弹题路径被静默跳过（13-answerer.js：题型判断漏写 judgement，改为走 Filler.fill 的 judgement 分支）。
+- 修复 gotoNext 连点同一节死循环（05-scheduler.js：新增「同目标连点 N=5 次仍无前进则 stop()+alert」守卫）。
+- 接上死配置 answerDialog / answerHomework / panelVisible 设置开关（06-panel.js 设置页 + 05-scheduler 弹题守卫读取 answerDialog + mount 读取 panelVisible）。
+- 修复报告标题「漏答数」分支读错键名（06-panel.js：report.未作答 → report.漏答题数，skipN 此前恒为 0）。
+
 ## [0.4.0] — 2026-09-17
 
 面板升级 + 答题死循环修复 + 开源上架。

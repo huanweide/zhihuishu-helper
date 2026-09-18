@@ -248,7 +248,7 @@
             }
           }
         }
-      } else if (q.type === 'completion' || q.type === 'qa') {
+      } else if (q.type === 'completion' || q.type === 'qa' || q.type === 'judgement') {
         const ok = await ZHS.Filler.fill(
           { type: q.type, elementList: q.elementList, node: root },
           result

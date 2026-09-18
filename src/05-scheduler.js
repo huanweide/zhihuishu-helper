@@ -36,6 +36,8 @@
   const QUESTION_WAIT_MAX_MS = 3000;             // 弹题自动关闭失败后：短等放行，别吊住主循环
   const DIALOG_BUDGET_MS = 25 * 1000;          // 单轮弹题作答预算
   const BLOCK_GUARD_MAX_TICKS = 15;            // 阻塞弹窗连续点不掉的轮数上限
+  // 切课点击「点了没动」检测：连点同一目标 N 次仍未前进则判失败停手（根治静默死循环）
+  const SAME_NAV_MAX = 5;
 
   const Scheduler = {
     _timer: null,
@@ -64,6 +66,8 @@
       ZHS.state.running = true;
       ZHS.state.startedAt = Date.now();   // 每次启动重置计时
       this._navCount = 0;
+      this._navFailKey = null;
+      this._navFailCount = 0;
       this._completedThisRun = 0;         // 停止条件：本次运行完成节数
       this._timer = setInterval(() => this.tick(), LOOP_INTERVAL);
       ZHS.Log.info('主循环已启动');
@@ -240,7 +244,7 @@
       if (cfg.guardOverlays && ZHS.Questions.Dialog.present()
           && U.hasStructurallyVisible(QUESTION_SELECTORS)) {
         if (video && !video.paused) video.pause();
-        if (ZHS.config.autoAnswer && ZHS.Answerer) {
+        if (ZHS.config.autoAnswer && cfg.answerDialog && ZHS.Answerer) {
           if (ZHS.Answerer._pendingHuman) {
             // 待人工期：本题没答上/关不掉，用户正在手动作答。安静等待，
             // 不强关（平台会拒绝）、不告警刷屏。弹窗消失后下一轮自动复位。
@@ -436,6 +440,23 @@
             if (ZHS.panel) ZHS.panel.alert('还有 ' + bd.undone + ' 节未完成但定位失败，请检查目录', 'warn');
             this.stop();
           }
+          return;
+        }
+
+        // 「同目标反复点」检测：记录每次切换目标标识；若与上次失败目标相同则累计，
+        // 不同则清零。健康站点点完下一节会前移 → 目标变化 → 计数归零，不会误停；
+        // 只有「点了没动、next 恒同节」才让计数收敛到 SAME_NAV_MAX → 判失败停手。
+        const _targetKey = cat.itemTitle(next);
+        if (_targetKey === this._navFailKey) {
+          this._navFailCount++;
+        } else {
+          this._navFailKey = _targetKey;
+          this._navFailCount = 1;
+        }
+        if (this._navFailCount >= SAME_NAV_MAX) {
+          ZHS.Log.error('连续 ' + this._navFailCount + ' 次切换目标都是「' + _targetKey + '」且未能前进（疑似平台改版/按钮无反应），已停止自动跳转');
+          if (ZHS.panel) ZHS.panel.alert('切课失败：连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」无效，已停止自动跳转，请手动切换', 'error', 15000);
+          this.stop();
           return;
         }
 
