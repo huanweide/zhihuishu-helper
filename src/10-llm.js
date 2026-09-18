@@ -35,6 +35,13 @@ ${question}${optionText}
 你的答案：`;
   }
 
+  // 单次 LLM 调用超时（毫秒）。
+  // 原来是 30 秒，配合 vote() 的最多 3 次重试 = 最坏 90 秒，
+  // 这段时间主循环（2 秒一轮）被 await 死死堵住 → 弹题一出现整个脚本就像卡死。
+  const CALL_TIMEOUT_MS = 15000;
+  // 一道题的作答总预算（毫秒）。超时后放弃后续投票，用已有结果 or 直接认输。
+  const ANSWER_BUDGET_MS = 25000;
+
   /** 调用一次 LLM */
   async function callOnce(question, options, type) {
     const cfg = ZHS.config;
@@ -57,7 +64,7 @@ ${question}${optionText}
         Authorization: 'Bearer ' + cfg.llmKey,
       },
       data: JSON.stringify(payload),
-      timeout: 30000,
+      timeout: CALL_TIMEOUT_MS,
     });
 
     if (!res.ok) {
@@ -84,8 +91,15 @@ ${question}${optionText}
     const n = Math.max(1, Math.min(Number(times) || 3, 5));
     const votes = {};
     let lastErr = null;
+    // 总预算闸门：哪怕每次调用都没超时，3 次串起来也可能拖到 45 秒，
+    // 这段时间主循环是被 await 堵死的。到点就收工，用已有票或直接认输。
+    const deadline = Date.now() + ANSWER_BUDGET_MS;
 
     for (let i = 0; i < n; i++) {
+      if (Date.now() >= deadline && i > 0) {
+        ZHS.Log.warn('LLM 作答超出总预算 ' + ANSWER_BUDGET_MS + 'ms，停止后续投票');
+        break;
+      }
       try {
         const raw = await callOnce(question, options, type);
         const ans = ZHS.Bank.normalize(raw);

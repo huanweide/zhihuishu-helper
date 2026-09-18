@@ -15,7 +15,7 @@ const HEADER = `// ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
 // @version      ${VER}
-// @description  智慧树自动播放 + 断点续播 + AI 自动答题
+// @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // @match        *://*.zhihuishu.com/*
 // @match        *://*.polymas.com/*
@@ -30,6 +30,9 @@ const HEADER = `// ==UserScript==
 // @connect      *
 // @run-at       document-idle
 // @license      MIT
+// @supportURL   https://github.com/huanweide/zhihuishu-helper/issues
+// @updateURL    https://raw.githubusercontent.com/huanweide/zhihuishu-helper/main/dist/zhihuishu-helper.user.js
+// @downloadURL  https://raw.githubusercontent.com/huanweide/zhihuishu-helper/main/dist/zhihuishu-helper.user.js
 // ==/UserScript==
 `;
 

@@ -22,18 +22,22 @@
     ZHS.state.courseId = ZHS.Catalog.getCourseId();
     ZHS.Log.info('课程 ID：' + ZHS.state.courseId);
 
-    // 3. 等视频出现（有些页面懒加载）
+    // 3. 面板先挂载：不等视频，进来就能看到界面。
+    //    以前写在 waitFor 之后，在作业页 / 尚未进入播放页时要干等 30 秒才出面板，
+    //    用户会误以为脚本没装上（BUG-UX-2）。
+    if (ZHS.panel) ZHS.panel.mount();
+
+    // 4. 等视频出现（有些页面懒加载）
     const video = await U.waitFor('video', 30000);
     if (!video) {
       ZHS.Log.warn('30 秒内未找到视频元素，可能不在播放页');
-      if (ZHS.panel) ZHS.panel.mount();  // 面板仍挂载，方便手动操作
+      if (ZHS.panel) {
+        ZHS.panel.alert('未检测到视频，可能尚未进入播放页；面板可正常使用，进播放页后会自动开始', 'warn', 10000);
+      }
       return;
     }
     ZHS.state.videoEl = video;
     ZHS.Log.info('视频元素已就绪，时长 ' + Math.round(video.duration || 0) + 's');
-
-    // 4. 挂载面板
-    if (ZHS.panel) ZHS.panel.mount();
 
     // 5. 尝试断点恢复
     await ZHS.Resume.restore(ZHS.state.courseId);
@@ -87,10 +91,10 @@
   // 暴露手动控制
   window.zhs = {
     boot,
-    start: () => ZHS.Scheduler.start(),
+    start: () => ZHS.Scheduler.start({ manual: true }),
     stop: () => ZHS.Scheduler.stop(),
     config: (p) => ZHS.setConfig(p),
-    next: () => ZHS.Scheduler.gotoNext('手动'),
+    next: () => ZHS.Scheduler.gotoNext('手动', { manual: true }),
     clearResume: () => ZHS.Resume.clear(ZHS.state.courseId),
     logs: () => ZHS.Log.all(),
     stats: () => ZHS.Catalog.stats(),

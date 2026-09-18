@@ -24,6 +24,9 @@ function eq(name, actual, expected) {
   ok(name, actual === expected, `得到 ${JSON.stringify(actual)}，期望 ${JSON.stringify(expected)}`);
 }
 
+/** 测试内短等待（等异步链落盘） */
+const U2Sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // ============ 构造最小 DOM 环境 ============
 // 记录所有创建过的环境，便于统一清理（否则残留定时器会干扰后续断言）
 const ALL_ENVS = [];
@@ -82,7 +85,10 @@ console.log('\n=== 1. 配置层 ===');
   ok('ZHS 命名空间已建立', !!Z);
   eq('默认倍速 1.5', Z.config.speed, 1.5);
   eq('默认静音开启', Z.config.mute, true);
-  eq('默认 AI 答题关闭', Z.config.autoAnswer, false);
+  eq('默认 AI 答题开启（全自动要求）', Z.config.autoAnswer, true);
+  eq('默认停止条件为不限时', Z.config.stopMode, 'none');
+  eq('默认观看时长阈值', Z.config.stopMinutes, 120);
+  eq('默认完成节数阈值', Z.config.stopLessons, 10);
 
   Z.setConfig({ speed: 5 });
   eq('倍速 5 被夹到 1.8', Z.config.speed, 1.8);
@@ -826,7 +832,7 @@ console.log('\n=== 27. 总结面板标题随真实结果动态变化（防撒谎
   host = win.document.getElementById('zhs-helper-panel');
   txt = host.shadowRoot.querySelector('.report').textContent;
   ok('未全完成时标题不撒谎', !txt.includes('全部课程已看完'), txt.slice(0, 60));
-  ok('未全完成时给出正确提示', txt.includes('仍有未完成课程'), txt.slice(0, 60));
+  ok('未全完成时给出正确提示', txt.includes('仍有') && txt.includes('节未完成'), txt.slice(0, 60));
 }
 
 console.log('\n=== 28. 结构兜底扫描（平台改版/未知域名救命稻草） ===');
@@ -864,8 +870,176 @@ console.log('\n=== 28. 结构兜底扫描（平台改版/未知域名救命稻�
   ok('日志含兜底扫描提示', /结构兜底扫描/.test(logs), logs.slice(-200));
 }
 
-console.log('\n=== 29. 构建产物完整性 ===');
-Promise.all([_n3, _n4]).then(() => {
+console.log('\n=== 29. 停止条件（按时长 / 按节数） ===');
+const _stopCond = (async () => {
+  const html = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo"><span class="child-name">A</span><i class="child-check"></i></div>
+  <video></video>
+</div></body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=stopc');
+  const S = win.ZHS.Scheduler;
+
+  // —— minutes 模式：把 startedAt 拨回 2 小时前，阈值 1 分钟 → 应触发停止
+  win.ZHS.setConfig({ stopMode: 'minutes', stopMinutes: 1 });
+  win.ZHS.state.startedAt = Date.now() - 2 * 60 * 60 * 1000;
+  S._checkStopCondition();
+  await U2Sleep(50);
+  eq('时长达标后运行态关闭', win.ZHS.state.running, false);
+  ok('时长达标生成总结', !!S.lastReport(), String(S.lastReport()));
+  ok('总结含触发原因', /观看时长/.test(S.lastReport().触发原因), S.lastReport().触发原因);
+
+  // —— lessons 模式：完成 2 节阈值 2 → 触发
+  win.ZHS.state.running = true;
+  win.ZHS.state.startedAt = Date.now();
+  win.ZHS.setConfig({ stopMode: 'lessons', stopLessons: 2 });
+  S._completedThisRun = 2;
+  S._checkStopCondition();
+  await U2Sleep(50);
+  eq('节数达标后运行态关闭', win.ZHS.state.running, false);
+  ok('节数达标生成总结', /完成节数/.test(S.lastReport().触发原因), S.lastReport().触发原因);
+
+  // —— 未达标不触发
+  win.ZHS.state.running = true;
+  win.ZHS.setConfig({ stopMode: 'lessons', stopLessons: 5 });
+  S._completedThisRun = 2;
+  S._checkStopCondition();
+  await U2Sleep(50);
+  eq('未达标继续运行', win.ZHS.state.running, true);
+
+  // —— none 模式永不触发
+  win.ZHS.setConfig({ stopMode: 'none' });
+  S._completedThisRun = 99;
+  S._checkStopCondition();
+  await U2Sleep(50);
+  eq('none 模式不触发停止', win.ZHS.state.running, true);
+  win.ZHS.Scheduler.stop();
+})();
+
+console.log('\n=== 30. 目录未识别时不弹假总结（修复点） ===');
+const _fakeFin = (async () => {
+  const html = `<html><body><video></video></body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=fakefin');
+  const S = win.ZHS.Scheduler;
+
+  await S.gotoNext('手动', { manual: true });
+  eq('目录为空时运行态关闭（停止）', win.ZHS.state.running, false);
+  ok('目录为空时不生成「全部看完」总结', !S.lastReport(), String(S.lastReport()));
+})();
+
+console.log('\n=== 31. 视频放完且平台进度读不到 → 直接切下一集（修复重播 bug） ===');
+// 必须是 async IIFE：这里用了 await，写在裸 block 里会被 Node 判定为
+// top-level await，与顶部的 require() 冲突 → 整个测试文件起不来。
+const _noreplay = (async () => {
+  const html = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo current"><span class="child-name">第一节</span></div>
+  <div class="child-info hasvideo"><span class="child-name">第二节</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=noreplay');
+  const S = win.ZHS.Scheduler;
+  const cat = win.ZHS.Catalog;
+  const video = win.document.querySelector('video');
+  video.duration = 300;
+  video.currentTime = 300;
+  video.ended = true;
+
+  // 目录条目无完成标记、无进度条 → progressOf 读到 0
+  const cur = cat.current();
+  eq('当前条目进度读不到', cat.progressOf(cur), 0);
+
+  // 点击第二节后移除 current 并标记到第二节（模拟 SPA 切换）
+  const second = cat.items()[1];
+  second.addEventListener('click', () => {
+    win.document.querySelector('.child-info.current').classList.remove('current');
+    second.classList.add('current');
+  });
+
+  await S.onLessonEnd(video);
+
+  ok('平台进度 0% 也切换了课时', cat.itemTitle(cat.current()) === '第二节',
+    cat.itemTitle(cat.current()));
+  ok('完成计数 +1', S._completedThisRun === 1, String(S._completedThisRun));
+})();
+
+console.log('\n=== 32. 手动答题绕过配置（面板「答题」按钮必须有效） ===');
+const _manualAns = (async () => {
+  const html = `<html><body>
+<div id="playTopic-dialog">
+  <div class="topic-title">手动触发题：1+1=?</div>
+  <div class="topic"><ul>
+    <li class="topic-item"><input type="radio" name="q">A. 1</li>
+    <li class="topic-item"><input type="radio" name="q">B. 2</li>
+  </ul></div>
+  <button class="close-btn">关闭</button>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=manualans');
+  const A = win.ZHS.Answerer;
+
+  // 关闭自动答题 → 直接调 handleDialog()（非手动）应静默返回
+  win.ZHS.setConfig({ autoAnswer: false });
+  const before = win.ZHS.state.answeredCount;
+  await A.handleDialog();
+  eq('未开自动答题时非手动调用不执行', win.ZHS.state.answeredCount, before);
+
+  // 手动调用（面板按钮传 manual）→ 必须执行
+  const btn = win.document.querySelector('#playTopic-dialog .close-btn');
+  btn.addEventListener('click', () => {
+    const el = win.document.getElementById('playTopic-dialog');
+    if (el) el.remove();
+  });
+  // 新语义：默认不蒙答案（gatedRandom = false），没有可用通道时**不作答**，
+  // 但必须给用户明确反馈，绝不能「点了按钮毫无反应」。
+  await A.handleDialog({ manual: true });
+  const answered = win.ZHS.state.answeredCount > before;
+  const logText = win.ZHS.Log.all().map((e) => e.text).join('\n');
+  ok(
+    '手动触发后：要么作答、要么明确告知未作答',
+    answered || /没有可用答题通道|未能识别到题目/.test(logText),
+    'answered=' + answered + ' logs=' + logText.slice(-160)
+  );
+  ok('手动触发后弹题被关闭', !win.ZHS.Questions.Dialog.stillPresent(), '');
+
+  // 第一次手动触发（gatedRandom=false）后弹窗已被关闭（答完/跳过后关弹窗是既定行为）。
+  // 模拟「又遇到新弹题」：重建弹窗再验证 gatedRandom=true 时能真正作答——
+  // 否则 root() 为 null 直接返回，测不出随机兜底的真实性。
+  const dlg = win.document.createElement('div');
+  dlg.id = 'playTopic-dialog';
+  dlg.innerHTML = '<div class="topic-title">手动触发题：1+1=?</div>'
+    + '<div class="topic"><ul>'
+    + '<li class="topic-item"><input type="radio" name="q">A. 1</li>'
+    + '<li class="topic-item"><input type="radio" name="q">B. 2</li>'
+    + '</ul></div><button class="close-btn">关闭</button>';
+  win.document.body.appendChild(dlg);
+  dlg.querySelector('.close-btn').addEventListener('click', () => dlg.remove());
+  // 让点击选项真正触发选中态（模拟真实平台交互），否则 isChecked 自检永不过
+  dlg.querySelectorAll('.topic-item').forEach((li) => {
+    li.addEventListener('click', () => {
+      const inp = li.querySelector('input');
+      if (inp) inp.checked = true;
+      li.classList.add('is-checked');
+    });
+  });
+
+  win.ZHS.setConfig({ gatedRandom: true });
+  await U2Sleep(30);
+  const before2 = win.ZHS.state.answeredCount;
+  const A2 = win.ZHS.Answerer;
+  A2.reset();
+  await A2.handleDialog({ manual: true });
+  ok('开启随机兜底后能作答', win.ZHS.state.answeredCount > before2,
+    String(win.ZHS.state.answeredCount));
+  win.ZHS.setConfig({ gatedRandom: false });
+})();
+
+console.log('\n=== 33. 构建产物完整性 ===');
+// 全部异步测试都要等：此前这里只写了 [_n3, _n4]，其余 4 组的断言
+// 会在汇总打印之后才跑完，失败被静默吞掉（假绿）。
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay]).then(() => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');

@@ -11,6 +11,12 @@
   const CACHE = new Map();
   const MAX_CACHE = 500;
 
+  // 「无可用答题通道」提示的节流间隔（毫秒）。
+  // 作业页可能一次跑 20 题，每题弹一次提示会把面板刷爆、
+  // 而且后一条会挤掉前一条，用户反而啥也看不清。60 秒最多提示一次。
+  const NO_CHANNEL_ALERT_COOLDOWN_MS = 60000;
+  let noChannelAlertAt = 0;
+
   function cacheKey(question, options) {
     return ZHS.Util.normText(question) + '|' + (options || []).join('|').slice(0, 200);
   }
@@ -26,7 +32,7 @@
   }
 
   const Solver = {
-    stats: { bank: 0, llm: 0, cache: 0, fail: 0 },
+    stats: { bank: 0, llm: 0, cache: 0, random: 0, skipped: 0, fail: 0 },
 
     /** 清空缓存 */
     clearCache() { CACHE.clear(); },
@@ -79,12 +85,29 @@
         }
       }
 
-      // 3. 无 LLM Key 时：随机兜底（保证不卡住）
+      // 3. 无可用通道时：
+      //    默认【不蒙】——瞎选答案会污染成绩且部分课程不允许回退重做，
+      //    宁可漏答（可事后补答）也不主动制造错答。
+      //    用户显式开启 gatedRandom 才允许兜底蒙一个（保证流程不卡住）。
       if (!result && options.length) {
+        if (!cfg.gatedRandom) {
+          this.stats.skipped++;
+          ZHS.Log.warn('无可用答题通道，按配置跳过本题（未配置 LLM Key / 题库不可用时发生）');
+          // 节流：60 秒内最多提示一次，避免作业页连续跳题时刷屏
+          const now = Date.now();
+          if (now - noChannelAlertAt > NO_CHANNEL_ALERT_COOLDOWN_MS) {
+            noChannelAlertAt = now;
+            if (ZHS.panel) {
+              ZHS.panel.alert('未配置答题通道，已跳过多题未作答。请在设置页配置大模型密钥并点「保存」，或关闭「自动答题」', 'warn', 10000);
+            }
+          }
+          return null;
+        }
         const idx = Math.floor(Math.random() * options.length);
         const letter = String.fromCharCode(65 + idx);
         result = { answer: letter, from: 'random', confidence: 'low' };
-        ZHS.Log.warn('无可用通道，随机选择 ' + letter);
+        this.stats.random++;
+        ZHS.Log.warn('已启用「随机兜底」，本次为随机选择 ' + letter);
       }
 
       if (!result) {
