@@ -8,6 +8,9 @@
   'use strict';
   const ZHS = window.ZHS;
   if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免定时器/监听器叠加
+  if (ZHS.__mod02_adapter) return;
+  ZHS.__mod02_adapter = true;
   const U = ZHS.Util;
 
   /**

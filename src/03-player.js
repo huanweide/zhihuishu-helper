@@ -5,6 +5,9 @@
   'use strict';
   const ZHS = window.ZHS;
   if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免定时器/监听器叠加
+  if (ZHS.__mod03_player) return;
+  ZHS.__mod03_player = true;
   const U = ZHS.Util;
 
   // 结尾判定阈值：播放到 99.5% 就算结束

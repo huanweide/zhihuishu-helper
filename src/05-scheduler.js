@@ -7,6 +7,9 @@
   'use strict';
   const ZHS = window.ZHS;
   if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免定时器/监听器叠加
+  if (ZHS.__mod05_scheduler) return;
+  ZHS.__mod05_scheduler = true;
   const U = ZHS.Util;
 
   // 需要用户手动处理才能继续的遮挡层（验证码）
