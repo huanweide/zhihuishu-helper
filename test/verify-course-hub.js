@@ -291,7 +291,7 @@ async function main() {
     const cfg = win.ZHS.config;
     eq('迁移后 autoCourseHop=true', cfg.autoCourseHop, true);
     eq('迁移后 autoCoursePick=true', cfg.autoCoursePick, true);
-    eq('迁移后 configRev=4', cfg.configRev, 4);
+    eq('迁移后 configRev=5', cfg.configRev, 5);
     // 老字段不丢
     eq('老字段 speed 保留', cfg.speed, 1.2);
     eq('老字段 mute 保留', cfg.mute, false);
@@ -301,7 +301,7 @@ async function main() {
     eq('老字段 stopMinutes 保留', cfg.stopMinutes, 33);
     // 写回后的存储里也要有
     const persisted = JSON.parse(store['zhs-helper-config']);
-    eq('落盘的 configRev=4', persisted.configRev, 4);
+    eq('落盘的 configRev=5', persisted.configRev, 5);
     eq('落盘的 autoCourseHop=true', persisted.autoCourseHop, true);
     eq('落盘的 llmKey 未丢', persisted.llmKey, 'sk-old-key');
   }
@@ -309,11 +309,11 @@ async function main() {
   console.log('\n### L. 已完成用户不会被反复迁移降级（手动关过开关要尊重）###');
   {
     const { win, store } = makeEnv('<html><body></body></html>', HUB_URL);
-    // 用户已经是 rev4，且手动把 autoCoursePick 关了
-    store['zhs-helper-config'] = JSON.stringify({ configRev: 4, autoCourseHop: false, autoCoursePick: false, speed: 1.5 });
+    // 用户已经是 rev5（当前版本），且手动把 autoCourseHop/autoCoursePick 关了
+    store['zhs-helper-config'] = JSON.stringify({ configRev: 5, autoCourseHop: false, autoCoursePick: false, speed: 1.5 });
     const cfg = win.ZHS.config;
-    eq('rev4 用户手动关的 autoCourseHop 被尊重（仍 false）', cfg.autoCourseHop, false);
-    eq('rev4 用户手动关的 autoCoursePick 被尊重（仍 false）', cfg.autoCoursePick, false);
+    eq('rev5 用户手动关的 autoCourseHop 被尊重（仍 false）', cfg.autoCourseHop, false);
+    eq('rev5 用户手动关的 autoCoursePick 被尊重（仍 false）', cfg.autoCoursePick, false);
   }
 
   console.log('\n### M. saveConfig 不丢字段 ###');
@@ -325,38 +325,27 @@ async function main() {
     const cfg = Z.config;
     eq('saveConfig 后 autoCourseHop 仍在', cfg.autoCourseHop, true);
     eq('saveConfig 后 autoCoursePick 已关', cfg.autoCoursePick, false);
-    eq('saveConfig 后 configRev=4', cfg.configRev, 4);
+    eq('saveConfig 后 configRev=5', cfg.configRev, 5);
     eq('saveConfig 后 speed 未丢', cfg.speed, 1.5);
   }
 
-  console.log('\n### N. 死循环防护：failedCourses 真能拦住反复进入失败 ###');
+  console.log('\n### N. 死循环防护：failedCourses 真能拦住反复选到进入失败的课 ###');
   {
     const { win } = makeEnv(hubHtml, HUB_URL);
     const hub = win.ZHS.CourseHub;
-    // 场景：高等数学一直进不去（enterCourse 恒失败）
-    const el = win.document.querySelectorAll('.course-card')[1];
-    el.click = () => {};              // 点了不跳转
-    el.scrollIntoView = () => {};
-    // 模拟 runOnHub 的两轮：第一轮选中高数并失败 → 记 failed → 第二轮应换一门
-    const card1 = { el, name: '高等数学', percent: 35, finished: false };
-    const entered = await hub.enterCourse(card1);
-    eq('enterCourse 在高数上返回 false（未跳转）', entered, false);
-    // 用 runOnHub 的真实 key（cardIdentity||name，此处无 data 属性 → name）记 failed
+    // v0.6.0 后 enterCourse 不再返回 false（点击成功即视为已发出进入请求，
+    //   成功与否由学习页 settleIntentOnStudentPage 回写判定），故"进入失败"走这里：
+    // 直接模拟「学习页回写判定进入失败」→ markCourseFailed 写入黑名单，
+    // 验证 pickNext 会跳过它、改选下一门，避免反复选同一门死循环。
     hub.markCourseFailed('高等数学');
-    const next2 = await hub.pickNext();
-    // 注意：此处若恰逢 CourseHub.start() 自启动的 runOnHub 正在扫描，
-    // _scanning=true 会让本次 pickNext 直接返回 null（竞态）。等待后重试一次以区分。
-    let effective = next2;
-    if (!effective) {
-      await sleepReal(1200);
-      effective = await hub.pickNext();
-    }
-    ok('失败后第二轮不再选高等数学（换大学物理）', effective && effective.name === '大学物理',
-      effective ? effective.name : String(effective));
-    // 再把大学物理也标记失败 → 应无穷可进
+    let n2 = await hub.pickNext();
+    // 防 CourseHub.start() 自启动的 runOnHub 扫描竞态（_scanning 期间 pickNext 返回 null），等待后重试一次
+    if (!n2) { await sleepReal(1200); n2 = await hub.pickNext(); }
+    ok('标记高等数学失败后，pickNext 跳过它改选大学物理', n2 && n2.name === '大学物理',
+      n2 ? n2.name : String(n2));
     hub.markCourseFailed('大学物理');
-    const next3 = await hub.pickNext();
-    eq('两门都失败后返回 null（不会无限重试）', next3, null);
+    const n3 = await hub.pickNext();
+    eq('两门都失败后返回 null（不会无限重试）', n3, null);
   }
 
   console.log('\n### O. 全局副作用检查 ###');
@@ -372,20 +361,22 @@ async function main() {
     ok('仅挂载在 ZHS 命名空间下', !!win.ZHS.CourseHub);
   }
 
-  console.log('\n### P. 已确认缺陷复现（用于报告取证） ###');
+  console.log('\n### P. 关键缺陷的回归守护（防止回退）###');
   {
-    // P1: _scanning 竞态 → 并发 pickNext 假性 null
+    // P1: v0.6.0 修复 _scanning 竞态——并发 pickNext 共享同一 in-flight 扫描 Promise，不再返回假性 null
     const { win } = makeEnv(hubHtml, HUB_URL);
     const hub = win.ZHS.CourseHub;
     const p1 = hub.pickNext();
     await sleepReal(50);
     const p2 = await hub.pickNext();
     const r1 = await p1;
-    ok('P1 复现：并发 pickNext 第二次返回 null（_scanning 竞态）', p2 === null && !!r1,
-      'first=' + (r1 && r1.name) + ' second=' + String(p2));
+    ok('P1 守护：并发 pickNext 不再返回假性 null（共享扫描结果，两次同门）',
+      !!p2 && !!r1 && p2.name === r1.name,
+      'first=' + (r1 && r1.name) + ' second=' + (p2 && p2.name));
   }
   {
-    // P2: enterCourse 在"点击成功 + 新标签已打开"时仍返回 false
+    // P2: v0.6.0 修复——enterCourse 不再用 isHubPage() 判成功（新标签跳转当前页仍停中心页，
+    //   旧逻辑因此恒返 false 误拉黑能学的课）。点击未抛异常 + intent 已写 = 已发出进入请求 → 返回 true。
     const { win } = makeEnv(hubHtml, HUB_URL);
     const hub = win.ZHS.CourseHub;
     const el = win.document.querySelectorAll('.course-card')[1];
@@ -394,8 +385,8 @@ async function main() {
     win.open = () => { opened = true; return {}; };
     el.click = () => { win.open('https://x'); };   // 平台开新标签，当前页不导航
     const r = await hub.enterCourse({ el, name: '高等数学', percent: 35, finished: false });
-    ok('P2 复现：成功开新标签但 enterCourse 仍返回 false',
-      opened === true && r === false, 'opened=' + opened + ' ret=' + r);
+    ok('P2 守护：成功点开新标签后 enterCourse 返回 true（不再误判失败）',
+      opened === true && r === true, 'opened=' + opened + ' ret=' + r);
   }
   {
     // P3: doneCourses 键命名空间不一致 —— 学习页写 recruitAndCourseId，卡片键是 data-course-id
