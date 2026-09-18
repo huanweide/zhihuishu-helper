@@ -38,14 +38,19 @@
     } catch (e) {
       const msg = (e && e.message) || String(e);
       initialized = false;   // 认账只在成功时做，这里保持「未初始化」才能被自愈通道救回
-      ZHS.Log.error('初始化失败（第 ' + bootTries + '/' + BOOT_MAX_TRIES + ' 次）：' + msg);
-      try {
-        if (ZHS.panel) {
-          ZHS.panel.mount();
-          ZHS.panel.alert('脚本启动异常：' + msg + '。可刷新页面重试，或在控制台执行 zhs.boot()', 'error', 15000);
-        }
-      } catch (e2) { /* 连面板都挂不上，只能留在日志里 */ }
-      if (bootTries < BOOT_MAX_TRIES) ZHS.Log.info('将在页面 DOM 变化后自动重试启动');
+      // 区分「还没进播放页（等自愈）」与「真出错」：前者用 info 不刷红，避免误导用户以为坏了
+      if (msg === 'NO_VIDEO_YET') {
+        ZHS.Log.info('尚未进入播放页（无视频元素），进入课程后自动启动');
+      } else {
+        ZHS.Log.error('初始化失败（第 ' + bootTries + '/' + BOOT_MAX_TRIES + ' 次）：' + msg);
+        try {
+          if (ZHS.panel) {
+            ZHS.panel.mount();
+            ZHS.panel.alert('脚本启动异常：' + msg + '。可刷新页面重试，或在控制台执行 zhs.boot()', 'error', 15000);
+          }
+        } catch (e2) { /* 连面板都挂不上，只能留在日志里 */ }
+        if (bootTries < BOOT_MAX_TRIES) ZHS.Log.info('将在页面 DOM 变化后自动重试启动');
+      }
     }
   }
 
@@ -75,13 +80,18 @@
     if (ZHS.panel) ZHS.panel.mount();
 
     // 4. 等视频出现（有些页面懒加载）
-    const video = await U.waitFor('video', 30000);
+    let video = await U.waitFor('video', 30000);
+    if (!video && ZHS.Util.findVideoInIframes) video = ZHS.Util.findVideoInIframes(document);
     if (!video) {
-      ZHS.Log.warn('30 秒内未找到视频元素，可能不在播放页');
+      ZHS.Log.warn('30 秒内未找到视频元素（含 iframe 兜底），可能不在播放页');
       if (ZHS.panel) {
         ZHS.panel.alert('未检测到视频，可能尚未进入播放页；面板可正常使用，进播放页后会自动开始', 'warn', 10000);
       }
-      return;
+      // 抛出而非 return：让 boot() 捕获后保持 initialized=false，
+      // 这样从「课程中心页 → 点进课程页出现 video」时，watchSpa 能重新拉起初始化。
+      // 若直接 return，bootOnce 判为「成功返回」，boot() 会把 initialized 误置 true，
+      // 自愈通道永久失效，表现正是用户说的「装了但进了课程页毫无动静」。
+      throw new Error('NO_VIDEO_YET');
     }
     ZHS.state.videoEl = video;
     ZHS.Log.info('视频元素已就绪，时长 ' + Math.round(video.duration || 0) + 's');

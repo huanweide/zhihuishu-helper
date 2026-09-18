@@ -42,8 +42,13 @@ function header() {
 // @run-at       document-idle
 // @license      MIT
 // @supportURL   https://github.com/huanweide/zhihuishu-helper/issues
-// @updateURL    https://raw.githubusercontent.com/huanweide/zhihuishu-helper/master/dist/zhihuishu-helper.user.js
-// @downloadURL  https://raw.githubusercontent.com/huanweide/zhihuishu-helper/master/dist/zhihuishu-helper.user.js
+// 分发地址刻意选 jsdelivr 而不是 raw.githubusercontent.com：
+// 实测 master 上已经是新版本时，raw 的 CDN 仍可能回吐上一个版本（2026-09 观察到
+// raw 停在 0.6.3、jsdelivr 已是 0.6.4），油猴「检查更新」就会拿到旧脚本，
+// 表现为「我明明修好了、用户那边还是老样子」。jsdelivr 对同一 tag/分支的回源更及时，
+// 且支持 https://purge.jsdelivr.net 主动清缓存。
+// @updateURL    https://cdn.jsdelivr.net/gh/huanweide/zhihuishu-helper@master/dist/zhihuishu-helper.user.js
+// @downloadURL  https://cdn.jsdelivr.net/gh/huanweide/zhihuishu-helper@master/dist/zhihuishu-helper.user.js
 // ==/UserScript==
 `;
 }

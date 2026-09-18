@@ -108,6 +108,32 @@
       return null;
     },
 
+    /**
+     * 跨「同域 iframe」查找 video 元素
+     *
+     * 智慧树部分页面（尤其新形态/微前端容器）会把播放器嵌在 iframe 里，
+     * 顶层 document.querySelector('video') 永远落空 → 脚本判定「无视频」→ 整体不启动，
+     * 表现正是用户说的「功能全无用」。
+     * 顶层找不到时，递归遍历 iframe 的 contentDocument 找 video；跨域 iframe（取不到）
+     * 直接跳过——拿不到控制权就别硬来，至少顶层视频路径不受影响。
+     */
+    findVideoInIframes(doc) {
+      doc = doc || document;
+      try {
+        const frames = doc.querySelectorAll('iframe');
+        for (const f of frames) {
+          let idoc = null;
+          try { idoc = f.contentDocument || (f.contentWindow && f.contentWindow.document); } catch (e) { idoc = null; }
+          if (!idoc) continue;
+          const v = idoc.querySelector('video');
+          if (v) return v;
+          const nested = Util.findVideoInIframes(idoc);   // 嵌套 iframe 递归一层
+          if (nested) return nested;
+        }
+      } catch (e) { /* 安全策略禁止访问 iframe，忽略 */ }
+      return null;
+    },
+
     /** 等待选择器组全部不可见（结构判定） */
     async waitUntilHidden(selector, timeoutMs = 600000, interval = 500) {
       const deadline = Date.now() + timeoutMs;

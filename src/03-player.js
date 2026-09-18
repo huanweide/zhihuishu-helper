@@ -20,11 +20,12 @@
     _lastActiveAt: Date.now(),
     _retryCount: 0,
 
-    /** 取当前 video 元素（缓存 + 校验是否还在文档里） */
+    /** 取当前 video 元素（缓存 + 校验是否还在文档里；顶层找不到再查同域 iframe） */
     video() {
       const cached = ZHS.state.videoEl;
       if (cached && document.contains(cached)) return cached;
-      const v = document.querySelector('video');
+      let v = document.querySelector('video');
+      if (!v && ZHS.Util.findVideoInIframes) v = ZHS.Util.findVideoInIframes(document);
       if (v) ZHS.state.videoEl = v;
       return v;
     },
