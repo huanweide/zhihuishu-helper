@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>wisdom 真实章节结构（自测夹具）</title>
+</head>
+<!--
+  该 fixture 还原「智慧版共享课」(studywisdomh5 系) 的真实章节目录 DOM 结构：
+    条目       .child-info.hasvideo
+    当前项     .child-info.hasvideo.current
+    完成标记   .child-check（存在即对勾/已完成）
+    课时名     .child-name [title]
+    进度       [role=progressbar][aria-valuenow]
+  结构与 docs/01-侦察报告.md 2.2 节完全一致，仅课时文本为示意。
+-->
+<body>
+  <div class="course-name">大学英语（真实课程名）</div>
+  <div class="chapter-tree-74">
+    <div class="chapter-group">Unit 1</div>
+    <div class="child-info hasvideo">
+      <span class="child-name" title="Unit1 A 听说训练">Unit1 A 听说训练</span>
+      <span class="child-check">✓</span>
+      <div role="progressbar" aria-valuenow="100"></div>
+    </div>
+    <div class="child-info hasvideo current">
+      <span class="child-name" title="Unit1 B 阅读精读">Unit1 B 阅读精读</span>
+      <div role="progressbar" aria-valuenow="60"></div>
+    </div>
+    <div class="child-info hasvideo">
+      <span class="child-name" title="Unit1 C 写作入门">Unit1 C 写作入门</span>
+      <div role="progressbar" aria-valuenow="0"></div>
+    </div>
+    <div class="chapter-group">Unit 2</div>
+    <div class="child-info hasvideo">
+      <span class="child-name" title="Unit2 A 语法进阶">Unit2 A 语法进阶</span>
+      <div role="progressbar" aria-valuenow="0"></div>
+    </div>
+    <div class="child-info hasvideo">
+      <span class="child-name" title="Unit2 B 综合演练">Unit2 B 综合演练</span>
+      <div role="progressbar" aria-valuenow="0"></div>
+    </div>
+  </div>
+  <video id="v" muted playsinline></video>
+  <script src="../fixture-media.js"></script>
+  <script>
+    window.__FixtureMedia.stub(document.getElementById('v'), 300);
+    document.querySelectorAll('.child-info').forEach(function (el) {
+      el.addEventListener('click', function () {
+        document.querySelectorAll('.child-info').forEach(function (x) { x.classList.remove('current'); });
+        el.classList.add('current');
+      });
+    });
+  </script>
+</body>
+</html>
