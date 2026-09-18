@@ -1044,6 +1044,18 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay]).then(() => {
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');
     ok('产物存在', true);
+    // dist 新鲜度（内容级比对）：src 改了却忘了 rebuild → 用户 @updateURL 拉到的还是旧逻辑。
+    // 事故回放（2026-09-18）：改了 3 个 src 文件没重建，dist 停在 22:16 版，
+    // clickAndVerify / scoreAdapter 在产物里 grep 计数全是 0，「改了半天功能还是全无用」。
+    // 这条断言让「漏 build」在 npm test 阶段就红，而不是等用户反馈。
+    try {
+      const { bundle } = require('../tools/lib/bundle');
+      const expected = bundle().content;
+      ok('dist 产物与 src 同步（漏 build 会被这条挡下）', src === expected,
+        src === expected ? '' : '请运行 node build.js');
+    } catch (e) {
+      ok('dist 产物与 src 同步（漏 build 会被这条挡下）', false, e.message);
+    }
     ok('含脚本头 @name', src.includes('// @name'));
     ok('含 GM_setValue 授权', src.includes('@grant        GM_setValue'));
     ok('含 GM_xmlhttpRequest 授权（跨域调 API）', src.includes('@grant        GM_xmlhttpRequest'));

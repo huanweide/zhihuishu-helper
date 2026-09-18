@@ -1,16 +1,17 @@
 {
   "name": "zhihuishu-helper",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "智慧树网课助手：自动播放 + 断点续播 + AI 自动答题",
   "private": true,
   "scripts": {
+    "check:dist": "node tools/check-dist-fresh.js",
     "build": "node build.js",
     "test": "node test/run.js",
     "test:shot": "node test/screenshot.js",
-    "test:all": "node build.js && node test/run.js && node test/screenshot.js",
+    "test:all": "node build.js && node tools/check-dist-fresh.js && node test/run.js && node test/screenshot.js",
     "install-page": "node tools/make-install-page.js",
     "verify-install": "node tools/verify-install-page.js",
-    "release": "node build.js && node tools/make-install-page.js && node tools/verify-install-page.js && node test/run.js && node test/screenshot.js",
+    "release": "node build.js && node tools/check-dist-fresh.js && node tools/make-install-page.js && node tools/verify-install-page.js && node test/run.js && node test/screenshot.js",
     "probe": "node tools/probe.js",
     "e2e": "node tools/e2e-real.js"
   },

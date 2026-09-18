@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>studyvideoh5 真实页面结构（自测夹具）</title>
+</head>
+<!--
+  该 fixture 还原 2026 年 studyvideoh5.zhihuishu.com/stuStudy 页面的真实目录 DOM：
+    容器       .el-tree（Element UI 目录树）
+    条目       .file-item
+    当前项     .file-item.active
+    完成标记   .icon-finish（存在即已完成）
+    课时名     span[title]
+    进度       .rate
+    未解锁     .el-icon-lock
+  依据：reference/gf558335.user.js 第 22/47/54 行（querySelectorAll('.file-item') + active + click）。
+
+  【本 fixture 特意保留】第 2 章初始为「折叠」状态——它的子节点不在 DOM 里，
+  只有点了 .el-tree-node__expand-icon 才会渲染出来。
+  用来验证 src/02-adapter.js 的 expandTreeOnce()：不展开就取不到也点不到下一节。
+-->
+<body>
+  <div class="course-name">高等数学（上）</div>
+  <div class="el-tree">
+    <!-- 第 1 章：已展开 -->
+    <div class="el-tree-node">
+      <div class="el-tree-node__content">
+        <span class="el-tree-node__expand-icon expanded"></span>
+        <div class="file-item">
+          <span class="file-name"><span title="第1章 函数与极限">第1章 函数与极限</span></span>
+        </div>
+      </div>
+      <div class="el-tree-node__children">
+        <div class="el-tree-node">
+          <div class="el-tree-node__content">
+            <div class="file-item">
+              <span class="file-name"><span title="1.1 映射与函数">1.1 映射与函数</span></span>
+              <i class="icon-finish"></i>
+              <span class="rate">100%</span>
+            </div>
+          </div>
+        </div>
+        <div class="el-tree-node">
+          <div class="el-tree-node__content">
+            <div class="file-item active">
+              <span class="file-name"><span title="1.2 数列的极限">1.2 数列的极限</span></span>
+              <span class="rate">60%</span>
+            </div>
+          </div>
+        </div>
+        <div class="el-tree-node">
+          <div class="el-tree-node__content">
+            <div class="file-item">
+              <span class="file-name"><span title="1.3 函数的极限">1.3 函数的极限</span></span>
+              <span class="rate">0%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 第 2 章：初始折叠，子节点尚未渲染 -->
+    <div class="el-tree-node">
+      <div class="el-tree-node__content">
+        <span class="el-tree-node__expand-icon"></span>
+        <div class="file-item">
+          <span class="file-name"><span title="第2章 导数与微分">第2章 导数与微分</span></span>
+        </div>
+      </div>
+      <div class="el-tree-node__children">
+        <div class="js-slot"></div>
+      </div>
+    </div>
+  </div>
+
+  <video id="v" muted playsinline></video>
+  <script src="../fixture-media.js"></script>
+  <script>
+    window.__FixtureMedia.stub(document.getElementById('v'), 300);
+
+    // 折叠章节展开后才渲染的子节点（模拟 el-tree 懒加载）
+    var CH2 = ''
+      + '<div class="el-tree-node"><div class="el-tree-node__content">'
+      + '  <div class="file-item">'
+      + '    <span class="file-name"><span title="2.1 导数概念">2.1 导数概念</span></span>'
+      + '    <i class="el-icon-lock"></i><span class="rate">0%</span>'
+      + '  </div></div></div>'
+      + '<div class="el-tree-node"><div class="el-tree-node__content">'
+      + '  <div class="file-item">'
+      + '    <span class="file-name"><span title="2.2 求导法则">2.2 求导法则</span></span>'
+      + '    <span class="rate">0%</span>'
+      + '  </div></div></div>';
+
+    function bindItems() {
+      document.querySelectorAll('.file-item').forEach(function (el) {
+        if (el.dataset.bound) return;
+        el.dataset.bound = '1';
+        el.addEventListener('click', function () {
+          document.querySelectorAll('.file-item').forEach(function (x) { x.classList.remove('active'); });
+          el.classList.add('active');
+        });
+      });
+    }
+    bindItems();
+
+    document.querySelectorAll('.el-tree-node__expand-icon').forEach(function (icon) {
+      icon.addEventListener('click', function () {
+        if (icon.classList.contains('expanded')) return;
+        icon.classList.add('expanded');
+        var node = icon.closest('.el-tree-node');
+        var slot = node ? node.querySelector('.js-slot') : null;
+        if (slot) slot.innerHTML = CH2;
+        bindItems();
+      });
+    });
+  </script>
+</body>
+</html>

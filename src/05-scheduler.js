@@ -373,12 +373,21 @@
       if (this._navigating) return;
       this._navigating = true;
       try {
-        await U.sleep(END_SETTLE_MS);       // 等平台打勾 + 上报进度（拉长到 8s，避免读不到完成态）
-
         // 用本轮播放的课时标题找回当前节 DOM（不依赖 .current 类——视频放完后该类可能已转移到下一节）
-        const cur = ZHS.state.lessonKey
+        const locateCur = () => (ZHS.state.lessonKey
           ? (ZHS.Catalog.findByName(ZHS.state.lessonKey) || ZHS.Catalog.current())
-          : ZHS.Catalog.current();
+          : ZHS.Catalog.current());
+
+        // 【2026-09-18 修正】原先是「闷头 sleep 8 秒再读一次」的固定等待，两头不讨好：
+        // 平台快的 200ms 就把勾打好了（白等 7.8 秒 × 每一节），慢的 8 秒还没就绪（照样读不到）。
+        // 改成轮询：一看到「完成标记 或 进度够高」立刻往下走，最多等 END_SETTLE_MS 这个上限。
+        const settleDeadline = Date.now() + END_SETTLE_MS;
+        let cur = locateCur();
+        while (Date.now() < settleDeadline) {
+          cur = locateCur();
+          if (cur && (ZHS.Catalog.isFinished(cur) || ZHS.Catalog.progressOf(cur) >= 90)) break;
+          await U.sleep(300);
+        }
 
         // 1. 金标准：右侧栏完成标记（对勾/已完成图标/已学完文字）
         if (cur && ZHS.Catalog.isFinished(cur)) {
@@ -482,23 +491,9 @@
           return;
         }
 
-        // 「同目标反复点」检测：记录每次切换目标标识；若与上次失败目标相同则累计，
-        // 不同则清零。健康站点点完下一节会前移 → 目标变化 → 计数归零，不会误停；
-        // 只有「点了没动、next 恒同节」才让计数收敛到 SAME_NAV_MAX → 判失败停手。
-        const _targetKey = cat.itemTitle(next);
-        if (_targetKey === this._navFailKey) {
-          this._navFailCount++;
-        } else {
-          this._navFailKey = _targetKey;
-          this._navFailCount = 1;
-        }
-        if (this._navFailCount >= SAME_NAV_MAX) {
-          ZHS.Log.error('连续 ' + this._navFailCount + ' 次切换目标都是「' + _targetKey + '」且未能前进（疑似平台改版/按钮无反应），已停止自动跳转');
-          if (ZHS.panel) ZHS.panel.alert('切课失败：连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」无效，已停止自动跳转，请手动切换', 'error', 15000);
-          this.stop();
-          return;
-        }
-
+        // （「同目标反复点」的失败计数原先放在这里 —— 2026-09-18 修正后已下移到点击校验之后，
+        //   理由：点击前自增会把「还没点」也算成一次失败，且目标一变就清零，
+        //   反而把「点了没动」这件真正要抓的事掩盖掉。详见下方 clickAndVerify 分支。）
         // 人类化随机延迟（手动触发跳过，点了就要动）
         if (!manual) {
           const delay = 1 + Math.random() * (cfg.nextDelayMax - cfg.nextDelayMin) + cfg.nextDelayMin;
@@ -518,8 +513,32 @@
         }
 
         // 记录新课时标识，供续播使用
-        ZHS.state.lessonKey = cat.itemTitle(next);
-        cat.click(next);
+        const _targetKey = cat.itemTitle(next);
+        ZHS.state.lessonKey = _targetKey;
+
+        // 【2026-09-18 关键修正】原来这里是「点一下就走」，点没点中没人管 ——
+        // 这正是用户报的「点了下一节也没用」。现在点完必须验收：
+        // 轮询等目标条目拿到 active（SPA 异步，可能晚几百毫秒），没拿到就再点一次。
+        const switched = await cat.clickAndVerify(next, { timeout: 3000, tries: 2 });
+        if (!switched) {
+          this._navFailCount = (_targetKey === this._navFailKey ? this._navFailCount : 0) + 1;
+          this._navFailKey = _targetKey;
+          ZHS.Log.warn('点击「' + _targetKey + '」后未检测到切换（第 ' + this._navFailCount + ' 次）');
+          if (this._navFailCount >= SAME_NAV_MAX) {
+            ZHS.Log.error('连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」都无反应（疑似平台改版或目录节点不可点），已停止自动跳转');
+            if (ZHS.panel) ZHS.panel.alert('切课失败：连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」无效，已停止自动跳转，请手动切换', 'error', 15000);
+            this.stop();
+            return;
+          }
+          if (ZHS.panel) ZHS.panel.alert('切换「' + _targetKey + '」未生效，正在重试…', 'warn', 6000);
+          this._lastNavAt = Date.now();
+          await this._rebindAfterNav();
+          return;
+        }
+
+        // 确实切过去了 → 失败计数清零
+        this._navFailCount = 0;
+        this._navFailKey = null;
         this._navCount++;
         this._completedThisRun = (this._completedThisRun || 0) + 1;   // 停止条件：完成节数
         this._lastNavAt = Date.now();   // 打时间戳：闸门据此屏蔽旧 video 的残留 ended 态

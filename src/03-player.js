@@ -146,7 +146,19 @@
       }
       if (!this.hasValidDuration(v)) return false;
       const target = (platformPercent / 100) * v.duration;
-      const back = Math.max(0, target - 5);   // 再多回退 5 秒
+      // 【2026-09-18 修正】原来写成 Math.max(0, target - 5)：
+      // 当平台记录为 0% 时 back 会变成 0，等于整节从头重播 → 用户被死死卡在这一节，
+      // 表现出来就是「永远跳不到下一集」。现在三道闸：
+      //   1. 目标点本身 <= 0（平台压根没记录）→ 回退没有意义，直接放弃，交回上层跳下一节
+      //   2. 回退 5 秒，但不得早于全片末尾 5 秒之前（避免一退退回开头）
+      //   3. 结果必须落在有效区间内
+      if (!(target > 0)) {
+        ZHS.Log.warn('平台记录为 ' + platformPercent + '%，回退点无效，放弃重播直接跳下一节');
+        return false;
+      }
+      const tailFloor = Math.max(0, v.duration - 5);
+      const back = Math.min(Math.max(0, target - 5), tailFloor);
+      if (!Number.isFinite(back) || back < 0 || back > v.duration) return false;
       ZHS.Log.warn(
         '视频已结束但平台仅记录 ' + platformPercent + '%，回退到 ' +
         Math.round(back) + 's 重试（第 ' + (this._retryCount + 1) + ' 次）'

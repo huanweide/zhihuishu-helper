@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>共享课学习页 · studyvideoh5（旧版 clearfix.video 结构）</title>
+<style>
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 0; display: flex; }
+  .left { width: 70%; padding: 16px; }
+  .side { width: 30%; padding: 16px; background: #f5f7fa; border-left: 1px solid #e4e7ed; }
+  .catalogue_title { font-weight: 700; margin: 12px 0 6px; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li.clearfix.video { padding: 10px 12px; border-bottom: 1px solid #ebeef5; cursor: pointer; }
+  li.clearfix.video:hover { background: #ecf5ff; }
+  li.clearfix.video.current_play { background: #ecf5ff; color: #409eff; font-weight: 600; }
+  .time_icofinish { color: #67c23a; margin-left: 8px; }
+  .time_icofinish::after { content: "✔ 已学完"; }
+  .progress-num { float: right; color: #909399; }
+  .file-item { padding: 6px 8px; border-bottom: 1px dashed #dcdfe6; cursor: pointer; }
+  .el-icon-lock::after { content: "🔒 未解锁"; }
+  video { display: none; }
+</style>
+</head>
+<body>
+  <div class="left">
+    <div class="source-name">高等数学（上）· 共享课</div>
+
+    <div class="catalogue_list">
+      <div class="catalogue_title">第一章 函数与极限</div>
+      <ul>
+        <li class="clearfix video">
+          <span id="lessonOrder">1.1</span>
+          <span class="time">映射与函数</span>
+          <i class="time_icofinish"></i>
+          <div class="progress-num">100%</div>
+        </li>
+        <li class="clearfix video current_play">
+          <span id="lessonOrder">1.2</span>
+          <span class="time">数列的极限</span>
+          <div class="progress-num">60%</div>
+        </li>
+        <li class="clearfix video">
+          <span id="lessonOrder">1.3</span>
+          <span class="time">函数的极限</span>
+          <div class="progress-num">0%</div>
+        </li>
+      </ul>
+
+      <div class="catalogue_title">第二章 导数与微分</div>
+      <ul>
+        <li class="clearfix video">
+          <span id="lessonOrder">2.1</span>
+          <span class="time">导数概念</span>
+          <i class="time_icofinish"></i>
+          <div class="progress-num">100%</div>
+        </li>
+        <li class="clearfix video">
+          <span id="lessonOrder">2.2</span>
+          <span class="time">求导法则</span>
+          <div class="progress-num">0%</div>
+        </li>
+      </ul>
+    </div>
+
+    <video id="v" src="#" playsinline></video>
+  </div>
+
+  <!--
+    干扰区：页面上别处也存在 .file-item（这是 studyvideoh5 新版 Vue 目录 / 侧边推荐位用的类名）。
+    旧实现「候选里第一个 querySelector 命中就当选」会在这里翻车：
+    只要 hike 排在 legacy 前面，或者有零星几个 .file-item 存在，脚本就会把整套目录认错，
+    后续所有点击打在空气上 —— 用户反馈的「功能全无用 / 点了下一节也没用」正是这个现象。
+    新的评分选举要靠「谁有 current_play / active」把真目录挑出来，忽略这里的噪声。
+  -->
+  <div class="side">
+    <div class="side-title">相关推荐</div>
+    <div class="file-item"><span class="file-name">线性代数</span></div>
+    <div class="file-item"><span class="file-name">概率论</span></div>
+    <div class="file-item"><span class="file-name">离散数学</span></div>
+  </div>
+
+<script>
+/**
+ * 模拟页面的 SPA 点击行为：
+ *  - 事件的 target 必须是条目本体（.clearfix.video）。这样我们可以顺便验证脚本
+ *    点的是条目本身，而不是内部某个纯展示的 span（旧实现就爱点内部元素，容易点空）。
+ *  - 切换有 300ms 延迟（真实 SPA 改路由 + 重渲染都要时间），验证 clickAndVerify 的轮询等待。
+ *  - 锁住的条目点了也不动，验证脚本不会误判成功。
+ */
+window.__switchCount = 0;
+document.addEventListener('click', function (e) {
+  var item = e.target;
+  if (!item.classList || !item.classList.contains('clearfix')) return;
+  window.__lastClickIsSelf = item.classList.contains('video');
+  if (item.querySelector('.el-icon-lock')) return;
+  window.__switchCount++;
+  setTimeout(function () {
+    document.querySelectorAll('.clearfix.video').forEach(function (el) {
+      el.classList.remove('current_play');
+    });
+    item.classList.add('current_play');
+  }, 300);
+}, true);
+</script>
+</body>
+</html>
