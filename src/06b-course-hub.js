@@ -16,6 +16,9 @@
   'use strict';
   const ZHS = window.ZHS;
   if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免定时器/监听器叠加
+  if (ZHS.__mod06b_course_hub) return;
+  ZHS.__mod06b_course_hub = true;
   const U = ZHS.Util;
 
   const STORE_KEY = 'zhs-helper-hub';
@@ -49,7 +52,13 @@
     try {
       const raw = hasGM ? GM_getValue(STORE_KEY, null) : localStorage.getItem(STORE_KEY);
       if (!raw) return emptyStore();
-      const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      let obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      // 老格式兼容：历史版本曾把「已完成课程」直接存成纯字符串数组。
+      // 若原样返回数组，后续 store.doneCourses 取到 undefined（靠 || [] 兜住），
+      // 功能虽不崩，但 read() 的类型契约被破坏（返回数组而非对象）。这里统一转成对象。
+      if (Array.isArray(obj)) {
+        obj = { rev: 1, intent: null, doneCourses: obj.slice(), failedCourses: [], stats: { hopped: 0, failed: 0 } };
+      }
       if (!obj || typeof obj !== 'object') return emptyStore();
       // 逐字段兜底，防止老版本/损坏数据让后续逻辑崩掉
       if (!Array.isArray(obj.doneCourses)) obj.doneCourses = [];
@@ -134,8 +143,15 @@
     const store = readStore();
     const it = store.intent;
     if (!it) return null;
-    if (!it.at || (Date.now() - it.at) > INTENT_TTL) {
-      ZHS.Log.debug('课程中心跳转意图已过期，忽略');
+    // at 必须是有限数字，否则视为过期。
+    // 起因：at 被写成字符串 "abc" 时，Date.now() - "abc" = NaN，
+    // 而 `NaN > TTL` 恒为 false → 旧判断永远「不过期」，脏意图会长期残留、
+    // 一旦用户后来打开自动选课就会用陈旧意图劫持点击。
+    const at = Number(it.at);
+    if (!Number.isFinite(at) || (Date.now() - at) > INTENT_TTL) {
+      // 用 info：debug 已不进面板缓冲，而「意图过期」是排查
+      // 「为什么没自动选课」的关键线索，必须留在面板可查。
+      ZHS.Log.info('课程中心跳转意图已过期，忽略');
       store.intent = null;
       writeStore(store);
       return null;
@@ -274,10 +290,30 @@
     let text = '';
     try {
       text = U.normText(el.textContent);
-      const m = text.match(/(\d+)\s*%/);
-      if (m) {
-        const n = parseInt(m[1], 10);
-        if (Number.isFinite(n)) percent = n;
+      // 百分比解析：优先在「自身文本含 %」的最小元素上解析，
+      // 避免整卡 textContent 拼接把相邻数字吞进来（如 "课4" + "12.5%" = "课412.5%"，
+      // 直接在合并文本上匹配会得到 412.5）。逐个候选元素单独解析，取第一个命中。
+      // 修复四个毛病：
+      //   1. 支持小数与科学计数法（"12.5%"→12，"1e2%"→100），不再只吃 \d+
+      //   2. 保留正负号（"-5%"→-5）
+      //   3. 正则锚定 `%` 前的数字 token，不跨界吞数字
+      //   4. 上限夹逼到 100（"1000%"→100，避免 finished 误判）
+      const RE = /([+-]?\d*\.?\d+(?:e[+-]?\d+)?)\s*%/i;
+      const cands = [];
+      try {
+        const nodes = el.querySelectorAll('*');
+        for (const n of nodes) {
+          const t = U.normText(n.textContent);
+          if (t.indexOf('%') >= 0) cands.push(t);
+        }
+      } catch (e) { /* 忽略 */ }
+      cands.push(text);   // 兜底：整卡文本
+      for (const t of cands) {
+        const m = t.match(RE);
+        if (m) {
+          const n = Number(m[1]);
+          if (Number.isFinite(n)) { percent = Math.min(100, Math.floor(n)); break; }
+        }
       }
     } catch (e) { /* 忽略 */ }
 
@@ -333,9 +369,9 @@
 
     const store = readStore();
     try {
-      ZHS.Log.info('[课程中心] 开始收集课程卡片…');
+      ZHS.Log.debug('[课程中心] 开始收集课程卡片…');
       const cards = await collectCards();
-      ZHS.Log.info('[课程中心] 共收集到 ' + cards.length + ' 门课程');
+      ZHS.Log.debug('[课程中心] 共收集到 ' + cards.length + ' 门课程');
 
       const done = store.doneCourses || [];
       const failed = store.failedCourses || [];
@@ -675,13 +711,26 @@
         }
         if (!isHubPage()) return;
 
+        // 【关键】先读意图，读完立即消费掉 —— 无论后面走哪条分支。
+        //
+        // 早先版本把这个读取放在「选课开关开启」判断【之后】，导致：
+        // 用户只开「自动跳课」不开「自动选课」时，跳回课程中心后直接从开关分支 return，
+        // intent 永远没被清除、留在存储里成为「僵尸意图」。等用户后来某天打开
+        // 「自动选课」，一进课程中心就会被这个陈旧意图触发自动点课 ——
+        // 严重违背「用户没主动授权时绝不劫持操作」的铁律。
+        //
+        // 现在改为：只要进到课程中心页，先把意图读出来并立刻消费（清除），
+        // 再根据开关与意图来源决定是否动手。纸条用完就撕，绝不留到下次。
+        const it = getIntent();
+        const fromAutoHop = !!(it && it.via === 'auto-hop');
+        if (it) clearIntent();
+
         if (!ZHS.config.autoCoursePick) {
-          ZHS.Log.debug('[课程中心] 自动选课开关关闭，不动作');
+          // 用 info：这是用户「为什么没自动选课」的直接答案，必须留在面板可见。
+          ZHS.Log.info('[课程中心] 自动选课开关关闭，不动作（已消费跳转意图，避免残留）');
           return;
         }
 
-        const it = getIntent();
-        const fromAutoHop = !!(it && it.via === 'auto-hop');
         if (!fromAutoHop) {
           // 用户只是打开了课程中心 —— 只提示，不点课
           ZHS.Log.info('[课程中心] 已进入课程中心页。如需自动选择未学完课程，请在面板点击「找下一门课」'

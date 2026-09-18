@@ -5,6 +5,9 @@
   'use strict';
   const ZHS = window.ZHS;
   if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免定时器/监听器叠加
+  if (ZHS.__mod12_filler) return;
+  ZHS.__mod12_filler = true;
   const U = ZHS.Util;
 
   /** 判断选项元素是否处于选中态 */

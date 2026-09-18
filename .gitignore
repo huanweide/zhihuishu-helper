@@ -67,3 +67,7 @@ package-lock.json
 .verify-*.js
 .*-tmp.*
 .tmp/
+
+# 临时构建输出日志（验证脚本产物，不入库）
+build-out.txt
+*-out.txt

@@ -41,6 +41,9 @@
   'use strict';
   const ZHS = window.ZHS;
   if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免定时器/监听器叠加
+  if (ZHS.__mod06c_exam) return;
+  ZHS.__mod06c_exam = true;
   const U = ZHS.Util;
 
   // ============ 禁止事项清单（写进代码，防止后来者误加功能）============
@@ -106,12 +109,38 @@
     '.breadcrumb',
   ];
 
-  /** 从文本里抽「第 N 章」「第N章」里的 N */
+  /** 中文数字 → 阿拉伯数字（只处理 1~99 的常见写法，够章节用） */
+  function cnNum(s) {
+    const D = { 零: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+    if (!s) return null;
+    if (s === '十') return 10;
+    let n = 0;
+    if (s.includes('十')) {
+      const [a, b] = s.split('十');
+      n = (a ? D[a] || 0 : 1) * 10 + (b ? D[b] || 0 : 0);
+    } else {
+      n = D[s];
+      if (n === undefined) return null;
+    }
+    return n;
+  }
+
+  /** 从文本里抽「第 N 章」「第N章」（阿拉伯数字与中文数字都认）里的 N */
   function parseChapterFromText(text) {
-    const m = String(text || '').match(/第\s*(\d+)\s*[章节单元]/);
-    if (!m) return null;
-    const n = Number(m[1]);
-    return Number.isFinite(n) && n > 0 ? n : null;
+    const t = String(text || '');
+    // 先认阿拉伯数字
+    let m = t.match(/第\s*(\d+)\s*[章节单元]/);
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    // 再认中文数字（真实站点标题常写「第三章」）
+    m = t.match(/第\s*([一二三四五六七八九十零]{1,3})\s*[章节单元]/);
+    if (m) {
+      const n = cnNum(m[1]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
   }
 
   /** 解析当前作业/考试所属章节号；拿不到返回 null */
@@ -512,7 +541,11 @@
       }
 
       // —— 门禁 2：总开关（手动触发绕过）——
-      if (!manual && !cfg.autoExam) return;
+      // 【严格判断】必须用 !== true，不能用 !cfg.autoExam。
+      // 这是个「默认关闭」的安全开关：一旦存储被写入脏值（如字符串 "no"、"false"、"0"），
+      // `!"no"` 为 false，会把自动答题【偷偷打开】—— 在考试场景下这是不可接受的。
+      // 只有明确等于 true 才放行。
+      if (!manual && cfg.autoExam !== true) return;
 
       if (this._running) {
         ZHS.Log.debug(PREFIX + ' 作答流程进行中，跳过重复触发');
@@ -523,8 +556,15 @@
 
       // —— 章节识别 ——
       const chapter = detectChapter();
-      const from = Number(cfg.examChapterFrom) || 0;
-      const to = Number(cfg.examChapterTo) || 0;
+      // 【数值夹逼】范围必须是非负整数。直接改存储/调 API 写入 -5 或 999 时，
+      // 负数会被当成「不限」，造成意外的越权范围。统一夹到 0~999 的整数。
+      const clampCh = (v) => {
+        const n = Math.floor(Number(v));
+        if (!Number.isFinite(n) || n < 0) return 0;
+        return Math.min(n, 999);
+      };
+      const from = clampCh(cfg.examChapterFrom);
+      const to = clampCh(cfg.examChapterTo);
       const ranged = from > 0 || to > 0;
 
       if (ranged) {
@@ -707,7 +747,9 @@
       if (isAnswerPage()) {
         const cfg = ZHS.config;
 
-        if (!cfg.autoExam) {
+        // 严格判断：只有明确 true 才作答。脏值（"no"/"false"/0）一律视为关闭，
+        // 不能让「默认关闭」的安全开关被非布尔值绕过（见 solvePage 门禁 2 的说明）。
+        if (cfg.autoExam !== true) {
           // 关闭态：只提示一次，什么都不做
           if (!Exam._notified) {
             Exam._notified = true;

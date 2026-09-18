@@ -5,6 +5,9 @@
   'use strict';
   const ZHS = window.ZHS;
   if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免定时器/监听器叠加
+  if (ZHS.__mod11_solver) return;
+  ZHS.__mod11_solver = true;
   const U = ZHS.Util;
 
   // 本次运行内的答案缓存：题干 → 答案，避免重复请求

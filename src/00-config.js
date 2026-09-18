@@ -59,6 +59,13 @@
     panelVisible: true,  // 悬浮面板
     guardOverlays: true, // 弹窗守卫
 
+    // 全屏适配降级开关：进入全屏后脚本会先把悬浮面板「迁移」进全屏元素内部，
+    // 这样全屏看课时面板依然可见。只有迁移失败（极个别播放器不让挂）时，
+    // 本开关才起作用。
+    // 默认【false】：绝不擅自把用户从全屏里弹出来 —— 那体验极差。
+    // 用户主动打开后才允许「挂不上就自动退出全屏」。
+    exitFullscreenOnPanel: false,
+
     // 课程中心调度
     autoCourseHop: true,  // 自动跳课：本课学完 → 回课程中心选下一门
     autoCoursePick: true, // 自动选课：在课程中心自动点进未看完的课
@@ -71,6 +78,55 @@
 
   // ============ 配置读写（GM 优先，降级 localStorage）============
   const hasGM = typeof GM_setValue === 'function' && typeof GM_getValue === 'function';
+
+  /**
+   * 需要「布尔归一化」的配置字段。
+   * 起因：配置可能被脏数据写成字符串（GM 直写 / 老版本遗留 / 手工改存储），
+   * 而 `!"false"` 恒为 false —— 会把用户以为关掉的开关【偷偷打开】。
+   * 后者若发生在 autoExam（自动答题）上，等于在不知情下替用户答题，不可接受。
+   * 归一策略（失败侧优先/保守）：
+   *   - 布尔 → 原样
+   *   - 数字 → 非 0 为 true
+   *   - 字符串 → 仅 'true' / '1' 视为 true，其余（含 'yes'/'on'/'no'/'false'/'0' 等）一律 false
+   *     （保守：宁可把开关当关，也不误开）
+   *   - undefined / null → 由调用方保留默认值（不覆盖）
+   *   - 其它类型（对象/数组）→ false
+   */
+  const BOOL_KEYS = [
+    'autoPlay', 'autoNext', 'skipFinished', 'mute', 'resume',
+    'autoExam', 'examSubmit', 'autoCourseHop', 'autoCoursePick',
+    'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
+    'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
+    'debug', 'panelVisible', 'guardOverlays',
+  ];
+
+  /** 单值布尔归一化；undefined/null 返回 undefined（表示「不覆盖」） */
+  function toBool(v) {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v !== 0;
+    if (typeof v === 'string') {
+      const s = v.trim().toLowerCase();
+      return s === 'true' || s === '1';
+    }
+    return false;
+  }
+
+  /** 对配置对象里的布尔字段做原地归一化（undefined/null 保留原值） */
+  function normalizeBools(cfg) {
+    for (const k of BOOL_KEYS) {
+      const n = toBool(cfg[k]);
+      if (n !== undefined) cfg[k] = n;
+    }
+    return cfg;
+  }
+
+  /** 非负整数夹逼（章节范围等），非法值退化 0 */
+  function clampInt(v, max) {
+    const n = Math.floor(Number(v));
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.min(n, max == null ? 999 : max);
+  }
 
   /**
    * 配置迁移：老用户本地存的配置会压住新版本的默认值，
@@ -107,6 +163,10 @@
                         : localStorage.getItem('zhs-helper-config');
       if (raw) saved = typeof raw === 'string' ? JSON.parse(raw) : raw;
     } catch (e) { /* 配置损坏则用默认 */ }
+    // 兜底：JSON.parse 可能产出 null / 数字 / 字符串 / 数组等非对象值
+    // （例如历史脏数据里存了字面量字符串 "null"）。此类值会让下面的
+    // saved.configRev 抛 TypeError，进而中断整份脚本。统一退化回空对象。
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) saved = {};
 
     const cfg = Object.assign({}, DEFAULTS, saved);
 
@@ -116,13 +176,32 @@
       cfg.configRev = CONFIG_REV;
       store(cfg);
     }
+
+    // 布尔归一化：把存储里的脏值（字符串 "false"/"no" 等）规整成真布尔。
+    // 必须在返回前统一做，因为 get config() 每次读取都会走到这里，
+    // 保证「直写存储」与「走 setConfig」两条路径拿到的都是干净布尔。
+    normalizeBools(cfg);
+    // 章节范围夹逼：与 06c-exam.js 的 clampCh 对齐，防止越权范围。
+    cfg.examChapterFrom = clampInt(cfg.examChapterFrom, 999);
+    cfg.examChapterTo = clampInt(cfg.examChapterTo, 999);
     return cfg;
   }
 
   function saveConfig(patch) {
-    const next = Object.assign(getConfig(), patch || {});
+    // 过滤 undefined/null：避免 patch 里显式的 undefined 覆盖掉默认值
+    const clean = {};
+    if (patch && typeof patch === 'object') {
+      for (const k of Object.keys(patch)) {
+        if (patch[k] !== undefined && patch[k] !== null) clean[k] = patch[k];
+      }
+    }
+    const next = Object.assign(getConfig(), clean);
     // 倍速硬夹逼
     next.speed = Math.min(Math.max(Number(next.speed) || 1, 0.5), 1.8);
+    // 布尔归一化 + 章节夹逼：直写 API 也要设防（面板走 floor，API/GM 直写不设防）
+    normalizeBools(next);
+    next.examChapterFrom = clampInt(next.examChapterFrom, 999);
+    next.examChapterTo = clampInt(next.examChapterTo, 999);
     next.configRev = CONFIG_REV;
     store(next);
     return next;
@@ -140,8 +219,13 @@
         return String(a);
       }).join(' ');
       const entry = { t: Date.now(), level, text: line };
-      LOG_BUFFER.push(entry);
-      if (LOG_BUFFER.length > MAX_LOG) LOG_BUFFER.shift();
+      // 面板缓冲只保留 info/warn/error；debug 仅进控制台，不占 200 条缓冲。
+      // 起因：课程中心等模块的常规 debug 日志会刷爆缓冲，把真告警挤掉。
+      // 注意：需要「面板可查」的关键排查线索必须用 info，不能用 debug。
+      if (level !== 'debug') {
+        LOG_BUFFER.push(entry);
+        if (LOG_BUFFER.length > MAX_LOG) LOG_BUFFER.shift();
+      }
       const tag = '[智慧树助手]';
       if (level === 'error') console.error(tag, ...args);
       else if (level === 'warn') console.warn(tag, ...args);
@@ -173,9 +257,18 @@
   window.__ZHS_HELPER__ = true;
 
   const ZHS = {
-    // 版本号只认 package.json（build.js 会注入 __ZHS_VERSION__）。
+    // 版本号只认 package.json（build.js 注入到 window.__ZHS_BUILD__.version）。
     // 此处不再硬编码，避免与 package.json 漂移（历史遗留的 '0.3.0' 就是这么来的）。
-    version: (typeof __ZHS_VERSION__ !== 'undefined' ? __ZHS_VERSION__ : '0.0.0'),
+    // 注意：必须读 window.__ZHS_BUILD__，不能用裸标识符 __ZHS_VERSION__。
+    // 历史坑：build.js 曾声明 `const __ZHS_VERSION__`，而本模块在独立 IIFE 里，
+    // 作用域上根本看不到外层 IIFE 的 const —— typeof 判断因此永远走 '0.0.0' 分支。
+    version: (() => {
+      try {
+        const b = window.__ZHS_BUILD__;
+        if (b && typeof b.version === 'string' && b.version) return b.version;
+      } catch (e) { /* 忽略 */ }
+      return '0.0.0';
+    })(),
     DEFAULTS,
     get config() { return getConfig(); },
     setConfig: saveConfig,
