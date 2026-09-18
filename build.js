@@ -31,8 +31,8 @@ const HEADER = `// ==UserScript==
 // @run-at       document-idle
 // @license      MIT
 // @supportURL   https://github.com/huanweide/zhihuishu-helper/issues
-// @updateURL    https://raw.githubusercontent.com/huanweide/zhihuishu-helper/main/dist/zhihuishu-helper.user.js
-// @downloadURL  https://raw.githubusercontent.com/huanweide/zhihuishu-helper/main/dist/zhihuishu-helper.user.js
+// @updateURL    https://raw.githubusercontent.com/huanweide/zhihuishu-helper/master/dist/zhihuishu-helper.user.js
+// @downloadURL  https://raw.githubusercontent.com/huanweide/zhihuishu-helper/master/dist/zhihuishu-helper.user.js
 // ==/UserScript==
 `;
 
