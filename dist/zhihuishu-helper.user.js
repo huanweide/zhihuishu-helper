@@ -4,9 +4,15 @@
 // @version      0.6.3
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
+// 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
+// 漏了裸域就会出现「脚本装了、日志也不打、页面毫无动静」的假失效。
+// 注意：本段是模板字符串内部，注释里不要出现反引号，否则会提前闭合字符串。
 // @match        *://*.zhihuishu.com/*
+// @match        *://zhihuishu.com/*
 // @match        *://*.polymas.com/*
+// @match        *://polymas.com/*
 // @match        *://*.zhihuishu.cn/*
+// @match        *://zhihuishu.cn/*
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -38,7 +44,21 @@ window.__ZHS_BUILD__.version = "0.6.3";
 (function () {
   'use strict';
 
-  if (window.__ZHS_HELPER__) return;
+  // 重入守卫：同一页面只跑一个实例，避免定时器/监听器叠加。
+  //
+  // 【2026-09-19 修正】原来这里是**无声** return。用户反馈「装了 27 次都没用、面板都没有」：
+  // 若油猴里残留了多份副本（反复导入很容易留下），第一份跑起来就上锁，
+  // 之后装的新版本全部静默退出 —— 谁先跑谁生效，跟版本号无关，用户完全看不到发生了什么。
+  // 现在仍然只跑一个实例（这是对的），但要把「为什么没生效」在控制台说清楚。
+  if (window.__ZHS_HELPER__) {
+    try {
+      const prev = window.__ZHS_HELPER_VERSION__;
+      console.warn('[智慧树助手] 检测到页面已有脚本实例'
+        + (prev ? '（版本 ' + prev + '）' : '')
+        + '，本次注入已退出。若你重复安装了多份，请在油猴里删掉多余副本，只保留一份。');
+    } catch (e) { /* 连控制台都不可用时，绝不能因此中断脚本 */ }
+    return;
+  }
 
   // ============ 默认配置 ============
   const DEFAULTS = {
@@ -287,6 +307,8 @@ window.__ZHS_BUILD__.version = "0.6.3";
   };
 
   window.__ZHS_HELPER__ = true;
+  // 记下版本：页面里若已有实例，守卫处要靠它告诉用户「你装的到底是哪个版本在跑」
+  window.__ZHS_HELPER_VERSION__ = (window.__ZHS_BUILD__ && window.__ZHS_BUILD__.version) || 'unknown';
 
   const ZHS = {
     // 版本号只认 package.json（build.js 注入到 window.__ZHS_BUILD__.version）。
@@ -568,7 +590,11 @@ window.__ZHS_BUILD__.version = "0.6.3";
       item: '[class*="course-node"], [class*="chapter-item"], .catalog-item, [class*="lesson-item"]',
       active: '[class*="course-node"].active, [class*="chapter-item"].active, .catalog-item.active, [class*="lesson-item"].active',
       activeClass: 'active',
-      finish: '[class*="finish"], [class*="complete"], [class*="done"]',
+      // 【2026-09-19 修正】原来是裸通配 `[class*="done"]`，而 isFinished 的第 1 层
+      // 是「命中即完成」、不设任何形态约束。polymas 一旦当选，外层容器
+      // （lesson-done-wrap / study-finish-box 之类）会让整目录瞬间全判完成 → allDone 停摆。
+      // 这里收紧成图标型元素，把误伤堵在源头。
+      finish: 'i[class*="finish"], i[class*="done"], i[class*="complete"], span[class*="finish"], span[class*="done"], [class*="finish-icon"], [class*="done-icon"], .is-finish, .is-done',
       title: '[class*="title"], span[title]',
       progress: '[class*="progress"], [role="progressbar"]',
       container: '#main',
@@ -685,7 +711,18 @@ window.__ZHS_BUILD__.version = "0.6.3";
     if (!list.length) return 0;
 
     let score = Math.min(list.length, 30);
-    try { if (ad.active && document.querySelector(ad.active)) score += 100; } catch (e) { /* 选择器兼容 */ }
+    // 1. 能找到「当前项」是最强信号，但有两个前提，否则会翻车：
+    //    (a) active 元素必须是本套 item 命中的节点之一 —— 页面别处一个 .active 不该给它加满分
+    //    (b) 该节点要真的可见 —— 上一段残留的、display:none 的旧容器不该拿满分
+    //    （旧写法用全页 querySelector 找 active，两套 DOM 并存时公式会塌缩成「只比谁节点多」）
+    try {
+      if (ad.active) {
+        const actives = Array.from(document.querySelectorAll(ad.active));
+        const inList = actives.filter((a) => list.some((el) => el === a || el.contains(a)));
+        if (inList.some((a) => U.isVisible(a))) score += 100;
+        else if (inList.length) score += 40;   // 命中但不可见：降权，不作数
+      }
+    } catch (e) { /* 选择器兼容 */ }
     try { if (ad.container && document.querySelector(ad.container)) score += 20; } catch (e) { /* 选择器兼容 */ }
 
     let titled = 0;
@@ -5214,12 +5251,56 @@ window.__ZHS_BUILD__.version = "0.6.3";
   const U = ZHS.Util;
 
   let initialized = false;
+  let bootTries = 0;
+  const BOOT_MAX_TRIES = 3;
 
+  /**
+   * 启动外壳：负责「失败要能看得见，且允许重试」
+   *
+   * 【2026-09-19 修正】原来的 boot() 第一句就是 `initialized = true`。
+   * 这意味着只要中间任何一步抛异常（新版页面对抗、某个 DOM 访问越界、
+   * 平台改版导致选择器非法……），boot 会中断在半路，但 initialized 已经置真，
+   * 于是 watchSpa() 里那条「页面还没初始化但出现视频 → 补启动」的自愈通道永久失效。
+   * 后果正是用户反馈的那句：**装了 27 次，面板都没有，跟没装一样** ——
+   * 脚本其实跑了，只是跑一半死在没人看得见的地方。
+   *
+   * 现在改成三件事：
+   *   1. 成功跑完才算初始化完成（initialized 移到末尾）
+   *   2. 失败要看得见：先把面板挂上再报错，用户至少知道脚本在
+   *   3. 允许重试（最多 3 次），失败后交给 watchSpa 在 DOM 稳定时再来
+   */
   async function boot() {
-    if (initialized) return;
-    initialized = true;
+    if (initialized || bootTries >= BOOT_MAX_TRIES) return;
+    bootTries++;
+    try {
+      await bootOnce();
+      initialized = true;
+    } catch (e) {
+      const msg = (e && e.message) || String(e);
+      initialized = false;   // 认账只在成功时做，这里保持「未初始化」才能被自愈通道救回
+      ZHS.Log.error('初始化失败（第 ' + bootTries + '/' + BOOT_MAX_TRIES + ' 次）：' + msg);
+      try {
+        if (ZHS.panel) {
+          ZHS.panel.mount();
+          ZHS.panel.alert('脚本启动异常：' + msg + '。可刷新页面重试，或在控制台执行 zhs.boot()', 'error', 15000);
+        }
+      } catch (e2) { /* 连面板都挂不上，只能留在日志里 */ }
+      if (bootTries < BOOT_MAX_TRIES) ZHS.Log.info('将在页面 DOM 变化后自动重试启动');
+    }
+  }
 
+  async function bootOnce() {
     ZHS.Log.info('=== 初始化开始 ===');
+
+    // 0. 面板最先挂载：后续任何一步炸了，用户至少能看见脚本存在
+    //    （原来排在第 3 步，且整条链无 try/catch → 前一步出错就永远看不到面板）
+    if (ZHS.panel) {
+      try { ZHS.panel.mount(); }
+      catch (e) { ZHS.Log.warn('面板挂载失败：' + e.message); }
+    } else {
+      // 挂不上必须说出来。静默跳过的话，用户眼里就是「装了跟没装一样」。
+      ZHS.Log.error('面板模块不可用（ZHS.panel 未定义），界面不会显示；核心逻辑仍会继续尝试');
+    }
 
     // 1. 识别页面版本
     ZHS.Catalog.redetect();
@@ -5274,8 +5355,8 @@ window.__ZHS_BUILD__.version = "0.6.3";
         if (cur) ZHS.state.lessonKey = ZHS.Catalog.itemTitle(cur);
         ZHS.Resume.bindVideo(v, ZHS.state.courseId, ZHS.state.lessonKey);
       }
-      // 页面还没初始化但出现视频 → 补启动
-      if (!initialized && v) boot();
+      // 页面还没初始化但出现视频 → 补启动（含启动失败后的重试，受次数上限约束）
+      if (!initialized && bootTries < BOOT_MAX_TRIES && v) boot();
     }, 1000);
 
     try {

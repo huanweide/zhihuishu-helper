@@ -11,12 +11,56 @@
   const U = ZHS.Util;
 
   let initialized = false;
+  let bootTries = 0;
+  const BOOT_MAX_TRIES = 3;
 
+  /**
+   * 启动外壳：负责「失败要能看得见，且允许重试」
+   *
+   * 【2026-09-19 修正】原来的 boot() 第一句就是 `initialized = true`。
+   * 这意味着只要中间任何一步抛异常（新版页面对抗、某个 DOM 访问越界、
+   * 平台改版导致选择器非法……），boot 会中断在半路，但 initialized 已经置真，
+   * 于是 watchSpa() 里那条「页面还没初始化但出现视频 → 补启动」的自愈通道永久失效。
+   * 后果正是用户反馈的那句：**装了 27 次，面板都没有，跟没装一样** ——
+   * 脚本其实跑了，只是跑一半死在没人看得见的地方。
+   *
+   * 现在改成三件事：
+   *   1. 成功跑完才算初始化完成（initialized 移到末尾）
+   *   2. 失败要看得见：先把面板挂上再报错，用户至少知道脚本在
+   *   3. 允许重试（最多 3 次），失败后交给 watchSpa 在 DOM 稳定时再来
+   */
   async function boot() {
-    if (initialized) return;
-    initialized = true;
+    if (initialized || bootTries >= BOOT_MAX_TRIES) return;
+    bootTries++;
+    try {
+      await bootOnce();
+      initialized = true;
+    } catch (e) {
+      const msg = (e && e.message) || String(e);
+      initialized = false;   // 认账只在成功时做，这里保持「未初始化」才能被自愈通道救回
+      ZHS.Log.error('初始化失败（第 ' + bootTries + '/' + BOOT_MAX_TRIES + ' 次）：' + msg);
+      try {
+        if (ZHS.panel) {
+          ZHS.panel.mount();
+          ZHS.panel.alert('脚本启动异常：' + msg + '。可刷新页面重试，或在控制台执行 zhs.boot()', 'error', 15000);
+        }
+      } catch (e2) { /* 连面板都挂不上，只能留在日志里 */ }
+      if (bootTries < BOOT_MAX_TRIES) ZHS.Log.info('将在页面 DOM 变化后自动重试启动');
+    }
+  }
 
+  async function bootOnce() {
     ZHS.Log.info('=== 初始化开始 ===');
+
+    // 0. 面板最先挂载：后续任何一步炸了，用户至少能看见脚本存在
+    //    （原来排在第 3 步，且整条链无 try/catch → 前一步出错就永远看不到面板）
+    if (ZHS.panel) {
+      try { ZHS.panel.mount(); }
+      catch (e) { ZHS.Log.warn('面板挂载失败：' + e.message); }
+    } else {
+      // 挂不上必须说出来。静默跳过的话，用户眼里就是「装了跟没装一样」。
+      ZHS.Log.error('面板模块不可用（ZHS.panel 未定义），界面不会显示；核心逻辑仍会继续尝试');
+    }
 
     // 1. 识别页面版本
     ZHS.Catalog.redetect();
@@ -71,8 +115,8 @@
         if (cur) ZHS.state.lessonKey = ZHS.Catalog.itemTitle(cur);
         ZHS.Resume.bindVideo(v, ZHS.state.courseId, ZHS.state.lessonKey);
       }
-      // 页面还没初始化但出现视频 → 补启动
-      if (!initialized && v) boot();
+      // 页面还没初始化但出现视频 → 补启动（含启动失败后的重试，受次数上限约束）
+      if (!initialized && bootTries < BOOT_MAX_TRIES && v) boot();
     }, 1000);
 
     try {

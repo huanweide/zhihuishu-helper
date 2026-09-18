@@ -22,9 +22,15 @@ function header() {
 // @version      ${VER}
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
+// 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
+// 漏了裸域就会出现「脚本装了、日志也不打、页面毫无动静」的假失效。
+// 注意：本段是模板字符串内部，注释里不要出现反引号，否则会提前闭合字符串。
 // @match        *://*.zhihuishu.com/*
+// @match        *://zhihuishu.com/*
 // @match        *://*.polymas.com/*
+// @match        *://polymas.com/*
 // @match        *://*.zhihuishu.cn/*
+// @match        *://zhihuishu.cn/*
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
 // @grant        GM_setValue
 // @grant        GM_getValue
