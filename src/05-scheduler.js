@@ -163,16 +163,57 @@
       }
     },
 
-    stop() {
+    /**
+     * 停机
+     * @param why 停机原因分类（round-14）：
+     *   'user'      —— 用户主动点「停止」（默认值，签名不变 → 既有调用点行为完全不变）
+     *   'condition' —— 达到停止条件 / 全部看完（正当结束，不该被自动拉起）
+     *   'transient' —— 瞬时故障被迫停机（目录临时读不到、节点临时定位不到、连点无反应）
+     *
+     * 为什么要分类：原先所有停机都打同一个 _halted=true，导致「目录刚好没读出来」
+     * 这种亚秒级抖动的被迫停机，也被当成「任务结束」永久封死 —— 视频恢复了、
+     * 页面正常了也永远不再动，正是用户报的「中途停了就永远不动」。
+     * 现在只有 user / condition 才封死；transient 允许在受限条件下自愈重启。
+     */
+    stop(why) {
       if (this._timer) {
         clearInterval(this._timer);
         this._timer = null;
       }
       ZHS.state.running = false;
-      // 标记「本轮已判定停机」：阻止页面初始化流程里的自动 start() 把它重新拉起。
-      // 用户手动点「启动」时可以越过（见 start(opts.manual)）。
-      this._halted = true;
-      ZHS.Log.info('主循环已停止');
+      const reason = why || 'user';
+      this._haltReason = reason;
+      // 只有「用户停 / 达标停」才彻底封死；瞬时故障停允许 tryResumeAfterTransientStop 救回
+      this._halted = (reason !== 'transient');
+      if (reason === 'transient') this._transientStoppedAt = Date.now();
+      ZHS.Log.info('主循环已停止' + (reason === 'transient' ? '（瞬时故障，将在条件恢复后尝试自愈）' : ''));
+    },
+
+    /**
+     * 瞬时故障停机后的受限自愈（round-14）：
+     * 仅当「上一次停机原因是 transient」+ 过了冷却期 + 未超次数上限 + 视频元素就绪时，
+     * 才走 start({manual:true}) 把主循环拉起来。
+     *
+     * 安全边界（关键）：用户主动停 / 达标停 → _haltReason 不是 'transient'，
+     * 本方法直接返回 false，绝不会把「用户要求停的脚本」偷偷拉起来。
+     */
+    tryResumeAfterTransientStop() {
+      if (this._timer) return false;                             // 已在跑
+      if (this._haltReason !== 'transient') return false;        // 非瞬时故障停 → 不救
+      const TRANSIENT_COOLDOWN_MS = 60000;                       // 冷却 60s，防高频空转
+      const TRANSIENT_MAX = 3;                                   // 本轮最多自愈 3 次
+      if (Date.now() - (this._transientStoppedAt || 0) < TRANSIENT_COOLDOWN_MS) return false;
+      if ((this._transientReloads || 0) >= TRANSIENT_MAX) {
+        ZHS.Log.warn('瞬时故障已连续自愈 ' + TRANSIENT_MAX + ' 次仍未恢复，停止自动重试，请手动点「启动」');
+        if (ZHS.panel) ZHS.panel.alert('自动恢复多次未成功，已停止重试；请确认网络/页面正常后手动点「启动」', 'warn', 15000);
+        return false;
+      }
+      const v = ZHS.state.videoEl || document.querySelector('video');
+      if (!v) return false;                                      // 视频还没回来，再等 DOM 变化
+      this._transientReloads = (this._transientReloads || 0) + 1;
+      ZHS.Log.info('检测到瞬时故障停机，视频已恢复，尝试自动重启（第 ' + this._transientReloads + ' 次）');
+      this.start({ manual: true });
+      return true;
     },
 
     /**
@@ -473,7 +514,8 @@
             // 目录都没识别到：绝不能弹「全部看完」的假总结
             ZHS.Log.warn('未识别到课程目录，无法切换。请确认已进入课程播放页');
             if (ZHS.panel) ZHS.panel.alert('未识别到课程目录，请先进入具体课程的播放页', 'error');
-            this.stop();
+            // round-14：目录临时读不到属瞬时故障（SPA 重渲染/懒加载瞬间），允许自愈，不永久封死
+            this.stop('transient');
           } else if (bd.undone === 0) {
             // 真正全看完：先看是否要「自动跳课」回课程中心找下一门，
             // 没开开关（或不在学习页 / 模块缺失）就保持原有「出总结并停止」行为。
@@ -491,7 +533,8 @@
             // 有未完成但找不到（状态识别可能有偏差），停手让人看
             ZHS.Log.warn('还有 ' + bd.undone + ' 节未完成，但无法定位到可点击节点（可能被锁定或选择器不匹配）');
             if (ZHS.panel) ZHS.panel.alert('还有 ' + bd.undone + ' 节未完成但定位失败，请检查目录', 'warn');
-            this.stop();
+            // round-14：定位失败多为懒加载/虚拟滚动的瞬时态，允许自愈
+            this.stop('transient');
           }
           return;
         }
@@ -517,29 +560,44 @@
           return;
         }
 
-        // 记录新课时标识，供续播使用
+        // 记录新课时标识，供续播使用。
+        // round-14【P1 关键修正】：改「点击前就写」为「点击成功后写」。
+        // 原先这里在点击前就把 lessonKey 改成目标节，一旦点击失败（下面的 !switched 分支）
+        // 又不回滚，就会把「下一节的进度」记到「本来那一节」的标题上（Resume.bindVideo 用错键），
+        // 下一轮 Catalog 的完成判定也会打错节点，进而从错位置往后 findNext → 静默跳过整节课。
+        // 这是唯一的「写错数据」级缺陷：宁可暂时用旧键，也绝不能把进度记到错的节上。
         const _targetKey = cat.itemTitle(next);
-        ZHS.state.lessonKey = _targetKey;
+        const _prevKey = ZHS.state.lessonKey;   // 备份，失败时回滚用
 
         // 【2026-09-18 关键修正】原来这里是「点一下就走」，点没点中没人管 ——
         // 这正是用户报的「点了下一节也没用」。现在点完必须验收：
         // 轮询等目标条目拿到 active（SPA 异步，可能晚几百毫秒），没拿到就再点一次。
-        const switched = await cat.clickAndVerify(next, { timeout: 3000, tries: 2 });
+        // round-14【P4】：clickAndVerify 内部已加「当前节必须真的从旧节变成新节」的第二信号校验。
+        const switched = await cat.clickAndVerify(next, { timeout: 3000, tries: 2, fromKey: _prevKey });
         if (!switched) {
+          // round-14【P1】：点击失败 → 课时标识必须回滚，绝不让「记错节」发生
+          ZHS.state.lessonKey = _prevKey;
           this._navFailCount = (_targetKey === this._navFailKey ? this._navFailCount : 0) + 1;
           this._navFailKey = _targetKey;
-          ZHS.Log.warn('点击「' + _targetKey + '」后未检测到切换（第 ' + this._navFailCount + ' 次）');
+          ZHS.Log.warn('点击「' + _targetKey + '」后未检测到切换（第 ' + this._navFailCount + ' 次），已回滚课时标识');
           if (this._navFailCount >= SAME_NAV_MAX) {
             ZHS.Log.error('连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」都无反应（疑似平台改版或目录节点不可点），已停止自动跳转');
             if (ZHS.panel) ZHS.panel.alert('切课失败：连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」无效，已停止自动跳转，请手动切换', 'error', 15000);
-            this.stop();
+            // round-14：平台响应慢时也可能凑齐连点次数，属瞬时故障，允许冷却后自愈重试
+            this.stop('transient');
             return;
           }
           if (ZHS.panel) ZHS.panel.alert('切换「' + _targetKey + '」未生效，正在重试…', 'warn', 6000);
           this._lastNavAt = Date.now();
-          await this._rebindAfterNav();
+          // round-14【P5】：失败分支的 rebind 缩短为 5 秒。原先走默认 20 秒，
+          // 比 15 秒冷却闸门还长 → 闸门失效、BUG-PB-4（12 秒跳一节）复发，
+          // 且单轮主线程被 _busy 独占近 29 秒，期间弹题守卫/保活全停摆。
+          await this._rebindAfterNav(5000);
           return;
         }
+
+        // round-14【P1】：确认切换成功后才写新课时标识（此时记进度才是对的）
+        ZHS.state.lessonKey = _targetKey;
 
         // 确实切过去了 → 失败计数清零
         this._navFailCount = 0;
@@ -637,8 +695,10 @@
     lastReport() { return ZHS.state.lastReport || null; },
 
     /** 切课后重新绑定 video */
-    async _rebindAfterNav() {
-      let video = await U.waitFor('video', 20000);
+    async _rebindAfterNav(waitMs) {
+      // round-14【P5】：允许调用方指定等待时长。失败分支传 5000，避免 20 秒等待
+      // 超过 15 秒冷却闸门，导致闸门失效 + 主线程被 _busy 独占期间弹题守卫停摆。
+      let video = await U.waitFor('video', waitMs || 20000);
       if (!video && ZHS.Util.findVideoInIframes) video = ZHS.Util.findVideoInIframes(document);
       if (!video) {
         ZHS.Log.warn('切课后未找到视频元素');
