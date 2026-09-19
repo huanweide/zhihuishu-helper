@@ -930,12 +930,19 @@
 
           btnTest.textContent = '测试中…';
           btnTest.className = 'mini-btn btn-lmtest';
-          const r = await ZHS.LLM.test();
-          btnTest.textContent = r.ok ? '连接正常' : '连接失败';
-          btnTest.className = 'mini-btn btn-lmtest ' + (r.ok ? 'ok' : 'bad');
-          const msg = box.querySelector('.s-keymsg');
-          if (msg) msg.textContent = r.msg;
-          ZHS.Log[r.ok ? 'info' : 'warn']('模型连通性：' + r.msg);
+          // round-8 B1：test() 抛错必须被捕获，否则未捕获 Promise 拒绝 + 文案卡死在「测试中…」
+          try {
+            const r = await ZHS.LLM.test();
+            btnTest.textContent = r.ok ? '连接正常' : '连接失败';
+            btnTest.className = 'mini-btn btn-lmtest ' + (r.ok ? 'ok' : 'bad');
+            const msg = box.querySelector('.s-keymsg');
+            if (msg) msg.textContent = r.msg;
+            ZHS.Log[r.ok ? 'info' : 'warn']('模型连通性：' + r.msg);
+          } catch (e) {
+            btnTest.textContent = '连接异常';
+            btnTest.className = 'mini-btn btn-lmtest bad';
+            ZHS.Log.warn('模型连通性测试出错：' + e.message);
+          }
         };
       }
 
@@ -991,6 +998,8 @@
         btn.disabled = true;
         try {
           await fn();
+        } catch (e) {
+          ZHS.Log.warn('按钮操作失败：' + e.message);
         } finally {
           btn.classList.remove('loading', 'btn-plain');
           btn.disabled = false;

@@ -498,7 +498,7 @@ console.log('\n=== 17. 弹题编排（签名防抖） ===');
   ok('有 handleDialog', typeof A.handleDialog === 'function');
   ok('有 handleHomework', typeof A.handleHomework === 'function');
   A.reset();
-  eq('reset 后签名为空', A._lastDialogSig, '');
+  eq('reset 后签名为空', A._answeredSig, '');
 }
 
 console.log('\n=== 19. 续播绑定（回归：重复绑定吞掉监听器） ===');

@@ -12,7 +12,6 @@
 
   const Answerer = {
     _running: false,
-    _lastDialogSig: '',
     _answeredSig: '',       // 已成功作答完成的弹题签名（去重跳过用）
     _skippedSigs: null,     // 无通道已跳过的弹题签名集合
     _lastSkipWarnAt: 0,     // 跳过告警节流时间戳
@@ -56,8 +55,6 @@
         ZHS.Log.debug('弹题已作答完成，跳过重复处理');
         return;
       }
-      this._lastDialogSig = sig;
-
       this._running = true;
       try {
         const before = ZHS.state.answeredCount;
@@ -134,7 +131,6 @@
       // N4：按配置决定是否自动关闭弹题
       if (ZHS.config.autoCloseDialog === false) {
         ZHS.Log.info('已作答完成（自动关闭已关闭，请手动关闭弹题）');
-        this._lastDialogSig = '';
         this._answeredSig = sig || '';   // 标记已作答，避免下一轮因签名变化反复点击取消已选项
         return;
       }
@@ -186,7 +182,6 @@
 
         if (!Q.stillPresent()) {
           ZHS.Log.info('弹题已关闭' + (attempt > 1 ? '（第 ' + attempt + ' 次尝试）' : ''));
-          this._lastDialogSig = '';   // 重置，允许下次处理新弹题
           this._failCount = 0;
           this._cooldownUntil = 0;
           this._pendingHuman = false;
@@ -203,7 +198,6 @@
       // 有通道场景（明确需要人工）：平台大概率是因为「未作答」拒绝关闭，
       // 退避 30s 防反复骚扰，明确告知用户手动作答，脚本安静等待，弹窗消失后自动复位。
       this._cooldownUntil = Date.now() + 30 * 1000;   // 退避 30s，防关不掉的弹窗反复骚扰
-      this._lastDialogSig = '';
       this._pendingHuman = true;
       ZHS.Log.warn('弹题自动关闭失败（累计 ' + this._failCount + ' 次），已转人工：请手动作答或关闭弹窗');
       if (ZHS.panel) {

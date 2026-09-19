@@ -100,7 +100,10 @@
   /** 是否在课程中心页 */
   function isHubPage() {
     try {
-      return location.pathname.includes('ai-course-center');
+      // round-8 M4：pathname / search / hash 任一含课程中心标识即判定命中，抗 query/hash 路由与大小写变化
+      const p = (location.pathname || '').toLowerCase();
+      const s = ((location.search || '') + (location.hash || '')).toLowerCase();
+      return p.includes('ai-course-center') || s.includes('ai-course-center');
     } catch (e) {
       return false;
     }
@@ -239,10 +242,29 @@
     return found;
   }
 
+  /** 依次尝试多个选择器，返回第一个命中的单元素（带兜底，抗平台改类名） */
+  function qsFirst(sels) {
+    for (const s of sels) {
+      try { const el = document.querySelector(s); if (el) return el; } catch (e) {}
+    }
+    return null;
+  }
+  /** 依次尝试多个选择器，合并返回所有命中（去重，抗平台改类名） */
+  function qsaAll(sels) {
+    const out = [];
+    for (const s of sels) {
+      try {
+        const els = document.querySelectorAll(s);
+        for (const el of els) if (out.indexOf(el) < 0) out.push(el);
+      } catch (e) {}
+    }
+    return out;
+  }
+
   /** 找虚拟滚动的容器 */
   function findScroller() {
     try {
-      const body = document.querySelector('.ai-course-center-body');
+      const body = qsFirst(['.ai-course-center-body', '[class*="course-center"]']);
       if (body) {
         // 自身可滚就用自己，否则向上找可滚祖先
         if (body.scrollHeight > body.clientHeight) return body;
@@ -262,7 +284,7 @@
   function collectInto(found) {
     let cards = [];
     try {
-      cards = document.querySelectorAll('.ai-course-center-body div.course-card');
+      cards = qsaAll(['.ai-course-center-body div.course-card', '[class*="course-card"]', '[class*="courseCard"]']);
     } catch (e) {
       ZHS.Log.warn('课程卡片选择器匹配失败：' + e.message);
       return;
@@ -532,7 +554,10 @@
 
   /** 把某课程记为「已全部学完」 */
   function markCourseDone(courseId) {
-    const key = courseId || (ZHS.state && ZHS.state.courseId);
+    // round-8 H1：与课程中心 pickNext 读键（cardIdentity）同源，避免「写用 id / 读用另一 id」导致去重失效
+    const key = courseId
+      || (ZHS.state && ZHS.state.hubKey)
+      || (ZHS.state && ZHS.state.courseId);
     if (!key) {
       ZHS.Log.warn('[课程中心] markCourseDone 缺少课程标识，忽略');
       return false;
@@ -545,9 +570,14 @@
   }
 
   /** 把某课程记为「进入失败」，防止下次再选它形成死循环 */
-  function markCourseFailed(courseId) {    if (!courseId) return false;
+  function markCourseFailed(courseId) {
+    // round-8 H1：与 markCourseDone 同源，优先用进入时记录的卡片标识
+    const key = courseId
+      || (ZHS.state && ZHS.state.hubKey)
+      || (ZHS.state && ZHS.state.courseId);
+    if (!key) return false;
     const store = readStore();
-    pushList(store.failedCourses, String(courseId));
+    pushList(store.failedCourses, String(key));
     writeStore(store);
     bumpStat('failed');
     return true;
@@ -590,6 +620,16 @@
     if (!isStudentPage()) return false;
     const it = getIntent();
     if (!it) return false;
+    // round-8 H1：把进入时记录的卡片标识（与 pickNext 读键同源）存到 state，供 markCourseDone/Failed 写入去重键
+    try { ZHS.state.hubKey = it.courseId || null; } catch (e) {}
+    // round-8 M2：标记待确认跳转已落地，解除看门狗
+    try {
+      const st = readStore();
+      if (st.pendingHop && st.pendingHop.courseId === (it.courseId || '')) {
+        st.pendingHop.settled = true;
+        writeStore(st);
+      }
+    } catch (e) {}
     clearIntent();
     ZHS.Log.info('[课程中心] 已进入课程：' + (it.courseName || it.courseId || '未知'));
     bumpStat('hopped');
@@ -600,6 +640,17 @@
 
   async function runOnHub(via) {
     if (!isHubPage()) return false;
+    // round-8 M2：清理卡住的待确认跳转（超过 5 分钟未 settled → 视为进入失败，移出待学防死循环）
+    try {
+      const st = readStore();
+      if (st.pendingHop && !st.pendingHop.settled
+        && Date.now() - (st.pendingHop.at || 0) > 5 * 60 * 1000) {
+        ZHS.Log.warn('[课程中心] 检测到卡住的进入请求（' + st.pendingHop.courseId + '），标记为进入失败');
+        markCourseFailed(st.pendingHop.courseId);
+        st.pendingHop = null;
+        writeStore(st);
+      }
+    } catch (e) {}
 
     // 等待课程卡片渲染出来（页面可能异步出数据）
     const first = await waitForCards(15000);
@@ -639,7 +690,7 @@
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
-        const el = document.querySelector('.ai-course-center-body div.course-card');
+        const el = qsFirst(['.ai-course-center-body div.course-card', '[class*="course-card"]']);
         if (el) return el;
       } catch (e) { /* 忽略 */ }
       await U.sleep(300);
