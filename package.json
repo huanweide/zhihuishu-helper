@@ -1,6 +1,6 @@
 {
   "name": "zhihuishu-helper",
-  "version": "0.6.10",
+  "version": "0.6.11",
   "description": "智慧树网课助手：自动播放 + 断点续播 + AI 自动答题",
   "private": true,
   "scripts": {

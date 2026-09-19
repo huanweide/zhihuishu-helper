@@ -109,12 +109,15 @@
       this._noSelfCheck = false;
       const pages = Array.from(root.querySelectorAll('.el-pager .number'));
       let anyAnswered = false;
+      let allAnswered = false;   // round-9 A2：多页弹题需全部页都答上才算完整完成
 
       if (!pages.length) {
         // 单页弹题
         anyAnswered = await this._solveCurrentPage(root);
+        allAnswered = anyAnswered;
       } else {
         // 多页：逐页切换作答
+        let every = true;
         for (let i = 0; i < pages.length; i++) {
           const page = pages[i];
           if (!page.classList.contains('active')) {
@@ -123,7 +126,9 @@
           }
           const pageAnswered = await this._solveCurrentPage(root);
           anyAnswered = anyAnswered || pageAnswered;
+          if (!pageAnswered) every = false;   // round-9 A2：任一页未答上 → 整体未完成
         }
+        allAnswered = every;
       }
 
       await U.sleep(500);
@@ -165,7 +170,24 @@
         }
         return;
       }
-      this._answeredSig = sig || '';   // 标记已作答完成，后续轮次去重跳过
+      // round-9 A2：多页弹题若只有部分页答上，不标记完整完成，避免剩余页被永久跳过。
+      // 无通道/无法自检 → 尝试关闭已答页并恢复播放，下一轮回来补答剩余页（不置 _answeredSig）；
+      // 有通道但部分页点不上 → 转人工保留弹窗补全。
+      if (!allAnswered) {
+        if (this._noChannelThisRound || this._noSelfCheck) {
+          const ok = await this.closeDialogAndResume({ noChannel: true });
+          if (!ok) { this._resumePlay(); this._throttledSkipWarn(sig); }
+          // 注意：不置 _answeredSig，下一轮 handleDialog 回来继续补答剩余页
+        } else {
+          this._pendingHuman = true;
+          ZHS.Log.warn('多页弹题部分页未答上，已交由人工处理');
+          if (ZHS.panel) {
+            ZHS.panel.alert('这题有多页，部分还没选上：请手动补全剩余页，弹窗保留等你作答', 'warn', 10000);
+          }
+        }
+        return;
+      }
+      this._answeredSig = sig || '';   // 标记已作答完成（全部页都已答上），后续轮次去重跳过
       await this.closeDialogAndResume();
     },
 
