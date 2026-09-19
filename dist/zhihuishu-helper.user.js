@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.12
+// @version      0.6.13
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.12";
+window.__ZHS_BUILD__.version = "0.6.13";
 
 /* ===== 00-config.js ===== */
 /**
@@ -1814,7 +1814,7 @@ window.__ZHS_BUILD__.version = "0.6.12";
   // 必须严格限定在弹题容器内，不能用裸的 .topic-title：
   // 作业页同样有 .topic-title，裸选择器会在作业页被误判成「弹题」，
   // 于是先暂停视频、再试图关窗，最后还要耗掉一轮 await 才放行。
-  const QUESTION_SELECTORS = '#playTopic-dialog';
+  const QUESTION_SELECTORS = '#playTopic-dialog, [class*="topic-dialog"]';
   // 其他阻塞弹窗
   const BLOCK_SELECTORS = '.ss2077-custom-dialog';
 
@@ -2180,7 +2180,7 @@ window.__ZHS_BUILD__.version = "0.6.12";
         let cur = locateCur();
         while (Date.now() < settleDeadline) {
           cur = locateCur();
-          if (cur && (ZHS.Catalog.isFinished(cur) || ZHS.Catalog.progressOf(cur) >= 90)) break;
+          if (cur && (ZHS.Catalog.isFinished(cur) || ZHS.Catalog.progressOf(cur) >= 95)) break;
           await U.sleep(300);
         }
 
@@ -5600,6 +5600,7 @@ window.__ZHS_BUILD__.version = "0.6.12";
       if (v && v !== ZHS.state.videoEl) {
         ZHS.Log.debug('检测到视频元素变化，重新绑定');
         ZHS.state.videoEl = v;
+        bootTries = 0; // round-11：视频重新出现时重置 boot 名额，避免 SPA 切集后永久失活
         if (newLessonKey) ZHS.state.lessonKey = newLessonKey;
         ZHS.Resume.bindVideo(v, ZHS.state.courseId, ZHS.state.lessonKey);
       }
@@ -5727,7 +5728,7 @@ window.__ZHS_BUILD__.version = "0.6.12";
   const DialogQuestions = {
     /** 弹题容器（考虑 iframe 情况） */
     root() {
-      let r = document.querySelector('#playTopic-dialog');
+      let r = document.querySelector('#playTopic-dialog, [class*="topic-dialog"]');
       if (r && U.isStructurallyVisible(r)) return r;
       // 关键坑：弹题可能渲染在 iframe 里
       const iframe = document.getElementById('tmDialog_iframe');

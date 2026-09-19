@@ -144,6 +144,7 @@
       if (v && v !== ZHS.state.videoEl) {
         ZHS.Log.debug('检测到视频元素变化，重新绑定');
         ZHS.state.videoEl = v;
+        bootTries = 0; // round-11：视频重新出现时重置 boot 名额，避免 SPA 切集后永久失活
         if (newLessonKey) ZHS.state.lessonKey = newLessonKey;
         ZHS.Resume.bindVideo(v, ZHS.state.courseId, ZHS.state.lessonKey);
       }
