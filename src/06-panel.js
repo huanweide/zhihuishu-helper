@@ -943,8 +943,15 @@
             btnTest.textContent = r.ok ? '连接正常' : '连接失败';
             btnTest.className = 'mini-btn btn-lmtest ' + (r.ok ? 'ok' : 'bad');
             const msg = box.querySelector('.s-keymsg');
-            if (msg) msg.textContent = r.msg;
-            ZHS.Log[r.ok ? 'info' : 'warn']('模型连通性：' + r.msg);
+            // ★ 过去失败只显示一句 r.msg（如"请求失败"），用户不知道下一步该做什么。
+            // 现在把 hint（解决方案）一并给出；完整信息同时挂到 title 上，
+            // 避免面板区域窄导致长文案被截断看不到后半句。
+            const full = r.msg + (r.hint ? ' → ' + r.hint : '');
+            if (msg) {
+              msg.textContent = full;
+              if (r.hint) msg.title = full;
+            }
+            ZHS.Log[r.ok ? 'info' : 'warn']('模型连通性：' + full);
           } catch (e) {
             btnTest.textContent = '连接异常';
             btnTest.className = 'mini-btn btn-lmtest bad';

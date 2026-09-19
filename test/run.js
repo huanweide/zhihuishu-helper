@@ -2282,6 +2282,102 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
   }
 
   // ==================================================
+  // === 32. 网络失败诊断（2026-09-19 · C06 判别性测试） ===
+  //
+  // 【为什么用判别性测试】用户报的「API 请求失败」根因是：
+  // 服务端返回 HTML（网关页/代理页/门户首页）时，旧代码只抛一句「LLM 返回非 JSON」，
+  // 且「超时」「断网」「被拒 portraits」全都压成 status=0，用户无从自查只能反复重试。
+  //
+  // baseline 验证：把 09-bank.js 的 diagnose/parseJsonOrThrow 删掉再跑本组 → 必须全红。
+  // 这些断言全部落在**具体返回值**（code / msg 关键词 / hint 关键词）上，
+  // 没有一条是 truthy 判定，因此具备真正的判别力。
+  // ==================================================
+  console.log('\n=== 32. 网络失败诊断（HTTP / HTML / 超时 分类） ===');
+  {
+    const { win } = makeEnv('<html><body></body></html>');
+    const B = win.ZHS && win.ZHS.Bank;
+
+    // 判据健壮性：旧代码里 diagnose / FAIL / extractHtmlTitle 都不存在，
+    // 若直接访问会 TypeError 崩溃，导致后一半用例根本没跑就被吞掉，
+    // 看不到「哪些失败、为什么失败」——这违背了判别性测试的初衷。
+    // 这里用返回空值的 stub 兜住，让每一条断言各自干净地 FAIL。
+    // 注意两个 stub 的返回值都刻意取「不会等于任何期望值」的形式（undefined / 'STUB'），
+    // 否则旧代码会碰巧通过某条断言（baseline PASS = 该条锁不住任何东西）。
+    const has = (v) => typeof v === 'function';
+    const diagnoseSafely = has(B && B.diagnose) ? B.diagnose : (() => ({ code: '', msg: '', hint: '' }));
+    const throwSafely = has(B && B.parseJsonOrThrow) ? B.parseJsonOrThrow : (() => undefined);
+    const titleSafely = has(B && B.extractHtmlTitle) ? B.extractHtmlTitle : (() => 'STUB');
+    const F = (B && B.FAIL) || { OK: 'ok', TIMEOUT: 'timeout', NETWORK: 'network', HTTP: 'http' };
+
+    ok('网络层暴露 diagnose', has(B && B.diagnose));
+    ok('网络层暴露 parseJsonOrThrow', has(B && B.parseJsonOrThrow));
+    ok('网络层暴露 FAIL 枚举', !!(B && B.FAIL && B.FAIL.TIMEOUT));
+
+    // ---- 场景 1：网关返回 502 HTML 错误页（用户最常撞到的真实故障） ----
+    const html502 = '<html><head><title>502 Bad Gateway</title></head><body>nginx</body></html>';
+    const d1 = diagnoseSafely('大模型', { ok: false, status: 502, text: html502, kind: F.HTTP },
+      'https://api.deepseek.com/chat/completions');
+    eq('502 HTML 页 → 归类 HTTP_HTML', d1.code, 'HTTP_HTML');
+    ok('502 报错文案点明是 HTML 而非数据', d1.msg.includes('HTML 页面'), d1.msg);
+    ok('502 报错带出页面标题，便于用户自证是谁拦的', d1.msg.includes('502 Bad Gateway'), d1.msg);
+    ok('502 提示引导检查 baseUrl 是否重复拼接', d1.hint.includes('/chat/completions'), d1.hint);
+
+    // ---- 场景 2：HTTP 200 但返回门户首页（地址填成网站根的经典误操作） ----
+    const portal = '<!DOCTYPE html><html><head><title>首页</title></head><body></body></html>';
+    const d2 = diagnoseSafely('大模型', { ok: true, status: 200, text: portal, kind: F.OK },
+      'https://example.com');
+    eq('200 却返回门户 HTML → 归类 NON_JSON_HTML', d2.code, 'NON_JSON_HTML');
+    ok('门户页报错说明"返回的是 HTML 不是 JSON"', d2.msg.includes('HTML 页面'), d2.msg);
+    ok('门户页提示给出正确地址格式示范', d2.hint.includes('https://api.deepseek.com'), d2.hint);
+
+    // ---- 场景 3 / 4：超时与网络失败必须能分开（旧版两者都是 status=0） ----
+    const d3 = diagnoseSafely('题库', { ok: false, status: 0, text: '', kind: F.TIMEOUT },
+      'http://127.0.0.1:8060/adapter-service/search');
+    eq('超时 → 归类 TIMEOUT', d3.code, 'TIMEOUT');
+    ok('超时文案明确说"超时"而非笼统失败', d3.msg.includes('超时'), d3.msg);
+
+    const d4 = diagnoseSafely('题库', { ok: false, status: 0, text: '', kind: F.NETWORK },
+      'http://127.0.0.1:8060/adapter-service/search');
+    eq('断网 → 归类 NETWORK', d4.code, 'NETWORK');
+    ok('断网文案明确说"连不上"', d4.msg.includes('连不上'), d4.msg);
+    ok('断网提示引导检查本地服务是否启动', d4.hint.includes('TikuAdapter') || d4.hint.includes('地址'), d4.hint);
+
+    // ---- 场景 5：鉴权失败要给到 Key，不能只说"被拒绝" ----
+    const d5 = diagnoseSafely('大模型', { ok: false, status: 401, text: '{"error":"invalid"}', kind: F.HTTP },
+      'https://api.deepseek.com/chat/completions');
+    eq('401 → 归类 HTTP_401', d5.code, 'HTTP_401');
+    ok('401 提示直接指向 API Key', d5.hint.includes('API Key'), d5.hint);
+
+    // ---- 场景 6：2xx 空响应体 ----
+    const d6 = diagnoseSafely('大模型', { ok: true, status: 200, text: '   ', kind: F.OK }, 'https://x.com');
+    eq('200 空体 → 归类 EMPTY', d6.code, 'EMPTY');
+
+    // ---- 场景 7：parseJsonOrThrow 把诊断挂进 Error.hint（调用方透传的关键） ----
+    let thrown = null;
+    try {
+      throwSafely('大模型', { ok: true, status: 200, text: html502, kind: F.OK },
+        'https://example.com');
+    } catch (e) { thrown = e; }
+    ok('抛出的错误携带 hint（供面板展示解决方案）', !!(thrown && thrown.hint), thrown && thrown.message);
+    ok('抛错文案不再是干瘪的"返回非 JSON"',
+      !!thrown && !thrown.message.includes('返回非 JSON') && thrown.message.includes('HTML'),
+      thrown && thrown.message);
+
+    // ---- 场景 8：正常 JSON 必须能原样解析，不能因为改了解析路径就炸 ----
+    let parsed = null;
+    try {
+      parsed = throwSafely('大模型',
+        { ok: true, status: 200, text: '{"choices":[{"message":{"content":"A"}}]}', kind: F.OK },
+        'https://example.com');
+    } catch (e) { parsed = null; }
+    ok('正常 JSON 仍可解析', !!parsed && parsed.choices[0].message.content === 'A');
+
+    // ---- 场景 9：HTML 标题提取（拷不到不能炸） ----
+    eq('能抠出 <title>', titleSafely(html502), '502 Bad Gateway');
+    eq('无 title 时返回空串而非抛错', titleSafely('plain text'), '');
+  }
+
+  // ==================================================
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {

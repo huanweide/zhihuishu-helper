@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.26
+// @version      0.6.27
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.26";
+window.__ZHS_BUILD__.version = "0.6.27";
 
 /* ===== 00-config.js ===== */
 /**
@@ -3711,8 +3711,15 @@ window.__ZHS_BUILD__.version = "0.6.26";
             btnTest.textContent = r.ok ? '连接正常' : '连接失败';
             btnTest.className = 'mini-btn btn-lmtest ' + (r.ok ? 'ok' : 'bad');
             const msg = box.querySelector('.s-keymsg');
-            if (msg) msg.textContent = r.msg;
-            ZHS.Log[r.ok ? 'info' : 'warn']('模型连通性：' + r.msg);
+            // ★ 过去失败只显示一句 r.msg（如"请求失败"），用户不知道下一步该做什么。
+            // 现在把 hint（解决方案）一并给出；完整信息同时挂到 title 上，
+            // 避免面板区域窄导致长文案被截断看不到后半句。
+            const full = r.msg + (r.hint ? ' → ' + r.hint : '');
+            if (msg) {
+              msg.textContent = full;
+              if (r.hint) msg.title = full;
+            }
+            ZHS.Log[r.ok ? 'info' : 'warn']('模型连通性：' + full);
           } catch (e) {
             btnTest.textContent = '连接异常';
             btnTest.className = 'mini-btn btn-lmtest bad';
@@ -7265,7 +7272,43 @@ window.__ZHS_BUILD__.version = "0.6.26";
 
   const hasGMXhr = typeof GM_xmlhttpRequest === 'function';
 
-  /** 统一请求（返回 Promise<{ok, status, text}>） */
+  /**
+   * 同类故障 30 秒内只报一次。
+   *
+   * 为什么必须节流：服务商挂掉时主循环每 2 秒一轮，一道错题就刷一条，
+   * 几十轮下来控制台全被同一句话淹没，反而看不到其它更有用的信息。
+   * 另外日志本身绝不允许反过来炸主流程，故 fn 外层套 try。
+   */
+  const _diagAt = Object.create(null);
+  function _throttled(key, fn) {
+    const now = Date.now();
+    if (_diagAt[key] && now - _diagAt[key] < 30000) return;
+    _diagAt[key] = now;
+    try { fn(); } catch (e) { /* 日志失败不得冒泡 */ }
+  }
+
+  /**
+   * 失败类型枚举。
+   *
+   * 【2026-09-19 第⑤层修复】旧实现把所有失败压成 `{ok:false, status:0}`，
+   * 于是「网络不通」「请求超时」「服务商返回 HTML 错误页」「余额不足」
+   * 这四种完全不同的故障，在用户面板上都显示同一句「请求失败」——
+   * 用户既不知道该改什么，也无从自查。
+   * 现在按成因分类，调用方据此生成可操作的中文提示。
+   */
+  const FAIL = {
+    OK: 'ok',
+    TIMEOUT: 'timeout',       // 到点没回来（网络慢 / 服务卡死）
+    NETWORK: 'network',       // 根本没发出去（跨域被拦 / DNS / 断网 / localhost 没起）
+    HTTP: 'http',             // 服务端明确回了非 2xx
+    EMPTY: 'empty',           // 2xx 但响应体是空的
+    NON_JSON: 'non-json',     // 2xx 但不是 JSON（多半是 HTML 错误页 / 门户页）
+  };
+
+  /** 统一请求（返回 Promise<{ok, status, text, kind, detail}>）
+   *
+   * 新增字段全部可选，旧调用方只读 {ok,status,text} 不受影响。
+   */
   function request(opts) {
     const { url, method = 'GET', headers = {}, data = null, timeout = 15000 } = opts;
 
@@ -7280,12 +7323,32 @@ window.__ZHS_BUILD__.version = "0.6.26";
             headers,
             data,
             timeout,
-            onload: (res) => done({ ok: res.status >= 200 && res.status < 300, status: res.status, text: res.responseText }),
-            onerror: () => done({ ok: false, status: 0, text: '' }),
-            ontimeout: () => done({ ok: false, status: 0, text: '' }),
+            onload: (res) => done({
+              ok: res.status >= 200 && res.status < 300,
+              status: res.status,
+              text: res.responseText,
+              kind: res.status >= 200 && res.status < 300 ? FAIL.OK : FAIL.HTTP,
+              detail: '',
+            }),
+            // 超时与网络错误过去都返回 status=0，调用方完全无法区分，
+            // 现在拆成两类：超时多半要调大超时时间，网络错误多半要检查地址/跨域。
+            ontimeout: () => done({
+              ok: false, status: 0, text: '',
+              kind: FAIL.TIMEOUT,
+              detail: '请求超过 ' + timeout + 'ms 未返回',
+            }),
+            onerror: () => done({
+              ok: false, status: 0, text: '',
+              kind: FAIL.NETWORK,
+              detail: '连接未建立（跨域被拦截 / 地址不可达 / 服务未启动）',
+            }),
           });
         } catch (e) {
-          done({ ok: false, status: 0, text: '', error: e.message });
+          done({
+            ok: false, status: 0, text: '',
+            kind: FAIL.NETWORK,
+            detail: '发起失败：' + e.message,
+          });
         }
       });
     }
@@ -7293,12 +7356,138 @@ window.__ZHS_BUILD__.version = "0.6.26";
     // 降级 fetch
     return new Promise((resolve) => {
       const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timer = setTimeout(() => { if (ctrl) ctrl.abort(); }, timeout);
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; if (ctrl) ctrl.abort(); }, timeout);
       fetch(url, { method, headers, body: data, signal: ctrl ? ctrl.signal : undefined })
-        .then((r) => r.text().then((text) => ({ ok: r.ok, status: r.status, text })))
+        .then((r) => r.text().then((text) => ({
+          ok: r.ok, status: r.status, text,
+          kind: r.ok ? FAIL.OK : FAIL.HTTP,
+          detail: '',
+        })))
         .then((r) => { clearTimeout(timer); resolve(r); })
-        .catch((e) => { clearTimeout(timer); resolve({ ok: false, status: 0, text: '', error: e.message }); });
+        .catch((e) => {
+          clearTimeout(timer);
+          // AbortError 只可能是我们自己的超时定时器触发的，据此拆出 TIMEOUT
+          const kind = timedOut ? FAIL.TIMEOUT : FAIL.NETWORK;
+          resolve({
+            ok: false, status: 0, text: '',
+            kind,
+            detail: timedOut ? '请求超过 ' + timeout + 'ms 未返回' : ('发起失败：' + e.message),
+          });
+        });
     });
+  }
+
+  /**
+   * 从 HTML 片段里抠出 <title>，用于让用户知道"到底是谁返回了这一页"。
+   * 抠不到就返回空串，不抛异常。
+   */
+  function extractHtmlTitle(text) {
+    const m = String(text || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    return m ? m[1].trim().replace(/\s+/g, ' ').slice(0, 80) : '';
+  }
+
+  /**
+   * ★ 响应体诊断：把「一次失败的 HTTP 调用」翻译成人能看懂的中文 + 可操作建议。
+   *
+   * 这是本次修复的核心。过去 provider 返回网关 502 页 / 代理拦截页 / 门户首页时，
+   * 下游 JSON.parse 只会抛一句「返回非 JSON」，用户无从判断是 Key 错、地址错还是网络错，
+   * 只能反复重试——正是幻觉税（arxiv 2509.14583 所述约 40% 算力被这类无效重试吃掉）的现实版本。
+   *
+   * @param {string} label  调用点名称，如 '大模型' / '题库'
+   * @param {object} res    request() 的返回值
+   * @param {string} url    请求地址（用于生成建议）
+   * @returns {{code:string, msg:string, hint:string}}
+   */
+  function diagnose(label, res, url) {
+    const r = res || {};
+    const text = String(r.text || '');
+    const host = (function () {
+      try { return new URL(url).host; } catch (e) { return String(url || '').slice(0, 40); }
+    }());
+    // HTML 判据：以 '<' 开头，或前 200 字符里出现 <!DOCTYPE / <html
+    const head = text.slice(0, 200).toLowerCase();
+    const looksHtml = /^\s*</.test(text) || head.includes('<!doctype') || head.includes('<html');
+
+    switch (r.kind) {
+      case FAIL.TIMEOUT:
+        return {
+          code: 'TIMEOUT',
+          msg: label + '请求超时（' + host + ' 未在限定时间内响应）',
+          hint: '多半是网络慢或对方服务繁忙。可在设置里调大超时时间后重试；若持续超时，换一个可用的 API 地址。',
+        };
+      case FAIL.NETWORK:
+        return {
+          code: 'NETWORK',
+          msg: label + '连不上（' + host + '）' + (r.detail ? '：' + r.detail : ''),
+          hint: '检查：① 网络是否正常；② 地址是否写对（本地题库要先把 TikuAdapter 跑起来）；③ 油猴是否已授权跨域。',
+        };
+      case FAIL.HTTP: {
+        const s = Number(r.status);
+        let hint = '对方返回了 HTTP ' + s + '。';
+        if (s === 401 || s === 403) hint += '多半是 API Key 无效、过期或没权限——请在设置里重新填写并检查有无多余空格。';
+        else if (s === 402) hint += '账户余额不足，请先充值。';
+        else if (s === 404) hint += '接口路径不存在——请检查 API 地址是否少了 /v1 之类的前缀。';
+        else if (s === 429) hint += '请求过于频繁被限流，稍等片刻会自动重试。';
+        else if (s >= 500) hint += '对方服务器内部错误，属于服务端故障，稍后重试通常能恢复。';
+        // 非 2xx 且响应体是 HTML：说明根本没打到 API，被网关/代理/门户页截胡了
+        if (looksHtml) {
+          const title = extractHtmlTitle(text);
+          return {
+            code: 'HTTP_HTML',
+            msg: label + '返回了 HTML 页面而不是数据（HTTP ' + s + (title ? '，页面标题「' + title + '」' : '') + '）',
+            hint: '这通常说明请求被网关或代理页面拦下了，而不是打到了真正的 API 接口。'
+              + '请检查 API 地址是否填成了网站首页（应形如 https://api.deepseek.com，不要带 /chat/completions，脚本会自动拼接）。',
+          };
+        }
+        return { code: 'HTTP_' + s, msg: label + '请求被拒绝（HTTP ' + s + '）', hint };
+      }
+      case FAIL.OK:
+      default: {
+        if (!text.trim()) {
+          return {
+            code: 'EMPTY',
+            msg: label + '返回了空内容',
+            hint: '对方返回了 200 但响应体是空的，通常是服务端异常，稍后重试即可。',
+          };
+        }
+        if (looksHtml) {
+          const title = extractHtmlTitle(text);
+          return {
+            code: 'NON_JSON_HTML',
+            msg: label + '返回了 HTML 页面而不是 JSON 数据' + (title ? '（页面标题「' + title + '」）' : ''),
+            hint: '地址很可能填的是网站首页或被代理页拦下了，没打到真正的 API 接口。'
+              + '请改成形如 https://api.deepseek.com 的接口根地址（脚本会自动拼接 /chat/completions），不要填带页面 UI 的网址。',
+          };
+        }
+        return {
+          code: 'NON_JSON',
+          msg: label + '返回的不是合法 JSON',
+          hint: '把返回内容的前 100 字：' + text.slice(0, 100),
+        };
+      }
+    }
+  }
+
+  /** 判断是否解析成功；失败时抛带可操作信息的 Error */
+  function parseJsonOrThrow(label, res, url) {
+    const r = res || {};
+    if (!r.ok || !r.text) {
+      const d = diagnose(label, r, url);
+      const err = new Error(d.msg);
+      err.code = d.code;
+      err.hint = d.hint;
+      throw err;
+    }
+    try {
+      return JSON.parse(r.text);
+    } catch (e) {
+      const d = diagnose(label, r, url);
+      const err = new Error(d.msg);
+      err.code = d.code;
+      err.hint = d.hint;
+      throw err;
+    }
   }
 
   /**
@@ -7359,6 +7548,10 @@ window.__ZHS_BUILD__.version = "0.6.26";
     toIndexes,
     pickBest,
     request,
+    diagnose,
+    parseJsonOrThrow,
+    extractHtmlTitle,
+    FAIL,
 
     /** 搜索答案，返回 {answer, from, raw} 或 null */
     async search(question, options, type) {
@@ -7366,7 +7559,17 @@ window.__ZHS_BUILD__.version = "0.6.26";
       if (!cfg.bankEnabled) return null;
       if (!question && (!options || !options.length)) return null;
 
-      const url = String(cfg.bankUrl || '').replace(/\/$/, '') + '/adapter-service/search';
+      // ★ 地址为空时不能照旧拼成 '/adapter-service/search' 发出去：
+      // 相对路径会打到当前网课站点上，拿到一串 HTML，下游却只报一句"返回非 JSON"，
+      // 用户完全看不出是「自己没填地址」。这里直接短路并给出明确指引。
+      const rawUrl = String(cfg.bankUrl || '').trim();
+      if (!rawUrl) {
+        _throttled('bank-empty', function () {
+          ZHS.Log.warn('题库未配置地址，已跳过查询。请在设置里填写题库地址（形如 http://127.0.0.1:8060）。');
+        });
+        return null;
+      }
+      const url = rawUrl.replace(/\/$/, '') + '/adapter-service/search';
       const payload = {
         question: String(question || '').slice(0, 500),
         options: (options || []).slice(0, 10),
@@ -7382,13 +7585,20 @@ window.__ZHS_BUILD__.version = "0.6.26";
       });
 
       if (!res.ok || !res.text) {
-        ZHS.Log.debug('题库无响应（status=' + res.status + '）');
+        const d = diagnose('题库', res, url);
+        // 过去这条是 debug 级，用户看不见；失败原因必须进面板，否则"题库查不到"永远是黑盒。
+        _throttled('bank-' + d.code, function () {
+          ZHS.Log.warn(d.msg + '｜' + d.hint);
+        });
         return null;
       }
 
       let json;
       try { json = JSON.parse(res.text); } catch (e) {
-        ZHS.Log.debug('题库返回非 JSON');
+        const d = diagnose('题库', res, url);
+        _throttled('bank-' + d.code, function () {
+          ZHS.Log.warn(d.msg + '｜' + d.hint);
+        });
         return null;
       }
 
@@ -7476,6 +7686,10 @@ ${question}${optionText}
   // 一道题的作答总预算（毫秒）。超时后放弃后续投票，用已有结果 or 直接认输。
   const ANSWER_BUDGET_MS = 25000;
 
+  // 同类错误去重：投票最多 3 次，同一句诊断刷三遍纯属噪音，
+  // 只在「文案发生变化」时才再打一条。
+  const _llmDiagAt = Object.create(null);
+
   /** 调用一次 LLM */
   async function callOnce(question, options, type) {
     const cfg = ZHS.config;
@@ -7483,6 +7697,16 @@ ${question}${optionText}
 
     const base = String(cfg.llmBaseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
     const url = base + '/chat/completions';
+
+    // ★ 2026-09-19 新增：自动拼接前缀重复拦截。
+    // 脚本会自己拼 /chat/completions，用户若照着文档把完整调用地址也填进来，
+    // 拼出来就是 .../chat/completions/chat/completions → 必然 404。
+    // 过去这条表现为一句冰冷的「请求失败」，用户只会反复重试。这里直接自愈。
+    if (/\/chat\/completions$/i.test(base)) {
+      ZHS.Log.warn('API 地址不需要带 /chat/completions，脚本会自动拼接；已自动去掉重复后缀');
+    }
+    const cleanBase = base.replace(/\/chat\/completions$/i, '');
+    const finalUrl = cleanBase + '/chat/completions';
     const payload = {
       model: cfg.llmModel || 'deepseek-chat',
       messages: [{ role: 'user', content: buildPrompt(question, options, type) }],
@@ -7491,7 +7715,7 @@ ${question}${optionText}
     };
 
     const res = await ZHS.Bank.request({
-      url,
+      url: finalUrl,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -7501,19 +7725,22 @@ ${question}${optionText}
       timeout: CALL_TIMEOUT_MS,
     });
 
-    if (!res.ok) {
-      throw new Error('LLM 请求失败 status=' + res.status + ' ' + String(res.text || '').slice(0, 120));
-    }
-
-    let json;
-    try { json = JSON.parse(res.text); } catch (e) {
-      throw new Error('LLM 返回非 JSON');
-    }
+    // ★ 2026-09-19 核心修复（用户报「API 请求失败」的真根因）：
+    // 过去这里只有一句 `!res.ok → throw 'LLM 请求失败 status=..'`，
+    // 而当服务端（或网关/代理/门户页）返回 HTML 时，JSON.parse 只抛「LLM 返回非 JSON」——
+    // 用户看到的就是这四个字，既不知道是 Key 错、地址错还是网络错，只能反复重试。
+    // 现在交给网络层的 diagnose 分类，产出成因 + 可操作建议。
+    const json = ZHS.Bank.parseJsonOrThrow('大模型', res, finalUrl);
 
     const content = json &&
       json.choices && json.choices[0] &&
       json.choices[0].message && json.choices[0].message.content;
-    if (!content) throw new Error('LLM 返回内容为空');
+    if (!content) {
+      const err = new Error('大模型返回内容为空（模型可能不支持当前模型名，或返回被截断）');
+      err.code = 'EMPTY_CHOICES';
+      err.hint = '请检查设置里的模型名是否与服务商提供的完全一致（如 deepseek-chat / gpt-4o-mini）。';
+      throw err;
+    }
     return String(content).trim();
   }
 
@@ -7548,7 +7775,15 @@ ${question}${optionText}
         }
       } catch (e) {
         lastErr = e;
-        ZHS.Log.warn('LLM 第 ' + (i + 1) + ' 次调用失败：' + e.message);
+        // ★ 只打印 e.message 时，用户看到的是「大模型返回了 HTML 页面而不是 JSON 数据」，
+        // 但不知道该改哪里。hint 才是这份修复真正的产出，必须一起打出来。
+        // 同一类故障节流，避免 3 次投票把同一句刷三遍。
+        const key = 'llm-' + (e.code || 'err');
+        if (_llmDiagAt[key] !== e.message) {
+          _llmDiagAt[key] = e.message;
+          ZHS.Log.warn('大模型第 ' + (i + 1) + ' 次调用失败：' + e.message
+            + (e.hint ? '｜建议：' + e.hint : ''));
+        }
       }
       // 连续失败 2 次就放弃
       if (i >= 1 && Object.keys(votes).length === 0 && lastErr) break;
@@ -7569,15 +7804,22 @@ ${question}${optionText}
     callOnce,
     vote,
 
-    /** 连通性测试 */
+    /** 连通性测试（面板「测试连接」按钮走的就是这里） */
     async test() {
       const cfg = ZHS.config;
-      if (!cfg.llmKey) return { ok: false, msg: '未配置 API Key' };
+      if (!cfg.llmKey) return { ok: false, msg: '未配置 API Key', hint: '请在设置页填写大模型 API Key 并保存。' };
       try {
         const r = await callOnce('1+1等于几？只输出数字。', [], 'completion');
-        return { ok: true, msg: '连通正常，返回：' + r.slice(0, 20) };
+        return { ok: true, msg: '连通正常，返回：' + r.slice(0, 20), hint: '' };
       } catch (e) {
-        return { ok: false, msg: e.message };
+        // ★ 这里过去只有 e.message（"请求失败"四个字），用户试完仍然不知道怎么改。
+        // 现在把 hint 一并返回，面板可以直接把解决方案显示给用户。
+        return {
+          ok: false,
+          msg: e.message,
+          hint: e.hint || '',
+          code: e.code || '',
+        };
       }
     },
   };
