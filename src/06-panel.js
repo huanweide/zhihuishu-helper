@@ -1150,6 +1150,13 @@
           if (this._root.parentNode) this._root.parentNode.removeChild(this._root);
           this._root = null;
           this._shadow = null;
+          // round-8 B3：重挂前清掉全屏状态机残留，避免旧状态误导降级提示/失效 document 绑定
+          try {
+            this._fsState = '';
+            if (this._fsTimer) { clearTimeout(this._fsTimer); this._fsTimer = null; }
+            this._fsFailedNotice = false;
+            if (this._fsBoundDocs) this._fsBoundDocs = [];
+          } catch (e) {}
           this.mount();
         } catch (e) { ZHS.Log.debug('面板自愈重挂失败：' + e.message); }
       }

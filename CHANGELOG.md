@@ -4,6 +4,25 @@
 
 ---
 
+## [0.6.10] - 2026-09-19
+> round-8 审查修复：课程中心去重键同源 + 进入看门狗 + 选择器兜底 + 页面判定鲁棒；弹题退避复位 + 面板异常捕获与自愈清状态。
+
+### 修复
+- **【核心·课程中心去重失效 · 读写键不同源】** —— `src/06b-course-hub.js` 的 `markCourseDone/markCourseFailed` 原先用 `courseId`（URL path 段）写去重键，而 `pickNext` 读侧用 `cardIdentity`（卡片 DOM 业务 id）或课程名，两者不同源导致「已完成课程仍被反复选入」的去重失效。现改为「写入优先用 `ZHS.state.hubKey`（进入时记录的卡片标识，与读取键同源），回退 path 段」，并在 `settleIntentOnStudentPage` 把进入时记录的卡片标识落到 `state.hubKey`。
+- **【核心·课程中心卡死 · 进入看门狗】** —— `enterCourse` 点击后只 `return true`，若新标签因被拦截等原因没起来，该课既不被学也不被记失败，永久卡在待学。现点击成功后写 `pendingHop` 待确认记录，`settleIntentOnStudentPage` 落地时标记 settled，`runOnHub` 开头清理「超过 5 分钟未 settled」的 pendingHop 并 `markCourseFailed`，解除卡死。
+- **【体验·课程卡片选择器兜底】** —— `findScroller/collectInto/waitForCards` 原先硬编码 `.ai-course-center-body` / `.course-card`，平台改类名即收 0 张。现改为依次尝试「原选择器 → `[class*="course-center"]` → `[class*="course-card"]`/`[class*="courseCard"]`」的兜底数组，原路径仍优先、零回归。
+- **【体验·课程中心页判定鲁棒】** —— `isHubPage` 原先只匹配 `pathname`，query/hash 路由或大小写变化会漏判。现对 `pathname/search/hash` 统一小写后匹配 `ai-course-center`。
+- **【核心·弹题退避卡死新题】** —— `src/13-answerer.js` 的 `handleDialog` 在弹窗消失时只复位 `_pendingHuman`，未清 `_cooldownUntil`。有通道弹窗转人工退避 30s 后，用户手动作答关窗、平台又弹新题，主循环因退避期直接跳过新题不答。现弹窗消失即 `_cooldownUntil = 0`，新题正常进入作答。
+- **【体验·面板测试按钮异常捕获】** —— `src/06-panel.js` 的「测试连接」按钮 `ZHS.LLM.test()` 抛错时无 try/catch，会成未捕获 Promise 拒绝且文案卡在「测试中…」。`btnTest` 改为包 try/catch，异常时显示「连接异常」并恢复，仅告警不卡死。
+- **【体验·按钮 loading 异常捕获】** —— `withLoading` 原只 `try{await fn()}finally{...}` 无 catch，`btn-next/btn-answer` 内 reject 会冒泡成未捕获拒绝。现加 `catch` 仅告警，按钮仍正常复原。
+- **【体验·面板自愈清全屏状态】** —— `refresh` 面板被移除后重挂时未清全屏状态机（`_fsState/_fsTimer/_fsFailedNotice/_fsBoundDocs`），重挂后全屏逻辑以旧状态运行、失效 document 累积。现重挂前复位这些字段，避免误导降级提示。
+- **【清理·删除死字段】** —— 移除 `src/13-answerer.js` 全程只写不读的 `_lastDialogSig`，减少误导维护者的状态噪音。
+
+### 测试
+- 既有回归（259 项）全绿；本轮改动集中在课程中心去重/选择器、弹题退避复位、面板异常捕获，门禁以 `check-dist-fresh` + 全量 `test/run.js` 验证 dist 与 src 同步、核心逻辑无回归。
+
+---
+
 ## [0.6.9] - 2026-09-19
 > round-7 审查修复：polymas 课程断点串台/去重失效 + 课程中心 98~99% 死循环 + 面板挂不上整脚本不跑 + 面板被移除后静默消失。
 

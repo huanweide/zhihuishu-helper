@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.9
+// @version      0.6.10
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.9";
+window.__ZHS_BUILD__.version = "0.6.10";
 
 /* ===== 00-config.js ===== */
 /**
@@ -3603,6 +3603,13 @@ window.__ZHS_BUILD__.version = "0.6.9";
           if (this._root.parentNode) this._root.parentNode.removeChild(this._root);
           this._root = null;
           this._shadow = null;
+          // round-8 B3：重挂前清掉全屏状态机残留，避免旧状态误导降级提示/失效 document 绑定
+          try {
+            this._fsState = '';
+            if (this._fsTimer) { clearTimeout(this._fsTimer); this._fsTimer = null; }
+            this._fsFailedNotice = false;
+            if (this._fsBoundDocs) this._fsBoundDocs = [];
+          } catch (e) {}
           this.mount();
         } catch (e) { ZHS.Log.debug('面板自愈重挂失败：' + e.message); }
       }
@@ -4289,6 +4296,12 @@ window.__ZHS_BUILD__.version = "0.6.9";
     // 那会与平台的 window.open 叠加，开出两个学习页标签（宁可少开，不可多开）。
     ZHS.Log.info('[课程中心] 已点击卡片，等待新标签页接管（由学习页回写确认）');
     bumpStat('hopped');
+    // round-8 M2：记录待确认跳转，防「点击后新标签没起来」导致该课永远不学也不失败（由看门狗清理）
+    try {
+      const st = readStore();
+      st.pendingHop = { courseId: id, at: Date.now(), settled: false };
+      writeStore(st);
+    } catch (e) {}
     return true;
   }
 
@@ -6636,6 +6649,8 @@ ${question}${optionText}
       if (!root) {
         // 弹窗已消失（人工答完/平台收走）→ 复位待人工标记，让下一道题正常走流程
         this._pendingHuman = false;
+        // round-8 A1：弹窗消失即解除退避，否则退避期内新弹题会被跳过且不答（旧题卡死新题）
+        this._cooldownUntil = 0;
         return;
       }
 
@@ -6952,7 +6967,6 @@ ${question}${optionText}
 
     /** 重置弹题签名（切课后调用） */
     reset() {
-      this._lastDialogSig = '';
       this._answeredSig = '';
       this._skippedSigs = new Set();
       this._lastSkipWarnAt = 0;

@@ -483,6 +483,12 @@
     // 那会与平台的 window.open 叠加，开出两个学习页标签（宁可少开，不可多开）。
     ZHS.Log.info('[课程中心] 已点击卡片，等待新标签页接管（由学习页回写确认）');
     bumpStat('hopped');
+    // round-8 M2：记录待确认跳转，防「点击后新标签没起来」导致该课永远不学也不失败（由看门狗清理）
+    try {
+      const st = readStore();
+      st.pendingHop = { courseId: id, at: Date.now(), settled: false };
+      writeStore(st);
+    } catch (e) {}
     return true;
   }
 
