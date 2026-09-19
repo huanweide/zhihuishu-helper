@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.6
+// @version      0.6.7
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.6";
+window.__ZHS_BUILD__.version = "0.6.7";
 
 /* ===== 00-config.js ===== */
 /**
@@ -1056,6 +1056,7 @@ window.__ZHS_BUILD__.version = "0.6.6";
 
     /** 统计三态数量 */
     breakdown() {
+      this.ensureCatalogLoaded();   // 补全虚拟滚动目录，避免漏算未完成节而误判「全部看完」
       const list = this.scan();
       const out = { total: 0, done: 0, undone: 0, locked: 0, na: 0 };
       for (const it of list) {
@@ -1080,7 +1081,8 @@ window.__ZHS_BUILD__.version = "0.6.6";
      * 跳过 done（已完成）和 locked（未解锁，点了也没用）
      */
     findNext(fromEl) {
-      const all = this.items();
+      // 第一轮：基于「当前已渲染的 DOM 快照」查找
+      let all = this.items();
       if (!all.length) return null;
 
       const pickable = (el) => this.statusOf(el) === STATUS.UNDONE;
@@ -1095,6 +1097,22 @@ window.__ZHS_BUILD__.version = "0.6.6";
         if (pickable(all[i])) return all[i];
       }
       // 2. 从头补漏（前面可能有跳过的）
+      for (let i = 0; i < Math.min(startIdx, all.length); i++) {
+        if (pickable(all[i])) return all[i];
+      }
+
+      // 【round-5 修复 · 对应「不能跳转下一集」候选根因】
+      // 第一轮没找到 → 目录可能是「虚拟滚动」，后面的未完成课时根本还没渲染进 DOM。
+      // 主动触发懒加载把目录补全，再按同样逻辑找一次。
+      this.ensureCatalogLoaded();
+      all = this.items();
+      if (fromEl) {
+        const i = all.indexOf(fromEl);
+        if (i >= 0) startIdx = i + 1;
+      }
+      for (let i = startIdx; i < all.length; i++) {
+        if (pickable(all[i])) return all[i];
+      }
       for (let i = 0; i < Math.min(startIdx, all.length); i++) {
         if (pickable(all[i])) return all[i];
       }
@@ -1215,7 +1233,66 @@ window.__ZHS_BUILD__.version = "0.6.6";
     },
 
     /** 全部章节完成度统计 */
+    /**
+     * 列出当前页面里「可滚动且内容溢出」的目录容器
+     * 优先用适配器的 container 选择器，否则用一组常见目录滚动容器兜底。
+     * jsdom / 无布局环境下 scrollHeight、clientHeight 均为 0，不会命中任何容器，安全降级。
+     */
+    _scrollContainers() {
+      const sel = (this.adapter && this.adapter.container)
+        || '.catalog-scroll, .video-catalog-scroll, .el-scrollbar__wrap, [class*="catalog"], [class*="Catalog"], .chapter-list, .course-catalog';
+      return Array.from(document.querySelectorAll(sel))
+        .filter((el) => el.scrollHeight > el.clientHeight + 4);
+    },
+
+    /**
+     * 触发目录的虚拟滚动/懒加载，把「还没滚到视口、不在 DOM 里」的课时加载出来。
+     *
+     * 【round-5 修复 · 对应「不能跳转下一集」候选根因】
+     * 之前 findNext / breakdown 只基于「当前已渲染的 DOM 快照」查找。智慧树部分课程
+     * 目录是虚拟滚动：未滚动到的课时根本不在 DOM 里，于是 findNext 永远找不到后面的
+     * 未完成节，表现就是「点了下一节也没用 / 不能自动跳下一集」。
+     *
+     * 做法：对可滚动容器反复滚到底部，触发平台分批渲染；每滚一次重新统计条目数，
+     * 直到不再增长（到底或静态目录）为止。用 _catalogLoaded / _loadAttempts 双重闸门，
+     * 避免异步渲染漏抓后永久关闭补全，也防止无限抖动。
+     */
+    ensureCatalogLoaded() {
+      if (this._catalogLoaded) return;
+      this._loadAttempts = (this._loadAttempts || 0) + 1;
+      if (this._loadAttempts > 6) { this._catalogLoaded = true; return; }  // 安全上限，避免死循环
+      const boxes = this._scrollContainers();
+      let grew = false;
+      for (const box of boxes) {
+        let guard = 0;
+        while (guard++ < 60) {
+          const before = this.items().length;
+          // 往复滚动，制造多次 scroll 事件以触发分批异步渲染
+          try {
+            box.scrollTop = box.scrollHeight;
+            box.scrollTop = Math.max(0, box.scrollHeight - box.clientHeight - 1);
+            box.scrollTop = box.scrollHeight;
+          } catch (e) { /* 某些环境 scrollTop 只读，忽略 */ }
+          const after = this.items().length;
+          if (after > before) grew = true;
+          else break;  // 不再增长 → 到底或静态，停止本轮
+        }
+      }
+      if (grew) ZHS.Log.info('虚拟滚动目录已触发懒加载，目录条目已补全');
+      // 本轮仍有增长 → 保持未锁定，下次 findNext/breakdown 会继续补全；
+      // 不再增长 → 标记完成，停止滚动。
+      this._catalogLoaded = !grew;
+    },
+
+    /** 切课 / SPA 重载后清空目录加载缓存，下一门课重新触发懒加载 */
+    resetCatalogCache() {
+      this._catalogLoaded = false;
+      this._loadAttempts = 0;
+      this._sniffed = false;
+    },
+
     stats() {
+      this.ensureCatalogLoaded();   // 补全虚拟滚动目录，进度统计才准确
       const all = this.items();
       const done = all.filter((el) => this.isFinished(el)).length;
       return { total: all.length, done, percent: all.length ? Math.round((done / all.length) * 100) : 0 };
@@ -5396,19 +5473,36 @@ window.__ZHS_BUILD__.version = "0.6.6";
 
     const stats = ZHS.Catalog.stats();
     ZHS.Log.info('课程进度：' + stats.done + '/' + stats.total + ' (' + stats.percent + '%)');
+    // 成功初始化后给一个明确提示，让用户确信「脚本装上了、在干活」（回应面板首跑可见性）
+    if (ZHS.panel) ZHS.panel.alert('智慧树助手已就绪，开始自动学习', 'info', 4000);
     ZHS.Log.info('=== 初始化完成 ===');
   }
 
   /** SPA 路由变化监听：DOM 重建后重新初始化 */
   function watchSpa() {
     const onDomChange = U.debounce(() => {
+      // 切课检测：courseId 变了（SPA 不刷新页面直接换课）→ 重置目录缓存与断点上下文，
+      // 否则会残留旧课程的 courseId/lessonKey，导致 gotoNext 跳错节或把进度记到别的课。
+      const newCourseId = ZHS.Catalog.getCourseId();
+      if (newCourseId && newCourseId !== 'unknown-course' && newCourseId !== ZHS.state.courseId) {
+        ZHS.Catalog.resetCatalogCache();
+        ZHS.state.courseId = newCourseId;
+        ZHS.Log.info('检测到切换课程，已重置目录缓存与断点上下文 → ' + newCourseId);
+      }
+      // 当前课时变化（同课程内切章节，或切课后）同步 state，避免 gotoNext 用旧 lessonKey 定位错节
+      const cur = ZHS.Catalog.current();
+      const newLessonKey = cur ? ZHS.Catalog.itemTitle(cur) : null;
+      if (newLessonKey && newLessonKey !== ZHS.state.lessonKey) {
+        ZHS.state.lessonKey = newLessonKey;
+        ZHS.Log.debug('当前课时更新：' + newLessonKey);
+      }
+
       // 视频元素被替换 → 重新绑定，但不重启整套流程
       const v = document.querySelector('video');
       if (v && v !== ZHS.state.videoEl) {
         ZHS.Log.debug('检测到视频元素变化，重新绑定');
         ZHS.state.videoEl = v;
-        const cur = ZHS.Catalog.current();
-        if (cur) ZHS.state.lessonKey = ZHS.Catalog.itemTitle(cur);
+        if (newLessonKey) ZHS.state.lessonKey = newLessonKey;
         ZHS.Resume.bindVideo(v, ZHS.state.courseId, ZHS.state.lessonKey);
       }
       // 页面还没初始化但出现视频 → 补启动（含启动失败后的重试，受次数上限约束）
