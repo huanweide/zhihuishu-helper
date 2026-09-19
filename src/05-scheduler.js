@@ -41,6 +41,9 @@
   const BLOCK_GUARD_MAX_TICKS = 15;            // 阻塞弹窗连续点不掉的轮数上限
   // 切课点击「点了没动」检测：连点同一目标 N 次仍未前进则判失败停手（根治静默死循环）
   const SAME_NAV_MAX = 5;
+  // round-15【C2】：本轮「不同坏节点轮流失败」的累计上限（全局兜底）。
+  // 只靠 SAME_NAV_MAX 时，5 个不同的坏节点轮着失败永远凑不满同一目标计数 → 无声空转。
+  const NAV_FAIL_TOTAL_MAX = 8;
 
   const Scheduler = {
     _timer: null,
@@ -60,6 +63,12 @@
      */
     start(opts) {
       const manual = !!(opts && opts.manual);
+      // round-15【A2】：resume = 瞬时故障自愈后的恢复启动，区别于「全新一轮启动」。
+      // 恢复启动绝不能清零 startedAt / _completedThisRun / _navCount，
+      // 否则会连锁引发两个老毛病复发：
+      //   ①「设了看 N 节就停」——计数被清 0 后永远凑不够阈值，停止条件形同虚设；
+      //   ②总结报告里的「总耗时 / 切换课时数」只统计自愈之后的一段，明显少算。
+      const resume = !!(opts && opts.resume);
       if (this._timer) return;
       if (this._halted && !manual) {
         ZHS.Log.debug('此前已判定停止，自动启动被忽略（如需重跑请手动点「启动」）');
@@ -67,13 +76,22 @@
       }
       this._halted = false;
       ZHS.state.running = true;
-      ZHS.state.startedAt = Date.now();   // 每次启动重置计时
-      this._navCount = 0;
-      this._navFailKey = null;
-      this._navFailCount = 0;
-      this._completedThisRun = 0;         // 停止条件：本次运行完成节数
+      if (resume) {
+        ZHS.Log.info('主循环已恢复（保留本轮计时与完成计数）');
+      } else {
+        ZHS.state.startedAt = Date.now();   // 每次「全新」启动才重置计时
+        this._navCount = 0;
+        this._navFailKey = null;
+        this._navFailCount = 0;
+        this._navFailTotal = 0;             // round-15【C2】：本轮累计切课失败
+        this._completedThisRun = 0;         // 停止条件：本次运行完成节数
+      }
+      // round-15【A1】：自愈名额只在「全新一轮启动」时重置（含用户手动点「启动」）。
+      // 原先 _transientReloads 全仓库只增不减，用满 3 次后即便用户手动重启也救不回来，
+      // 第 4 次故障起永久失去自愈能力。手动启动 = 用户明确要求重来，理应重新给名额。
+      if (!resume) this._transientReloads = 0;
       this._timer = setInterval(() => this.tick(), LOOP_INTERVAL);
-      ZHS.Log.info('主循环已启动');
+      if (!resume) ZHS.Log.info('主循环已启动');
       this.preflight();                   // 启动即做一次全量体检（N1）
     },
 
@@ -212,7 +230,9 @@
       if (!v) return false;                                      // 视频还没回来，再等 DOM 变化
       this._transientReloads = (this._transientReloads || 0) + 1;
       ZHS.Log.info('检测到瞬时故障停机，视频已恢复，尝试自动重启（第 ' + this._transientReloads + ' 次）');
-      this.start({ manual: true });
+      // round-15【A2】：必须传 resume:true —— 这是「故障后的续跑」而非「新一轮」，
+      // 不能让 start 把已完成节数 / 开始时间 / 切换课时的统计清零。
+      this.start({ manual: true, resume: true });
       return true;
     },
 
@@ -524,7 +544,8 @@
             if (canHop) {
               hub.markCourseDone(ZHS.state.courseId);
               ZHS.Log.info('[课程中心] 本课程已全部学完，准备返回课程中心寻找下一门课');
-              this.stop();
+              // round-15【A4】：本课程学完回课程中心属「正当结束」，用 'condition' 与瞬时故障区分
+              this.stop('condition');
               hub.returnToHub();
             } else {
               await this.finishAll(reason);
@@ -577,12 +598,22 @@
         if (!switched) {
           // round-14【P1】：点击失败 → 课时标识必须回滚，绝不让「记错节」发生
           ZHS.state.lessonKey = _prevKey;
+          // round-15【C2】：原判据「同一目标才累加、目标一变就清零」有软死循环漏洞 ——
+          // 若目录里有 5 个不同的坏节点轮流失败，计数永远凑不满 5，于是既不停机也不前进，
+          // 无声空转。现在改为双计数：同目标连续失败（快速止损）+ 本轮累计失败（全局兜底）。
           this._navFailCount = (_targetKey === this._navFailKey ? this._navFailCount : 0) + 1;
           this._navFailKey = _targetKey;
-          ZHS.Log.warn('点击「' + _targetKey + '」后未检测到切换（第 ' + this._navFailCount + ' 次），已回滚课时标识');
-          if (this._navFailCount >= SAME_NAV_MAX) {
-            ZHS.Log.error('连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」都无反应（疑似平台改版或目录节点不可点），已停止自动跳转');
-            if (ZHS.panel) ZHS.panel.alert('切课失败：连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」无效，已停止自动跳转，请手动切换', 'error', 15000);
+          this._navFailTotal = (this._navFailTotal || 0) + 1;
+          const hitSame = this._navFailCount >= SAME_NAV_MAX;
+          const hitTotal = this._navFailTotal >= NAV_FAIL_TOTAL_MAX;
+          ZHS.Log.warn('点击「' + _targetKey + '」后未检测到切换（同目标 ' + this._navFailCount
+            + ' 次 / 本轮累计 ' + this._navFailTotal + ' 次），已回滚课时标识');
+          if (hitSame || hitTotal) {
+            const _why = hitSame
+              ? '连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」都无反应'
+              : '本轮累计 ' + this._navFailTotal + ' 次切课失败（多个节点轮番点击无反应）';
+            ZHS.Log.error(_why + '（疑似平台改版或目录节点不可点），已停止自动跳转');
+            if (ZHS.panel) ZHS.panel.alert('切课失败：' + _why + '，已停止自动跳转，请手动切换', 'error', 15000);
             // round-14：平台响应慢时也可能凑齐连点次数，属瞬时故障，允许冷却后自愈重试
             this.stop('transient');
             return;
@@ -599,8 +630,9 @@
         // round-14【P1】：确认切换成功后才写新课时标识（此时记进度才是对的）
         ZHS.state.lessonKey = _targetKey;
 
-        // 确实切过去了 → 失败计数清零
+        // 确实切过去了 → 失败计数清零（含 round-15 新增的本轮累计失败）
         this._navFailCount = 0;
+        this._navFailTotal = 0;
         this._navFailKey = null;
         this._navCount++;
         this._completedThisRun = (this._completedThisRun || 0) + 1;   // 停止条件：完成节数
@@ -686,7 +718,9 @@
       } catch (e) { /* 忽略 */ }
 
       ZHS.state.lastReport = report;
-      this.stop();
+      // round-15【A4】：finishAll 是「任务达标/全部完成」的正当结束，标 'condition' 彻底封死，
+      // 绝不能被瞬时故障自愈逻辑误判为可恢复。
+      this.stop('condition');
 
       if (ZHS.panel) ZHS.panel.showReport(report);
     },

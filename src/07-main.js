@@ -90,16 +90,23 @@
 
     // 0. 面板最先挂载：后续任何一步炸了，用户至少能看见脚本存在
     //    （原来排在第 3 步，且整条链无 try/catch → 前一步出错就永远看不到面板）
-    if (ZHS.panel) {
+    // round-15【B】：判据不能只看 `ZHS.panel` 是否为真 —— round-14 改成「先发布空对象占位」
+    // 后，即使面板模块体后半段抛异常，ZHS.panel 也是个 truthy 的空对象 {}，
+    // 于是这里会进 true 分支去调不存在的 mount()，抛 TypeError，
+    // 结果把「面板模块本身加载失败」的真实原因掩盖成「mount is not a function」，排查被带偏。
+    // 正确判据：既要有对象，也要 mount 真的是函数（即 __panel_ready 已置位）。
+    const panelUsable = !!(ZHS.panel && typeof ZHS.panel.mount === 'function');
+    if (panelUsable) {
       try { ZHS.panel.mount(); }
       catch (e) {
         ZHS.Log.warn('面板挂载失败：' + e.message);
-        showPanelMissingNotice('挂载异常');
+        showPanelMissingNotice('挂载异常：' + (e && e.message ? e.message : '未知'));
       }
     } else {
       // 挂不上必须说出来。静默跳过的话，用户眼里就是「装了跟没装一样」。
-      ZHS.Log.error('面板模块不可用（ZHS.panel 未定义），界面不会显示；核心逻辑仍会继续尝试');
-      showPanelMissingNotice('模块未就绪');
+      ZHS.Log.error('面板模块不可用（ZHS.panel 未就绪或 mount 缺失，__panel_ready='
+        + String(ZHS.__panel_ready) + '），界面不会显示；核心逻辑仍会继续尝试');
+      showPanelMissingNotice(ZHS.panel ? '模块加载中断（未完成初始化）' : '模块未加载');
     }
 
     // 1. 识别页面版本

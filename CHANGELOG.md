@@ -4,6 +4,24 @@
 
 ---
 
+## [0.6.17] - 2026-09-19
+> round-15 对抗性验证修复：针对 round-14 自身引入的 7 个缺陷（含 2 个回归）做收口。对症「设了停止条件停不住 / 统计少算 / 假成功从另一侧回流 / 切错同名节 / 无声空转」。
+
+### 修复
+- **【核心·自愈重启清零统计 · 停止条件失效】** —— `src/05-scheduler.js` 的 `tryResumeAfterTransientStop()` 调 `start({manual:true})`，而 `start()` 会无条件重置 `startedAt` / `_completedThisRun` / `_navCount`。后果：①「设了看 N 节就停」——瞬时故障自愈一次就把已完成计数清零，**永远凑不够阈值，停止条件形同虚设**（「设了停止条件停不住」直接复发）；②总结报告里的「总耗时 / 切换课时数」只统计自愈之后一段，明显少算。现给 `start(opts)` 加 `opts.resume` 语义：自愈恢复启动（`resume:true`）**保留**这三个字段，只有全新一轮启动才重置。
+- **【核心·自愈名额永不重置】** —— `_transientReloads` 全仓库只增不减，用满 3 次后即便用户手动点「启动」也救不回来，第 4 次故障起永久失去自愈能力。现改为「全新一轮启动（含用户手动启动）」时重置 `_transientReloads = 0`。
+- **【核心·假成功从另一侧回流】** —— `src/02-adapter.js` 的 `current()`（判定「当前播放的是哪一节」）原用 `document.querySelector(ad.active)` 全局查询。round-14 只收窄了 `hasActive()`，`current()` 未收窄，导致播放器控制条/顶部导航/其他 tab 里恰有带 active 且标题碰巧相同的元素时「当前项」判错 → `nowIsTarget()` / `_stillOnFrom()` 全部跟着错 → **假成功回流**（切错节判成功、完成计数虚增）。现 `current()` 同样收窄到 `ad.container` 目录容器内，并追加「命中的元素必须确实是目录条目之一」的强校验。
+- **【核心·同名节误判切错】** —— `clickAndVerify()` 的 `nowIsTarget()` 原用纯标题文本比对。智慧树「习题讲解」「章节测验」这类同名节很常见：只要第一节是 current，目标即使是第二节也会判成「已切到」→ 切错节、计数虚增。现改为**基于目录索引的元素身份比对**（`curIdx === tgtIdx`），标题比对降级为索引取不到时的兜底。
+- **【核心·第二信号退化失效】** —— `clickAndVerify()` 原判据 `hasActive(target) && !this._stillOnFrom(fromKey, titleKey)` 中，`_stillOnFrom` 在 `fromKey` 为空时**恒返回 false**，整条判据退化成「只要目标拿到 active 就算成功」→ 第二信号完全失效。现改为「基于索引的 `nowIsTarget()` 为真才算成功」，并新增 `_activeOnlyFallback()` 作为「目录索引完全不可用」时的严格兜底（须同时确认已离开原节）。
+- **【体验·面板兜底掩盖真实错误】** —— round-14 的「先发布空对象占位」使 `ZHS.panel` 恒为 truthy，`src/07-main.js` 的 `if (ZHS.panel)` 会进 true 分支去调不存在的 `mount()`，抛 `TypeError`，把「面板模块加载中断」的真实原因掩盖成「mount is not a function」。现判据改为 `ZHS.panel && typeof ZHS.panel.mount === 'function'`，并在提示条中带上真实异常信息与 `__panel_ready` 状态。
+- **【核心·无声空转】** —— `gotoNext()` 的 `_navFailCount` 原「同一目标才累加、目标一变就清零」，若目录里有多个坏节点轮流失败，计数永远凑不满 `SAME_NAV_MAX` → 既不停机也不前进的软死循环。现加双计数：同目标连续失败（快速止损）+ `_navFailTotal` 本轮累计失败（全局兜底，上限 8）。
+- **【内部·死分类】** —— `stop()` 的 `'condition'` 分类原从未被任何调用点传入（只在 JSDoc 出现）。现将全看完跳课（`gotoNext`）与 `finishAll` 两处正当结束显式标为 `'condition'`，使分类名副其实。
+
+### 测试
+- 新增 9 项 round-15 断言（自愈不清零完成计数/课时数/开始时间、手动启动重置自愈名额、同名节不误判），全量回归 **284 通过 / 0 失败**；门禁 `build` + `check-dist-fresh` + `test/run.js` 全绿。
+
+---
+
 ## [0.6.16] - 2026-09-19
 > round-14 深度审查修复（三路并行审查合并）：停机原因分类与受限自愈 + 面板「先发布后初始化」+ 课时标识回滚 + 切换验收第二信号。对症「中途停了永远不动 / 面板都没有 / 进度记错节 / 假成功假失败」。
 
