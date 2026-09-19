@@ -1058,6 +1058,47 @@ const _transient = (async () => {
   eq('手动启动后自愈名额已重置', S._transientReloads, 0);
   eq('手动启动属全新一轮，完成计数归零', S._completedThisRun, 0);
   S.stop();
+
+  // ⑧ round-16【P1/P2】核心断言（验证 worker 指出的测试盲区）：
+  //    自愈恢复必须「保留成果计数器 + 清零止损闸门」，这是两类计数器的分离语义。
+  //    原先测试完全没覆盖 resume 分支 → 绿灯但分支未验。
+  S._halted = false; S._haltReason = ''; S._transientReloads = 0;
+  S._completedThisRun = 6;      // 成果：已完成 6 节
+  S._navCount = 5;              // 成果：已切换 5 次
+  S._navFailCount = 4;          // 止损闸门：同目标已失败 4 次（危险残留）
+  S._navFailKey = '某坏节点';
+  S._navFailTotal = 7;          // 止损闸门：本轮累计失败 7 次（上限 8，危险残留）
+  const _t1 = 1700000000000;
+  win.ZHS.state.startedAt = _t1;
+  S.stop('transient');
+  S._transientStoppedAt = Date.now() - 61000;
+  eq('自愈可成功', S.tryResumeAfterTransientStop(), true);
+  eq('【P1】自愈后同目标失败计数已清零', S._navFailCount, 0);
+  eq('【P1】自愈后失败目标键已清空', S._navFailKey, null);
+  eq('【P2】自愈后本轮累计失败已清零', S._navFailTotal, 0);
+  eq('【A2】成果·完成节数仍保留', S._completedThisRun, 6);
+  eq('【A2】成果·切换课时数仍保留', S._navCount, 5);
+  eq('【A2】成果·开始时间仍保留', win.ZHS.state.startedAt, _t1);
+  S.stop();
+
+  // ⑨ round-16【P3】：自愈恢复的体检必须静默（不重复弹「开始自动学习」）
+  let alertCount = 0;
+  win.ZHS.panel = {
+    mount() {}, alert() { alertCount++; }, showReport() {},
+  };
+  S._halted = false; S._haltReason = ''; S._transientReloads = 0;
+  S.stop('transient');
+  S._transientStoppedAt = Date.now() - 61000;
+  S.tryResumeAfterTransientStop();
+  const _resumeAlerts = alertCount;
+  S.stop();
+  // 全新启动（非 resume）时才应弹提示
+  alertCount = 0;
+  S.start({ manual: true });
+  const _freshAlerts = alertCount;
+  S.stop();
+  eq('【P3】自愈恢复时体检静默（不重复弹提示）', _resumeAlerts, 0);
+  ok('【P3】全新启动仍会弹提示（保留原有 UX）', _freshAlerts > 0, String(_freshAlerts));
 })();
 
 console.log('\n=== 32. 手动答题绕过配置（面板「答题」按钮必须有效） ===');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.17
+// @version      0.6.18
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.17";
+window.__ZHS_BUILD__.version = "0.6.18";
 
 /* ===== 00-config.js ===== */
 /**
@@ -1287,6 +1287,54 @@ window.__ZHS_BUILD__.version = "0.6.17";
         } catch (e) { return false; }
       };
 
+      /**
+       * round-16【P4】第三信号：页面级「确实切走了」痕迹。
+       * 老限制：某些平台版本/改版后「目录条目根本不打 active 类」，也没有可用的
+       * current 标记 —— 此时前两个信号（索引身份 / active）全部判不出来，
+       * 于是「明明切过去了」也被判失败 → 白等 9s + 重复点 + 凑齐 5 次硬停，
+       * 而这正是触发「瞬时故障停机 → 自愈 → 立刻又停」死循环的源头。
+       * 这里补一个与目录 DOM 无关的独立证据：视频源（src）或播放器区标题发生变化，
+       * 说明页面确实换了一集。点击前先快照，点击后比对。
+       */
+      const pageMark = () => {
+        try {
+          const v = document.querySelector('video');
+          const src = v ? String(v.currentSrc || v.src || '') : '';
+          // 播放器区标题（常见于标题栏/章节名展示区）
+          let titleTxt = '';
+          try {
+            const tEl = document.querySelector('.video-title, .chapter-name, .current-chapter, .play-title, .catalogue-name');
+            titleTxt = tEl ? String(tEl.textContent || '').replace(/\s+/g, '') : '';
+          } catch (e) { titleTxt = ''; }
+          return src + '||' + titleTxt;
+        } catch (e) { return ''; }
+      };
+      const markBefore = pageMark();
+      let markChanged = false;
+      const pageSwitched = () => {
+        try {
+          const now = pageMark();
+          if (now && markBefore && now !== markBefore) markChanged = true;
+          if (!markChanged) return false;
+          // 保护：页面标记变化必须伴随「已离开切换前那一节」，否则可能只是
+          // 广告/预加载/自适应码率导致 video.src 抖动，不能当成切换成功。
+          // 目录索引/标题任一能证明「已不在原节」即可放行；都判不出来时保守返回 false。
+          if (fromKey) {
+            const cur = this.current();
+            const curKey = cur ? this.itemTitle(cur) : '';
+            if (curKey && curKey === fromKey) return false;   // 还在原节 → 不算切换
+          } else {
+            const cur = this.current();
+            if (cur) {
+              const curKey = this.itemTitle(cur);
+              // 无 fromKey 时至少要求「当前项标题等于目标标题」才认
+              if (curKey && curKey !== titleKey) return false;
+            }
+          }
+          return markChanged;
+        } catch (e) { return false; }
+      };
+
       for (let i = 0; i < tries; i++) {
         // 点击前先确认还没切过去：若上次点击其实已生效（active 只是晚几拍才落到 DOM），
         // 直接判成功即可，避免「重复点击当前节 → 平台重新加载本节」的怪象。
@@ -1298,11 +1346,13 @@ window.__ZHS_BUILD__.version = "0.6.17";
         // 「只要目标拿到 active 就算成功」= 第二信号完全失效，假成功/假失败的老问题回流。
         // 现在改成「第二信号（nowIsTarget，基于目录索引的身份比对）为真才算成功」，
         // active 只在第二信号无法判定（目录未识别）时才作为兜底。
+        // round-16【P4】：再叠第三信号 pageSwitched —— 视频源/播放器标题变了也算切成功，
+        // 治好「平台不给 active 就永远判失败」的老限制。
         if (await waitUntil(
-          () => nowIsTarget() || this._activeOnlyFallback(target, fromKey),
+          () => nowIsTarget() || this._activeOnlyFallback(target, fromKey) || pageSwitched(),
           i === 0 ? timeout : timeout * 2, 150
         )) return true;
-        if (nowIsTarget()) return true;
+        if (nowIsTarget() || pageSwitched()) return true;
         // 节点被 SPA 换掉 → 按标题重定位
         if (!target.isConnected) {
           const again = this.findByName(titleKey);
@@ -1996,8 +2046,20 @@ window.__ZHS_BUILD__.version = "0.6.17";
       }
       this._halted = false;
       ZHS.state.running = true;
+
+      // round-16【P1/P2 关键修正】：必须区分两类计数器，不能一刀切「保留」或「重置」——
+      //   · 成果计数器（startedAt / _navCount / _completedThisRun）：
+      //     自愈恢复要**保留**，否则「看 N 节就停」永远凑不够阈值、总结总耗时少算。
+      //   · 止损闸门（_navFailKey / _navFailCount / _navFailTotal）：
+      //     自愈恢复必须**清零**。它们是「连着失败就停手」的保护计数，一旦带着脏值恢复，
+      //     面对同一个坏节点时失败 1 次就立刻再次触发停机 → 60s 冷却后再自愈 → 又停，
+      //     名额耗尽后彻底死亡；用户观感正是「自动恢复后马上又停」。
+      //     止损闸门衡量的是「本轮这一段的连续失败」，恢复即视为新一段。
       if (resume) {
-        ZHS.Log.info('主循环已恢复（保留本轮计时与完成计数）');
+        this._navFailKey = null;
+        this._navFailCount = 0;
+        this._navFailTotal = 0;
+        ZHS.Log.info('主循环已恢复（保留本轮计时与完成计数，重置止损闸门）');
       } else {
         ZHS.state.startedAt = Date.now();   // 每次「全新」启动才重置计时
         this._navCount = 0;
@@ -2012,7 +2074,9 @@ window.__ZHS_BUILD__.version = "0.6.17";
       if (!resume) this._transientReloads = 0;
       this._timer = setInterval(() => this.tick(), LOOP_INTERVAL);
       if (!resume) ZHS.Log.info('主循环已启动');
-      this.preflight();                   // 启动即做一次全量体检（N1）
+      // round-16【P3】：自愈恢复时静默体检 —— 只打日志、不弹「开始自动学习」提示。
+      // 原先每次自愈都重弹一次，配合上面的失败-自愈循环会反复刷屏，反而盖住真实异常。
+      this.preflight({ silent: resume });   // 启动即做一次全量体检（N1）
     },
 
     /**
@@ -2064,14 +2128,18 @@ window.__ZHS_BUILD__.version = "0.6.17";
      * 启动预检（N1 需求）：全量扫描目录三态，报告还剩多少没看完
      * 目的：开跑前就让用户看到「哪些已完成、哪些没看完、哪些未解锁」
      */
-    preflight() {
+    preflight(opts) {
+      // round-16【P3】：silent = 自愈恢复场景调用 —— 只写日志、不弹提示。
+      // 否则每次瞬时故障自愈都会重弹一遍「检测到 N 节未看完，开始自动学习」，
+      // 配合失败-自愈循环会反复刷屏，反而把真正的异常信息淹没掉。
+      const silent = !!(opts && opts.silent);
       try {
         const cat = ZHS.Catalog;
         const bd = cat.breakdown();
 
         if (!bd.total) {
           ZHS.Log.warn('目录未识别到任何可学习节点，请确认已进入课程播放页');
-          if (ZHS.panel) ZHS.panel.alert('未识别到课程目录，请先进入具体课程', 'warn');
+          if (!silent && ZHS.panel) ZHS.panel.alert('未识别到课程目录，请先进入具体课程', 'warn');
           return bd;
         }
 
@@ -2082,7 +2150,7 @@ window.__ZHS_BUILD__.version = "0.6.17";
 
         if (bd.allDone) {
           ZHS.Log.info('课程已全部看完，无需播放');
-          if (ZHS.panel) ZHS.panel.alert('检测到课程已全部看完', 'info');
+          if (!silent && ZHS.panel) ZHS.panel.alert('检测到课程已全部看完', 'info');
           return bd;
         }
 
@@ -2091,7 +2159,7 @@ window.__ZHS_BUILD__.version = "0.6.17";
         todo.slice(0, 10).forEach((t, i) => ZHS.Log.info('  待学 ' + (i + 1) + '：' + t));
         if (todo.length > 10) ZHS.Log.info('  …另有 ' + (todo.length - 10) + ' 节');
 
-        if (ZHS.panel) {
+        if (!silent && ZHS.panel) {
           ZHS.panel.alert('检测到 ' + bd.undone + ' 节未看完，开始自动学习', 'info');
         }
         return bd;

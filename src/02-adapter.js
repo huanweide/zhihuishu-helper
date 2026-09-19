@@ -758,6 +758,54 @@
         } catch (e) { return false; }
       };
 
+      /**
+       * round-16【P4】第三信号：页面级「确实切走了」痕迹。
+       * 老限制：某些平台版本/改版后「目录条目根本不打 active 类」，也没有可用的
+       * current 标记 —— 此时前两个信号（索引身份 / active）全部判不出来，
+       * 于是「明明切过去了」也被判失败 → 白等 9s + 重复点 + 凑齐 5 次硬停，
+       * 而这正是触发「瞬时故障停机 → 自愈 → 立刻又停」死循环的源头。
+       * 这里补一个与目录 DOM 无关的独立证据：视频源（src）或播放器区标题发生变化，
+       * 说明页面确实换了一集。点击前先快照，点击后比对。
+       */
+      const pageMark = () => {
+        try {
+          const v = document.querySelector('video');
+          const src = v ? String(v.currentSrc || v.src || '') : '';
+          // 播放器区标题（常见于标题栏/章节名展示区）
+          let titleTxt = '';
+          try {
+            const tEl = document.querySelector('.video-title, .chapter-name, .current-chapter, .play-title, .catalogue-name');
+            titleTxt = tEl ? String(tEl.textContent || '').replace(/\s+/g, '') : '';
+          } catch (e) { titleTxt = ''; }
+          return src + '||' + titleTxt;
+        } catch (e) { return ''; }
+      };
+      const markBefore = pageMark();
+      let markChanged = false;
+      const pageSwitched = () => {
+        try {
+          const now = pageMark();
+          if (now && markBefore && now !== markBefore) markChanged = true;
+          if (!markChanged) return false;
+          // 保护：页面标记变化必须伴随「已离开切换前那一节」，否则可能只是
+          // 广告/预加载/自适应码率导致 video.src 抖动，不能当成切换成功。
+          // 目录索引/标题任一能证明「已不在原节」即可放行；都判不出来时保守返回 false。
+          if (fromKey) {
+            const cur = this.current();
+            const curKey = cur ? this.itemTitle(cur) : '';
+            if (curKey && curKey === fromKey) return false;   // 还在原节 → 不算切换
+          } else {
+            const cur = this.current();
+            if (cur) {
+              const curKey = this.itemTitle(cur);
+              // 无 fromKey 时至少要求「当前项标题等于目标标题」才认
+              if (curKey && curKey !== titleKey) return false;
+            }
+          }
+          return markChanged;
+        } catch (e) { return false; }
+      };
+
       for (let i = 0; i < tries; i++) {
         // 点击前先确认还没切过去：若上次点击其实已生效（active 只是晚几拍才落到 DOM），
         // 直接判成功即可，避免「重复点击当前节 → 平台重新加载本节」的怪象。
@@ -769,11 +817,13 @@
         // 「只要目标拿到 active 就算成功」= 第二信号完全失效，假成功/假失败的老问题回流。
         // 现在改成「第二信号（nowIsTarget，基于目录索引的身份比对）为真才算成功」，
         // active 只在第二信号无法判定（目录未识别）时才作为兜底。
+        // round-16【P4】：再叠第三信号 pageSwitched —— 视频源/播放器标题变了也算切成功，
+        // 治好「平台不给 active 就永远判失败」的老限制。
         if (await waitUntil(
-          () => nowIsTarget() || this._activeOnlyFallback(target, fromKey),
+          () => nowIsTarget() || this._activeOnlyFallback(target, fromKey) || pageSwitched(),
           i === 0 ? timeout : timeout * 2, 150
         )) return true;
-        if (nowIsTarget()) return true;
+        if (nowIsTarget() || pageSwitched()) return true;
         // 节点被 SPA 换掉 → 按标题重定位
         if (!target.isConnected) {
           const again = this.findByName(titleKey);

@@ -76,8 +76,20 @@
       }
       this._halted = false;
       ZHS.state.running = true;
+
+      // round-16【P1/P2 关键修正】：必须区分两类计数器，不能一刀切「保留」或「重置」——
+      //   · 成果计数器（startedAt / _navCount / _completedThisRun）：
+      //     自愈恢复要**保留**，否则「看 N 节就停」永远凑不够阈值、总结总耗时少算。
+      //   · 止损闸门（_navFailKey / _navFailCount / _navFailTotal）：
+      //     自愈恢复必须**清零**。它们是「连着失败就停手」的保护计数，一旦带着脏值恢复，
+      //     面对同一个坏节点时失败 1 次就立刻再次触发停机 → 60s 冷却后再自愈 → 又停，
+      //     名额耗尽后彻底死亡；用户观感正是「自动恢复后马上又停」。
+      //     止损闸门衡量的是「本轮这一段的连续失败」，恢复即视为新一段。
       if (resume) {
-        ZHS.Log.info('主循环已恢复（保留本轮计时与完成计数）');
+        this._navFailKey = null;
+        this._navFailCount = 0;
+        this._navFailTotal = 0;
+        ZHS.Log.info('主循环已恢复（保留本轮计时与完成计数，重置止损闸门）');
       } else {
         ZHS.state.startedAt = Date.now();   // 每次「全新」启动才重置计时
         this._navCount = 0;
@@ -92,7 +104,9 @@
       if (!resume) this._transientReloads = 0;
       this._timer = setInterval(() => this.tick(), LOOP_INTERVAL);
       if (!resume) ZHS.Log.info('主循环已启动');
-      this.preflight();                   // 启动即做一次全量体检（N1）
+      // round-16【P3】：自愈恢复时静默体检 —— 只打日志、不弹「开始自动学习」提示。
+      // 原先每次自愈都重弹一次，配合上面的失败-自愈循环会反复刷屏，反而盖住真实异常。
+      this.preflight({ silent: resume });   // 启动即做一次全量体检（N1）
     },
 
     /**
@@ -144,14 +158,18 @@
      * 启动预检（N1 需求）：全量扫描目录三态，报告还剩多少没看完
      * 目的：开跑前就让用户看到「哪些已完成、哪些没看完、哪些未解锁」
      */
-    preflight() {
+    preflight(opts) {
+      // round-16【P3】：silent = 自愈恢复场景调用 —— 只写日志、不弹提示。
+      // 否则每次瞬时故障自愈都会重弹一遍「检测到 N 节未看完，开始自动学习」，
+      // 配合失败-自愈循环会反复刷屏，反而把真正的异常信息淹没掉。
+      const silent = !!(opts && opts.silent);
       try {
         const cat = ZHS.Catalog;
         const bd = cat.breakdown();
 
         if (!bd.total) {
           ZHS.Log.warn('目录未识别到任何可学习节点，请确认已进入课程播放页');
-          if (ZHS.panel) ZHS.panel.alert('未识别到课程目录，请先进入具体课程', 'warn');
+          if (!silent && ZHS.panel) ZHS.panel.alert('未识别到课程目录，请先进入具体课程', 'warn');
           return bd;
         }
 
@@ -162,7 +180,7 @@
 
         if (bd.allDone) {
           ZHS.Log.info('课程已全部看完，无需播放');
-          if (ZHS.panel) ZHS.panel.alert('检测到课程已全部看完', 'info');
+          if (!silent && ZHS.panel) ZHS.panel.alert('检测到课程已全部看完', 'info');
           return bd;
         }
 
@@ -171,7 +189,7 @@
         todo.slice(0, 10).forEach((t, i) => ZHS.Log.info('  待学 ' + (i + 1) + '：' + t));
         if (todo.length > 10) ZHS.Log.info('  …另有 ' + (todo.length - 10) + ' 节');
 
-        if (ZHS.panel) {
+        if (!silent && ZHS.panel) {
           ZHS.panel.alert('检测到 ' + bd.undone + ' 节未看完，开始自动学习', 'info');
         }
         return bd;
