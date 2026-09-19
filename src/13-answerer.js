@@ -13,6 +13,8 @@
   const Answerer = {
     _running: false,
     _answeredSig: '',       // 已成功作答完成的弹题签名（去重跳过用）
+    _noSelfCheckSig: '',    // round-10 A3：上一轮判定「点击未生效/无法自检」的题签名
+    _noSelfCheckUntil: 0,   // round-10 A3：该判定的节流截止时间
     _skippedSigs: null,     // 无通道已跳过的弹题签名集合
     _lastSkipWarnAt: 0,     // 跳过告警节流时间戳
     _failCount: 0,          // 同一弹题连续处理失败次数
@@ -107,6 +109,14 @@
       // 每次处理新弹题都重置「无通道/无法自检」标记，避免上一题的状态污染本题
       this._noChannelThisRound = false;
       this._noSelfCheck = false;
+      // round-10 A3：上一轮已判定本题「点击未生效/无法自检」，在节流期内直接尝试关闭恢复，
+      // 跳过 ZHS.Solver.solve 重复重作答，避免反复求解刷屏；节流到期后再恢复重试。
+      if (sig && sig === this._noSelfCheckSig && Date.now() < this._noSelfCheckUntil) {
+        ZHS.Log.info('本题已判定无法自检，节流期内直接尝试关闭并恢复播放（跳过重复重作答）');
+        const ok = await this.closeDialogAndResume({ noChannel: true });
+        if (!ok) { this._resumePlay(); this._throttledSkipWarn(sig); }
+        return;
+      }
       const pages = Array.from(root.querySelectorAll('.el-pager .number'));
       let anyAnswered = false;
       let allAnswered = false;   // round-9 A2：多页弹题需全部页都答上才算完整完成
@@ -152,6 +162,9 @@
         // 下一轮主循环仍会重试关闭（节流告警），符合用户「不要停住」要求。
         // 只有「明确有通道、点击也执行了、但选项就是选不中」才转人工。
         if (this._noChannelThisRound || this._noSelfCheck) {
+          // round-10 A3：记录本题为「无法自检/无通道」，下一轮节流跳过重复重作答
+          this._noSelfCheckSig = sig || '';
+          this._noSelfCheckUntil = Date.now() + 30000;
           const ok = await this.closeDialogAndResume({ noChannel: true });
           if (ok) {
             this._answeredSig = sig || '';
@@ -175,6 +188,9 @@
       // 有通道但部分页点不上 → 转人工保留弹窗补全。
       if (!allAnswered) {
         if (this._noChannelThisRound || this._noSelfCheck) {
+          // round-10 A3：记录本题为「无法自检/无通道」，下一轮节流跳过重复重作答
+          this._noSelfCheckSig = sig || '';
+          this._noSelfCheckUntil = Date.now() + 30000;
           const ok = await this.closeDialogAndResume({ noChannel: true });
           if (!ok) { this._resumePlay(); this._throttledSkipWarn(sig); }
           // 注意：不置 _answeredSig，下一轮 handleDialog 回来继续补答剩余页
@@ -376,6 +392,8 @@
     /** 重置弹题签名（切课后调用） */
     reset() {
       this._answeredSig = '';
+      this._noSelfCheckSig = '';
+      this._noSelfCheckUntil = 0;
       this._skippedSigs = new Set();
       this._lastSkipWarnAt = 0;
       this._failCount = 0;
