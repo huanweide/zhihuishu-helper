@@ -4,6 +4,200 @@
 
 ---
 
+## [0.6.26] - 2026-09-19
+> 第七轮。**方案 D 主路径的短路漏洞**（team-lead 实测挖出）：0.6.25 的 `_anchoredOptions` 主路径「逐层向上、**第一圈命中就 return**」——而 `_siblingsAfter` 只在**同一父节点的直接兄弟**里选组，题干与噪声常**同父**（如 `<div class="wrap"><div class="q-title">题干</div><div class="it">A. 上一节课程回顾</div><div class="it">B. 下一节课程预告</div></div>`，真选项在 `.wrap2`）。此时第一圈就命中噪声并 return → **离题干近的噪声永远赢**，方案 D 反而比方案 C 更危险（C 至少在全树里打分选优）。本轮修主路径短路 + 元信息标签组误判。
+
+### 修复
+- **【主路径短路 → 逐层收集 + 统一打分】** —— 主路径不再「命中即 return」，而是**逐层收集**所有候选组（含退化路径候选），带层级 `up` 进候选池后**统一打分选优**；层级只作**极轻量 tie-break**（`- up * 0.1`，5 层最多影响 0.5，**永远不可能翻转** `scoreOptionGroup` 的项数差 2 项 1000 vs 3 项 300）。实测：场景①（题干+同父噪声，真选项在另一容器）0.6.25 返回 `["A. 上一节课程回顾","B. 下一节课程预告"]` → 0.6.26 返回 `["甲说法","乙说法"]`。
+- **【独立选项容器优先于「题干行」】** —— 修短路后仍不足：噪声 `A. 上一节课程回顾/B. 下一节课程预告` 与真选项**同为 2 项、内容分基座相同**，噪声却带 `A./B.` 前缀（+20）且更长（+0.14）→ 内容分反而**高 20.14**，`up` 的 0.1 级 tie-break 根本压不住。新增结构先验：给每个候选标记 `ownRow`（组父 === 题干父，即「题干所在那一行」）；**只要存在「非题干行」的候选组（≥2 项）就整批优先取它**，把题干行候选排除 —— 因为**真选项有专属容器**（`.opt-list`/`.wrap2`），噪声只会与题干同处一行。若不存在独立容器候选（如题干与选项**直接并列**），仍退回题干行，不破坏合法布局。
+- **【元信息标签组误判 → `META_RE`】** —— 题干之后紧跟的常是「题型 / 分值 / 难度」元信息，且**同父同 tag 同 class**（`<div class="tag">单选题</div><div class="tag">2分</div>`）→ 满足结构对称判据，被方案 B/C/D 当成选项组。新增 `META_RE = /^(单选题|多选题|判断题|填空题|简答题|选择题|不定项选择题|\d+\s*分|难度[:：]?.*|【.*】)$/`，在 `_cleanGroup`（B/C/D 共用管线）里**整组命中即弃用**。实测：场景②（题干后元信息标签组）0.6.25 返回 `["单选题","2分"]` → 0.6.26 返回 `["甲说法","乙说法"]`。
+
+### 测试
+- `test/run.js` **32r** 段新增 4 条（㉖~㉙，共 29 条 + 1 性能）：
+  - **㉖ 题干后同父噪声**（★可证伪，复刻 team-lead 场景①）：题干与噪声同父、真选项在另一容器 → 读到真选项、不含 `A. 上一节课程回顾`；
+  - **㉗ 元信息标签组**（★可证伪，复刻 team-lead 场景②）：题干后紧跟 `单选题/2分` 标签组 → 跳过标签、读到真选项；
+  - **㉘ 层级 tie-break 不翻转项数差**（直测纯函数）：`score(2项@5层) > score(3项@0层)`；
+  - **㉙ 位置约束**（直测方案 D 本体 `_anchoredOptions`）：题干位于容器末尾、其**前**有对称噪声组 → D 本体返回 0 项，**不回头**收题干之前的组。
+    - 为什么直测 D 本体而非 `readOptions` 终值：D 返回 `[]` 后 `readOptions` 会**继续**落到方案 C（全树猜测，本就无「题干之后」位置先验）；测终值等于在测 C，测不出 D 的契约。新增 `runCaseAnchored` 辅助函数专测 D 本体。
+- **回退验证（硬要求）**：新建 **0.6.25 快照 `.src_0625/`**（自检身份：含 `1000` 项数基数、`JUDGE_SYMBOLS`、`_anchoredOptions` 的短路 `return found`，均命中），在其上实测 ㉖ 读到 `["A. 上一节课程回顾","B. 下一节课程预告"]`、㉗ 读到 `["单选题","2分"]`（**均失败，符合预期**）；修复后二者通过。
+- 全量回归 **421 通过 / 0 失败**；门禁 `node build.js` + `node tools/check-dist-fresh.js` + `node test/run.js` 全绿。凭据扫描 0 命中。
+- 顺带删除冗余探针 `probe_d.js` / `probe_r5.js`。
+
+---
+
+## [0.6.25] - 2026-09-19
+> 第六轮，**换策略**：不再在方案 C 上继续加判据，而是新增**方案 D「题干锚定」**并用**位置先验**取代全树猜测。五轮下来（0.6.19→0.6.24）方案 C 每加一层判据就冒一个新洞，根因是它在做「全树无差别猜测」——扫描整棵子树找「长得整齐的兄弟组」，噪声和选项在全树范围内**平权**，只能靠越来越长的黑名单碰运气。但真实页面里选项的位置是固定的：题干读到 → 选项就在**同一题目容器内、题干之后**。本轮同时修掉验证员第五轮抓到的 4 个 P1。
+
+### 新增
+- **【方案 D · 题干锚定】`_anchoredOptions(scope, titleEl)` + `_siblingsAfter(parent, anchor)`** —— 用位置先验读选项：
+  1. `titleEl` 为空 → 返回 `[]`，交给方案 A/B/C；
+  2. 从 `titleEl.parentElement` 起**逐层向上最多 5 层**，在每层的 `children` 里找「**位于 titleEl 之后**、同 tag + 同 class 且连续」的一组兄弟（≥2）→ 命中即返回；
+  3. 向上 5 层无果 → 退化：在 `scope` 内按**文档序**收集「题干之后、与题干无包含关系」的元素，按「父+tag+class」分组后用**打分制**选最优组。
+  - 关键差别：噪声（分页器/步骤条/面包屑）要么在题干之前、要么不在同一层，**位置先验天然把它们排除**，不再依赖黑名单。
+- **【优先级重排】** `readOptions` 新次序：**标准读 → 方案 D（最高优先，位置先验）→ 方案 A（文本正则）→ 方案 B（结构对称）→ 方案 C（全树猜测，最后兜底）**。**D 一旦读到 ≥2 就直接返回，不再跑 A/B/C**。
+- **【统一过滤管线】`_cleanGroup(g)`** —— 方案 B/C/D 共用一套否决规则，集中一处避免三条通道各写一份、判据漂移。
+
+### 修复（验证员第五轮 4 个 P1）
+- **【P1① 阻塞·弹窗嵌在 `video-js` 容器内 → 所有真选项被 `inNoiseContainer` 杀死】** —— 旧 `inNoiseContainer` 从元素自身一路爬 **40 层祖先**逐个 class 匹配；实测弹题弹窗极可能挂在播放器容器（`video-js`/`prism-player`）内部，一旦命中 → 弹窗内**所有真选项**被判噪声 → `texts=[]` → 全平台弹题读不到。**修法**：黑名单**只看元素自身 className，不再爬祖先链**（「祖先是不是播放器」交给方案 D 的位置判据），并新增 `NOISE_CLASSES` 兜底成员级判定。实测 0.6.24 `[]` → 0.6.25 `["甲说法","乙说法"]`。
+- **【P1② 打分权重非单调·前缀奖励压过项数基数】** —— 旧权重 `2项=100/3项=30/4项=10，前缀每个+40`：`[3项带 A./B./C. 前缀] = 30+120 = 150` **盖过** `[2项真选项] = 100` → 实测点了面包屑上的「A. 首页」。**修法·权重单调化**：项数基数 2项=**1000**/3项=300/4项=100；前缀每个 +10 且**最多计 2 个**（上限 +20）；长度 `lenSum/100`；**删掉 depth tie-break**（深度是噪声的帮凶）。单调性约束：`2项最小 1000 > 4项满前缀最大 100+20+len/100 < 150`。实测 0.6.24 `["A. 首页","B. 课程","C. 章节"]` → 0.6.25 `["说法一是对的","说法二也是对的"]`。
+- **【P1③ NAV 回退豁免了页脚按钮组】** —— 旧逻辑「摘完导航词不足 2 → 回退为不摘」时**跳过**「全操作词否决」，导致页脚 `[上一题][下一题]` 被送去解题、**真点「上一题」**（会切页/交卷），比修前「读空不动作」更糟。**修法**：回退分支补一条 `allBtn && allAct`（整组都是 `<button>`/`[role=button]` **且**文本全 ∈ ACTION_WORDS → 仍弃组）；「剩余全操作词」否决只在**未回退**时生效（保住真题「返回/继续学习」测 ⑯）。实测 0.6.24 `["上一题","下一题"]` → 0.6.25 `[]`。
+- **【P1④ `√`/`×` 被两条判据互相打死】** —— `OPTION_TEXT_RE` 第 ④ 分支明确认 `√|×` 是判断题选项，但 `isSingleNoiseToken('√')` 返回 `true`、且 `looksLikeNoiseTexts` 把「全符号组」判噪声 → 真选项被自己人杀掉。**修法**：新增判断题符号白名单 `JUDGE_SYMBOLS = ['√','×','✓','✗']`，`isSingleNoiseToken` **放行**、`looksLikeNoiseTexts` 的「全符号组」判定**豁免**；同时按 P1④ 要求**删掉 `isSingleNoiseToken` 里的 `/^\d$/` 分支**（全数字已由组级 `looksLikeNoiseTexts` 挡，成员级再挡会把 `["1","说法二"]` 这类真题误杀）。实测 0.6.24 `[]` → 0.6.25 `["√","×"]`。
+- **【P2 · `13-answerer.js` 缺 root null 保护】** —— `root.querySelector` 前补 `root && root.querySelector`，与同函数 `readCurrent(root)` 的容忍度一致（避免 `root` 为 null 时 TypeError）。
+
+### 测试
+- `test/run.js` **32r** 段新增 8 条（⑱~㉕，共 25 条 + 1 性能），全部从真实入口 `handleDialog` 发起：
+  - **⑱ 方案 D 题干锚定**（★可证伪）：题干前放一组「2 项、带 A./B. 前缀、更长」的对称噪声、题干后放真选项 → 读到题干后的真选项（无位置先验时方案 C 必然错选前缀噪声）；
+  - **⑲ D 优先于 C**（★可证伪）：题干前 2 项带前缀噪声 + 题干后 2 项真选项 → 读到真选项；
+  - **⑳ video-js 祖先**：弹窗嵌在 `video-js` 内、选项是普通 `.opt-item` → 读到 2 项（P1① 核心）；
+  - **㉑ 打分单调性**（直测纯函数）：`score(2项无前缀) > score(4项带4前缀)`；
+  - **㉒ 前缀噪声不再胜出**：3 项带前缀噪声 + 2 项真选项 → 读到真选项；
+  - **㉓ NAV 回退不豁免按钮组**：正文内 `[上一题][下一题]`（button）→ 读到 0、`solve` 不调、`clickOption` 零次；
+  - **㉔ √/× 判断题**：选项 `√`/`×` → 读到 2 项；
+  - **㉕ 单数字选项保留**：选项组 `["1","说法二"]` → 读到 2 项。
+  - **回退验证（硬要求）**：⑱⑲⑳ 在 **0.6.24 快照上实测失败**（⑱ 读到 `["A. 上一节课程回顾","B. 下一节课程预告"]`、⑲ 读到 `["A. 章节一知识点回顾","B. 章节二知识点预告"]`、⑳ 读到 `[]`），修复后全部通过。
+- 全量回归 **413 通过 / 0 失败**；门禁 `node build.js` + `node tools/check-dist-fresh.js` + `node test/run.js` 全绿。凭据扫描 0 命中。
+- 顺带删除冗余探针 `probe5.js`（职责与 `test/run.js` 32r 段重叠）。
+
+---
+
+## [0.6.24] - 2026-09-19
+> 第五轮。第四轮给方案 C 加的判据仍不够「正向」：`_autoSiblings` 在实测里**又被页码顶掉真选项** —— 0.6.23 上，DOM 里同时存在 `.el-pager`（分页器，3 个 `.number`）与 `.opt-list > .opt-item`×2（真选项）时，`readOptions().texts` 返回 `["2","3"]`（页码！），真选项 `["说法一是对的","说法二也是对的"]` 全丢 → 命中分页器就能「点页码切页」而不是答题。本版给方案 C 装三道**正向判据 + 打分制**，并修掉一处由此引入的单汉字选项误杀回归。
+
+### 修复
+- **【P1 阻塞·方案 C 的「谁长谁赢」让噪声结构必胜】** —— 旧 `_autoSiblings` 用 `if (deduped.length > best.length) best = deduped;` 取最优组，**比谁成员多**；任何 3~4 项对称结构（分页器/步骤条/选项卡/面包屑/视频控制条）天生比 2 项真选项长，长度优先等于「噪声必胜」。实测 0.6.23 六种噪声结构全部返回噪声文本。**修法：三道正向判据 + 打分制**
+  1. **①语义黑名单 `NOISE_CLASSES` + `inNoiseContainer(el)`**：对元素自身**及祖先链**（最多 40 层）逐 className 做**分词精确匹配**（`(' '+cls+' ').includes(' '+name+' ')`，比子串安全，`el-step` 不会误伤 `el-stepper`）。名单含 `el-pager / el-step / el-steps / el-tabs__item / el-tabs__nav / el-breadcrumb / el-rate / el-menu / el-menu-item / el-pagination / el-carousel / el-collapse-item / el-timeline-item / vjs-control-bar / vjs-control / prism-player / video-js / dplayer / artplayer / plyr__controls / courseware-menu`。组内任一成员命中 → **整组弃用**。为什么必须黑名单：结构整齐 ≠ 是选项，纯结构判据分不出「3 个页码」和「3 个选项」。
+  2. **②内容形状过滤 `looksLikeNoiseTexts(texts)`**：组内文本**全为纯数字** `/^\d+$/` → 分页器；**全为纯符号** `/^[^\p{L}\p{N}]+$/u` → 图标组；任一命中 → **整组弃用**。成员级另有 `isSingleNoiseToken(t)` 挡「单数字/单符号」（页码「2」、图标「?」）。
+  3. **③打分制 `scoreOptionGroup(texts, depth)` 取代「谁长谁赢」**：2 项 +100 / 3 项 +30 / 其余 +10（2 项最像 A/B 单选）；每个命中 `OPTION_TEXT_RE` 的前缀成员 +40（A./B. 是强正向信号）；文本长度做弱正向（`Σ min(len,50)/50`）；深度做同分 tie-break（保留「内层覆盖外层」原意）。`if (score > bestScore) { best = deduped; bestScore = score; }`。判据①②③在 `_symmetricOptions`（方案 B）与 `_autoSiblings`（方案 C）里**同步生效**。
+  4. **④`readOptions` 合并收紧**：方案 C 只在「方案 A/B 颗粒无收」时才用 —— `if (picked.length < 2 && auto.length >= 2) els = auto; else if (picked.length > els.length) els = picked;`（避免噪声组与真选项等长时互相顶掉）。
+  5. **⑤NAV_WORDS 回退（`fellBack`）**：摘导航词后若剩余 < 2 → **回退为不摘**，且回退时**跳过**「全操作词」一票否决 —— 否则真题选项恰好是「返回 / 继续学习」会被整组读空（测试⑯）。
+  6. **⑥深度触顶一次性告警**：`_autoSiblings` 统计 `overDepth`（深度 > `AUTO_MAX_DEPTH=6` 被跳过的节点数），`_depthWarned` 保证只打一条 `ZHS.Log.warn`，便于线上排查「某些弹窗读不到选项」是否因深度不够。
+- **【回归修复·单汉字选项被 `t.length <= 1` 误杀】** —— 引入①②时，`_autoSiblings` 成员级校验写成 `if (!t || t.length > 200 || t.length <= 1) { okGroup = false; }`，**「长度 ≤1 一律拒」把「甲」「乙」这类单汉字合法选项也杀了**（性能用例 `/50 装饰节点 + .opt-item 甲/乙` 实测 `texts=[]`、`solve=0`）。**修法**：抽 `isSingleNoiseToken(text)` —— 只挡**形状**为单数字 `/^\d$/` 或单符号 `/^[^\p{L}\p{N}]$/u` 的 token，单字母（A/B）与单汉字（甲/乙）保留。
+
+### 测试
+- `test/run.js` **32r** 段新增 7 条（⑪~⑰，共 20 条 + 1 性能），全部从真实入口 `handleDialog` 发起：
+  - **⑪ 分页器回归（可证伪）** `.el-pager` 3 页码 + 真选项×2 → 读到 2 个真选项、不含纯数字，且 `clickOption` 实参不含纯数字；
+  - **⑫ 步骤条** `.el-step`×4 + 真选项×2 → 读到真选项、不含「步骤一」；
+  - **⑬ 选项卡** `.el-tabs__item`×3 + 真选项×2 → 读到真选项、不含「标签一」；
+  - **⑭ 视频控制条** `button.vjs-control`×4 + 真选项×2 → 读到真选项、不含「播放」；
+  - **⑮ 纯数字组单独存在** → 读到 0、`solve` 不被调用；
+  - **⑯ NAV 回退** 真题「返回 / 继续学习」→ 仍读到 2 项（专防回退逻辑被「全操作词」否决杀掉）；
+  - **⑰ 打分制** 无前缀对称噪声×3 + 带 `A./B.` 前缀真选项×2 → 选中前缀那 2 个。
+  - **回退验证（硬要求）**：⑪ 在 0.6.23 代码上**实测失败**（返回 `["2","3"]` 页码），修复后通过。
+- 全量回归 **397 通过 / 0 失败**；门禁 `node build.js` + `node tools/check-dist-fresh.js` + `node test/run.js` 全绿。凭据扫描 0 命中。
+
+---
+
+## [0.6.23] - 2026-09-19
+> 第四轮验证员 `ab-dialog-verify` 在 0.6.22 上又抓到两条 P1，都出在「选项组识别」上：**导航词混入选项**（会真点到「下一题」切页/交卷）与**跨父串组**（两个无关容器的候选被并成一组）。本版逐条修复。
+
+### 修复
+- **【P1 阻塞·混合组「2 真选项 + 上一题/下一题」未被剔除，`Solver.solve` 拿 4 项解题、`Filler.clickOption` 会真点到导航词】** —— 方案 B（`_symmetricOptions`）与方案 C（`_autoSiblings`）此前都用 `texts.every(t => ACTION_WORDS.includes(t))` 判断「是不是页脚按钮组」，**只挡「全员皆操作词」**。实测 DOM `<div class="list"><div class="option">选项一</div><div class="option">选项二</div><div class="option">上一题</div><div class="option">下一题</div></div>` → `readOptions().texts = ["选项一","选项二","上一题","下一题"]`（4 项）→ 真实平台上 `clickOption` 会点到「下一题」**切页/交卷**。
+  **修法·两层词表 + 成员级摘除**：新增 `NAV_WORDS`（`上一题/下一题/继续学习/返回/我知道了/知道了/提交答案`，**永远不可能是选项**）。两组判据统一改为：
+  1. 先**逐个摘掉** `NAV_WORDS` 成员；
+  2. 摘完剩余 < 2 → 弃用该组（全导航条）；
+  3. 剩余成员**若全是** `ACTION_WORDS`（关闭/确定/提交/取消…）→ 仍弃用（页脚按钮组）；
+  4. 否则保留。**刻意不用 `some` 一票否决整组**——那会把「选项文本恰好是『确定』」的真题误杀（测试⑩「确定 / 不正确」仍须读到 2 个，本版已验证保留）。
+- **【P1 阻塞·`_symmetricOptions` 分组键用父节点「下标」当身份，跨父串组】** —— 旧代码 `const gk = 'P' + Array.from(p.parentNode.children).indexOf(p) + '|' + ...`：`indexOf(p)` 是「父在**它自己的父**里的下标」。两个完全无关的容器，只要各自都是其父的第 0 个子，`gk` 就相同 → 候选被并成一组（实测 4 个选项被并成 1 组 4 项，文本混合）。同时 `:412` 的 `p === el.parentElement ? ... : ''` 是**恒真死条件**（`p` 就是 `el.parentElement`），一并删除。
+  **修法**：新增模块级 `WeakMap` 父身份分配器 `parentIdOf(el)`（全局唯一自增序号，WeakMap 自动回收、`reset` 无需清理），`gk = parentIdOf(p) + '|' + el.tagName + '\u0001' + (el.className||'')`。这才是真正的「同一父节点」语义。
+- **【方案 A 同步收紧·文本通道剔除操作词】** —— `readOptions` 的通道①筛选从 `OPTION_TEXT_RE.test(t)` 改为 `OPTION_TEXT_RE.test(t) && ACTION_WORDS.indexOf(t) < 0`，避免文本通道也捞到页脚按钮。
+
+### 测试
+- `test/run.js` **32r** 段新增 4 条（共 13 条 + 1 性能），全部从真实入口 `handleDialog` 发起，且给 `Filler.clickOption` 加了 **spy 记录实参文本**：
+  - **⑦ 关键回归（可证伪）**：混合组「2 选项 + 上一题 + 下一题」→ `texts` 只剩 2 个、不含导航词、**`clickOption` 实参不含「上一题/下一题」**；
+  - **⑧ 跨父串组**：两个无关容器各 2 个同 tag 同 class 候选（各为其父第 0 子）→ `_symmetricOptions` 不得并成 4 项、`readOptions` 不得并成 4 项；
+  - **⑨ 负例**：全操作词组「关闭/提交」→ 读到 0、`solve` 不被调用；
+  - **⑩ 反向保护**：真题「确定 / 不正确」→ 仍读到 2 个（专防把 `.every` 改成 `.some` 的过度修复）。
+  - **回退验证（硬要求）**：⑦⑧ 在 0.6.22 代码上**实测失败**（`382 通过 / 2 失败` 与后续 `378/4`），修复后通过（`382/0`）——证明测试能真正证伪、未绕开路由层。
+- 全量回归 **382 通过 / 0 失败**；门禁 `node build.js` + `node tools/check-dist-fresh.js` + `node test/run.js` 全绿。凭据扫描 0 命中。
+
+---
+
+## [0.6.22] - 2026-09-19
+> 第四轮探针挖出**第三轮才暴露的真 P1**：宽口径选项候选 `candidates` 由 `WIDE` class 白名单产出，只要选项是「纯 div/span/p + 自定义 class」（`.opt-item`/`.answer-item`/`.xx-option`/裸 `<p>`），`WIDE` 命中 **0** → 方案 A（文本正则）与方案 B（结构对称）**共用同一候选列表、同时空转** → 读不到选项 → `solve=0` → 又只乱猜。这正是用户报障「有的题目你没答」的真实成因。本版新增**方案 C：结构对称自动发现**，彻底摆脱对 class 白名单的依赖。
+
+### 修复
+- **【P1 阻塞·WIDE class 白名单漏掉自定义 class 选项，方案 A/B 双双空转】** —— `readOptions` 内两条宽口径通道都建立在 `candidates = scope.querySelectorAll(WIDE)` 之上，而 `WIDE = 'button,.btn,[role=button],.option,.option-item,.choice,.choice-item,.answer-option,.topic-item,.el-radio,.el-checkbox,label,li'`。实测：`<div class="opt-item">` / `<div class="xx-option">` / `<span class="answer-item">` / 裸 `<p>甲</p><p>乙</p>` 全部 `WIDE` 命中 **0** → 正则过滤无输入、结构对称无候选 → `texts=[]` → `solve=0`。**修法（方案 C）**：新增 `_autoSiblings(scope)`，**不依赖任何 class 白名单**，直接在 `scope` 子树里按「同父节点 + 同 tagName + 同 className + 子元素数量 2~4」自动发现兄弟选项组。接入通道优先级：标准读 → 方案 A 文本正则 → 方案 B 结构对称 → **方案 C 自动发现**，最后仍 `if (picked.length > els.length) els = picked`。三条通道互不干扰、逐级兜底。
+  - **误报过滤（逐条实测）**：① 父节点**含直接文本节点** → 判为题干/标题容器排除（防负例「以下哪项不是 `<span>TCP</span> <span>UDP</span> <span>HTTP</span>` 的特点？」里 3 个 `.kw` span 顶掉真选项）；② 子元素**含嵌套块级元素**（`div/section/article/ul/ol/table/dl/form`）→ 排除题干容器；③ 文本集合 size < 2 → 排除布局重复；④ 全为操作词（关闭/确定/提交…）→ 排除页脚按钮组；⑤ 文本长度 > 200 → 排除整段题干。
+  - **分组键用「tagName + className」而非只按 tag**：真实布局里选项常与题干容器**平级**（`<div class="q-title">题干</div><div class="xx-option">甲</div><div class="xx-option">乙</div>`），只按 tag 分组会让 `q-title` 混进来凑成 3 个不同 class 的 DIV、整组被否；按 tag+class 分组后两个 `.xx-option` 自成一组正确识别。
+  - **性能红线**：`_autoSiblings` 每轮 `readOptions` 只对 `scope` 子树按 `children` 做**一趟**分组（O(节点数)），深度上限 `AUTO_MAX_DEPTH = 6` 层，不做全树两两比较。实测：50 个装饰节点弹窗下 `readOptions` 单次 **≈ 0.64ms**（×200 次平均），主循环 2s 一轮无压力。
+
+### 测试
+- 新增 `test/run.js` **32r**（**9 条**断言 + 1 条性能红线），全部从真实入口 `ZHS.Answerer.handleDialog` 发起（不直接调 `readOptions`，避免绕过路由层）：
+  - ① `<div class="opt-item">×2` → 读到 2、`solve` 调用 1 次、答案 B 被点选；
+  - ② `<span class="answer-item">×2` → 读到 2、`solve` 1 次；
+  - ③ 裸 `<p>×2` → 读到 2、`solve` 1 次；
+  - ⑥ 选项与题干平级（`.xx-option` 直接挂在 body 下）→ 读到 2、`solve` 1 次（锁死 tag+class 分组）；
+  - ④ **负例**：题干内 `<span class="kw">TCP/UDP/HTTP</span>` ×3 + 真选项 ×2 → 仍读到 2 且不含 kw 关键词；
+  - ⑤ **负例**：`<button>关闭</button><button>提交</button>` → 读到 0、`solve` 不被调用；
+  - 性能：50 装饰节点下读到 2 个选项，单次 `readOptions` < 20ms（实测 0.64ms/次）。
+- 全量回归 **371 通过 / 0 失败**；门禁 `node build.js` + `node tools/check-dist-fresh.js` + `node test/run.js` 全绿。凭据扫描 0 命中。
+
+---
+
+## [0.6.21] - 2026-09-19
+> 第二轮对抗复核（ab-dialog-verify2）判定 0.6.20 **仍不能发布**：0.6.20 引入的宽口径选项正则只修好一半，`\s` 是**必需**的（不在 `?` 里），导致「纯 A/B」「长句选项」「中文序号选项」三种真实形态仍读不到选项 → `solve=0` → 依然只乱猜；另发现 `close()` 的全局兜底会点到弹窗外、32k 未覆盖真实路由层。本版逐条修复。
+
+### 修复
+- **【P1 阻塞·宽口径正则 `\s` 必需，三种真实形态仍读不到选项】** —— 0.6.20 的判定式 `^([abAB][.、,:：)]?\s|对$|错$|正确|错误|是$|否$|√|×)` 中 `\s` 落在可选组**之外**、是**必需**的：`A/B` 后面必须再有空白才匹配。实测 `"A"→false`、`"A."→false`、`"A、对"→false`（分隔符后直接接汉字）、`"选项一"→false`、`"智慧树可以倍速播放"→false` → `readOptions().texts=[]` → 路由到 `_tryNonStandardAB` → 入口条件 `optTexts.length >= 2` 为假 → `solve=0` → 仍只乱猜。**这正是用户最初抱怨的「没在读题、没在答题，只是乱点」。** **修法（方案 A+B 同时上）**：
+  - **方案 A（放宽正则）**：改写为四分支 `OPTION_TEXT_RE = /^(?:[abAB][.、,:：)）]?\s*$ | [abAB](?![\p{L}])[.、,:：)）]\s*\S | [abAB](?![\p{L}])[.、,:：)）]?[^\p{L}\p{N}]\s*(?![A-Za-z])\S | 对$|错$|正确|错误|是$|否$|√|×)/u`。① 允许「纯 A/B」带分隔符与尾空白（`\s*$`，`\s` 不再必需）；②「A/B + 分隔符 + 内容」；③「A/B + 空白/标点 + 非拉丁字母内容」，用 `(?![\p{L}])` 与 `(?![A-Za-z])` 两道前瞻排除 `Apple`/`A组`/`A group` 这类英文词/词头误报；④ 保留对/错/正确/错误/是/否/√/× 判断题关键字。
+  - **方案 B（结构对称白名单）**：新增 `_symmetricOptions(candidates)`——同一父节点下、同 `tagName`、同 `className`、数量恰为 2~4 的一组元素即视为选项组，专兜「选项一/选项二」这类既无 A/B 前缀、也无对错关键字的长句选项。**只在方案 A 颗粒无收（<2）时才启用**，避免与文本通道打架；排除「整组都是 关闭/确定/提交… 操作词」和「整组文本全相同」两种情况，防止把页脚按钮组当选项。
+  - 两条通道都在 `readOptions` 内，标准通道读不足 2 个时才启用；`readCurrent` 复用 `readOptions`，因此修正后**三种形态均回归标准链**，`_tryNonStandardAB` 退回为真正的**最后兜底**（不再被常规形态触发）。
+- **【P2·`close()` 全局越界兜底会点到弹窗外同名控件】** —— `close()` 的候选选择器循环末尾有一句 `btn = document.querySelector(sel)`，当弹窗内没有 `.el-dialog__close` 而页面别处有时，会**跨出弹窗**点到外部元素（实测外部元素被点 1 次）→ 误关/误点其他弹窗或页面控件。**修法**：该兜底**仅在 `r === document` 时执行**；当 `r` 是弹窗元素时，改为 `r.closest('.el-dialog__wrapper')` 限定在**本弹窗的 wrapper 内**查找，绝不跨出。
+- **【P3·32k 测试绕过真实路由层】** —— 32k 直接调用 `_tryNonStandardAB`，未覆盖 `handleDialog` 的路由；路由层若再退化不会被这 7 条断言发现。**修法**：新增 32p，从**真实入口 `handleDialog`** 发起，覆盖「纯 A/B」「选项一/选项二」「长句选项」三种形态，每条都断言 **`Solver.solve` 被调用 ≥1**、答案元素被点击选中、弹窗确实关闭，并**记录实际路由**（`readCurrent().options.length >= 2` → 标准链 / 否则 → `_tryNonStandardAB`），把路由事实锁进测试而非假设。
+
+### 测试
+- 新增 `test/run.js` **32p**（handleDialog 入口 · 三种难形态 · 共 9 条）与 **32q**（正则边界逐串 · 共 9 条）两段断言。
+  - **32p**：三种形态 `solveCalls >= 1`、答案 B 被点选、选对后关闭、实际路由 = 标准链（因 `readOptions` 喂给 `readCurrent`）。
+  - **32q**：直接断言生产正则本身（经只读暴露 `Dialog._optionTextRe()`，**不经过**方案B 对称通道，否则 `Apple` 会被对称通道捡回来、正则漏报就测不出）。**必须命中**：`"A"`、`"A."`、`"A.对"`、`"A、对"`、`"A 说法"`、`"A. 说法"`；**必须不命中**：`"Apple"`、`"A组"`、`"AB"`。这 9 条专门盯死「将来手滑把 `\s` 改回必需」。
+- 全量回归 **358 通过 / 0 失败**；门禁 `node build.js` + `node tools/check-dist-fresh.js` + `node test/run.js` 全绿。凭据扫描 0 命中。
+
+---
+
+## [0.6.20] - 2026-09-19
+> 收口 0.6.19 的验证问题：独立对抗性复核（ab-dialog-verify）用 jsdom 实测判定**不能发布**，挖出 1 条 P1 阻塞 + 3 条 P2 + 2 条 P3。核心结论是「弹窗能识别了，但**依然不读题**」——用户核心诉求「能答就答对再关」并未真正实现。本版逐条修复。
+
+### 修复
+- **【P1 阻塞·`_tryNonStandardAB` 第一段是不可达死代码，真求解从未执行】** —— 进入该函数的条件是 `readCurrent().options.length === 0`（`13-answerer.js` 非标准判定），而第一段作答入口条件却是 `options.length >= 2`，**两者互斥** → 第一段永不执行。验证员实测：直接调用该函数，`ZHS.Solver.solve` 调用次数 = **0**，只有乱点 2 次。即用户要的「能检测出题目、答出来再关」在该链路上**完全没实现**，只能靠猜。**根因**是把「标准选择器读不到选项」错当成「这题没有选项」——按钮式/div 式 A/B 题（选项是 `button`，没有 `.el-radio`）标准选择器读不到，但它确实有选项、确实可作答。
+  **修法**：在 `08-questions.js` 新增对外入口 `Dialog.readOptions(root)`，返回 `{ elements, texts }`，**独立于 `readCurrent().options` 是否为空**：先复用标准通道，读不足 2 个时再走「宽口径选择器（`button/.btn/[role=button]/.option/.choice/label/li` 等，限定在 `.el-dialog__body` 内并用 A/B 文本前缀过滤）」。`_tryNonStandardAB` 第一段改为：用 `readOptions` 独立取选项元素与文本，**入口条件改为 `title && optTexts.length >= 2`**（与「进入本函数的原因」自洽），点击元素用自己读出的 `optEls`（不再用 `q.elementList`，因后者与 `options` 同源、必然为空），并加索引越界守卫。题干新增兜底链：标准题面 → `.el-dialog__title` → `.el-dialog__body` 文本。
+- **【P2·`root()`/`present()` 只取第一个 `.el-dialog`，多弹窗并存拿错容器、与守卫判据错位】** —— 真实页面里设置窗/公告/提示弹窗同样用 `.el-dialog`，谁排在前面谁被选中：拿到设置窗 → 题干读成「设置」；更糟的是 `present()` 返回 false 而调度器守卫（全量扫描 `hasStructurallyVisible`）返回 true → **两侧判据错位**，误报「请手动选 A 或 B」并暂停视频空跑。**修法**：`root()` 改为遍历全部候选，按「题目特征分」排序取最高（同时有题干+选项=3 > 只有选项=2 > 只有题干=1），全为 0（纯公告/设置窗）则返回 null；`present()` 改为「存在任一『像题的』可见弹窗即为 true」，与守卫判据对齐。
+- **【P2·题干回退 `.el-dialog__title` 导致签名撞车，「只有第一题会答」复发】** —— 无标准题面的弹窗题干回退成「课中答题」这类固定文案 → 同课多道题签名全相同 → 第二道起被 `sig === _answeredSig` 误判「已作答跳过」。**修法**：`handleDialog` 算签名时叠加选项文本 —— `JSON.stringify(snapshot.map(s => (s.title||'') + '|' + (s.options||[]).join(',')))`。选此方案而非「不把弹窗标题当题干」，是因为题干本身对题库/LLM 匹配仍有价值（`title` 参与求解），不该为了签名而牺牲它；而「题干+选项」才是题的真实指纹，选项文本足以区分同标题下的不同题。
+- **【P2·`.el-dialog__wrapper{display:none}` 判为「仍在」】** —— Element UI 关闭弹窗的真实形态之一是把隐藏加在 **wrapper** 上（而非 `.el-dialog` 自身），而 `isStructurallyVisible` 只查计算样式、在 jsdom 下拿不到，`stillPresent()` 误判 true → 误报「弹窗关不掉」、`_failCount` 递增、误转人工告警。**修法**：新增 `hasInlineHidden(el)`，只查 **inline `style` 属性**并**遍历整条祖先链**（`display === 'none' || visibility === 'hidden'`），`root()`/`present()` 统一经 `visibleForDialog()` 过滤。刻意**不调 `getComputedStyle`**：jsdom 无布局引擎，会给出错误答案，而平台真实关闭往往就是写 inline style。
+- **【P3·`_textHost` 取到「存在但为空」的 `.el-radio__label`，选项被合并成 1 个】** —— 文字放在 `__label` 外的兄弟节点时，`querySelector(...) || el` 会因为节点存在而选中它 → 选项文本全空 → 被文本去重合并成 `[""]`。**修法**：取到 `__label` 后**校验文本非空**，为空则退回整个元素。
+- **【P3·标准路径仍用裸 `flex.click()`】** —— `_solveCurrentPage` 的 `flex.click()` 对标准 `.topic-item` 够用，但对 Element UI 的 `.el-radio`（外层 label 拦住点击、真正生效的是内层 `.el-radio__input`）常常点不上，且元素已被选中时裸点击会把它**取消**（无防取消保护）。**修法**：改走 `ZHS.Filler.clickOption(flex)`，与 A/B 兜底路径统一（内含已选中防取消 → 点内层 `__input` → `input.checked` 兜底 → 重试）。同时把 `(clicked || isChecked) && isChecked` 的判据显式改为「只认 `isChecked`，`clicked` 仅用于日志」——该表达式在布尔代数上**等价于 `isChecked`**，`clicked` 被完全短路，写成原样会让读者误以为它参与判定。
+- **【验证期新发现·`close()` 点到「包住按钮的容器」而非按钮，导致弹窗关不掉】** —— 修 P1 后写端到端测试时实测暴露：兜底关闭逻辑按「文本匹配 + 最长/最短排序」选元素，而 `.el-dialog__footer`（DIV）与它内部的 `<button>关闭</button>` 文本**同为"关闭"**、长度并列（都是 2）→ DIV 排在前面被选中 → 点击落在**容器**上（不冒泡到按钮的 click 处理器）→ 弹窗永远关不掉、误报转人工。另实测 `innerText` 在 jsdom 恒为 `undefined`，旧排序用 `(a.innerText||'').length` 把所有候选算成长度 0 → 排序随机化。**修法**：文本读取统一走 `innerText ?? textContent`；过滤后优先取**真控件**（`button`/`a`），并**剔除「包住了其他候选」的外层容器**（`el.contains(other)`），只留最内层元素。
+
+### 测试
+- 新增 `test/run.js` 32k～32o 五段共 **23 条**断言，其中 32k 直击本轮 P1：
+  ① **32k「按钮式 A/B 弹窗真求解可达」**——构造选项为 `<button>`（无 `.el-radio`）的弹窗，断言 `readOptions` 能独立读出 2 个选项、**`Solver.solve` 被实际调用 ≥1 次**（上轮此处为 0，正是 316/0 全绿却功能未实现的盲区）、答案 B 被按索引正确点击且自检通过（`answeredCount +1`）、选对后弹窗真的被关闭；
+  ② **32l** 多 `.el-dialog` 并存（设置窗排在前面）时 `root()` 选中含题目特征的题窗、`readCurrent()` 读到的是题面而非「设置」；
+  ③ **32m** 题干相同、选项不同的两份弹窗签名必须不同，且签名包含选项文本；
+  ④ **32n** wrapper 打 inline `display:none` / `visibility:hidden` 后 `present()`、`stillPresent()` 为 false、`root()` 返回 null；
+  ⑤ **32o** `.el-radio__label` 存在但为空时不产生 `[""]`、选项数仍为 2。
+  全量回归 **339 通过 / 0 失败**；门禁 `build` + `check-dist-fresh` + `test/run.js` 全绿。
+
+---
+
+## [0.6.19] - 2026-09-19
+> 课中弹题专项修复：Element UI 的「选对才能关」A/B 简单答题此前**整条链路完全不可达**（脚本只是乱点）。对症用户原话「猜两次可以，问题是脚本没有在答这种题——它只是乱点；如果你能检测出题目、能答出来，那就答对再关」。
+
+### 修复
+- **【核心·弹题容器选择器漏掉 Element UI 弹窗，导致答题链路不可达】** —— `src/08-questions.js` 的 `DialogQuestions.root()` 与 `src/05-scheduler.js` 的守卫 2 选择器都只认 `#playTopic-dialog, [class*="topic-dialog"]`，而这类弹窗渲染成 `.el-dialog__wrapper .el-dialog`（class 里不含 `topic-dialog` 子串）→ `root()` 返回 null、`present()` 恒 false → 主循环守卫 2 进不去 → `handleDialog` 不被调用 → 答题器、A/B 兜底逻辑全部**不可达**。现选择器扩为 `#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog`；并抽成共享常量 `ZHS.Const.QUESTION_SELECTORS`（定义于 `src/01-util.js`），`src/05-scheduler.js` 与 `src/08-questions.js` 同源取值 + 字面量兜底，彻底根治「两份选择器不同步 → 一边认为是弹题、另一边找不到容器」的错位（历史事故就是漏同步造成的）。不用 `:not([style*="display:none"])` 这类伪类过滤，沿用现有的 `U.isStructurallyVisible()` 做可见性判定，避免个别环境查询伪类抛异常。
+- **【核心·present() 认不出 Element UI 弹窗】** —— `present()` 原先只找 `.topic-item, .topic-title, ul li`，Element UI 结构的 A/B 弹窗一个都不匹配 → 即使 `root()` 命中也会判「没有弹题」。现追加 `.el-radio, .el-checkbox, .el-dialog__body, .el-dialog__title`。仍要求「容器内确实有可作答内容」而不是「容器存在即算」，避免把页面共用的 `.el-dialog`（公告/提示条）误当弹题频繁暂停视频。
+- **【核心·题干读不到 → 所有答题通道被拦】** —— 题干选择器原为 `.topic-title, .topic-content, .topic-question`，读不到 `.el-dialog__body` 里的题面 → `title=''` → `ZHS.Solver.solve` 的题库通道（`&& question` 判据）与 LLM 通道双双被拦，等于「有答案通道也用不上」。现优先读 `.el-dialog__body .question-topic / .topic-content`，保留原选择器兜底，最后以 `.el-dialog__title` 兜底（注意不用弹窗标题当题干，它只是线索）。
+- **【核心·选项读重复导致点错位置】** —— 旧选择器 `... .el-radio, ... .radio > label` 会**同时命中同一个选项**（Element UI 的 `.el-radio` 外层就是 label）→ `querySelectorAll` 返回 `[A,B,A,B]` → `Bank.toIndexes` 按答案算出的索引点到错误项、甚至把已选中项点成取消。现改为「Element UI 专属优先（`div.el-dialog__body .el-radio/.el-checkbox`）+ 标准结构兜底」两段式，并新增 `_dedupeOptions()` 双重去重（包含关系 + 文本去重）；取文本时若存在 `.el-radio__label` 则优先取它，避免外层 label 夹带页脚噪声文本。
+- **【核心·A/B 兜底逻辑是纯瞎点，改为「先真求解、再猜两次」】** —— `src/13-answerer.js` 的 `_tryNonStandardAB` 原先只扫文本前缀 → `Math.random()<0.5` → `pick.click()` → 试关，全文没有 `Solver.solve` / `Bank.toIndexes` / `Filler.isChecked`（用户原话「它只是乱点」）。现改为两段式：①**真作答**——`readCurrent` 读题干+选项 → `Solver.solve` → 按答案索引点击 → `Filler.isChecked` 自检选中态，自检通过才 `answeredCount++` 并关闭弹窗；②**兜底猜**——第一段任何一步失败（读不到题/求解返回 null/自检不过）都不 return、不硬关，落到随机猜，且最多 **2 轮**（先随机选一个试关，失败换另一个再试），对应「猜两次可以」。两轮都关不掉才放弃转人工。
+- **【核心·裸 `li, label` 选择器命中弹窗页脚噪声】** —— 兜底路径的 `optSel` 原含裸 `li, label`，弹窗页脚/按钮条本身也是 li/label，`slice(0,2)` 会把它们当选项点掉（「只是乱点」的另一半来源）。现只保留 `.el-radio, .el-checkbox, [role="radio"], [role="option"], .option-item, .choice-item, .answer-option`。
+- **【核心·Element UI 选项点外层 label 不生效】** —— 兜底点击从裸 `pick.click()` 改为 `ZHS.Filler.clickOption(pick)`：内置「点内层 `.el-radio__input` + `input.checked` 兜底 + 重试」三段式；为此在 `src/12-filler.js` 把 `clickOption` 暴露到 `ZHS.Filler`（原先仅模块内私有，导致答题器只能用裸 click）。真作答路径同样改用它。
+- **【核心·去重签名读空导致「只有第一道弹题会答」】** —— 验证时实测发现的连带缺陷：`DialogQuestions.collect()` 的 `title` 被 `handleDialog` 拿去当**作答去重签名**（`JSON.stringify(snapshot.map(s => s.title))`），而 `collect()` 用的是旧的题干选择器 → 每道 `.el-dialog` 题都产出同一个空签名 `'[""]'` → 答完第一道后，**后续任意弹题都会被 `sig === _answeredSig` 判为「已作答完成」直接跳过**，用户侧表现就是「只有第一道题会答，后面的又不理了」。现 `collect()` 改为复用 `readCurrent()` 的读取逻辑（题干 + 选项 + elementList 同源），保证「签名读到的题面」与「真正作答时读到的题面」完全一致，并同步输出 `options` / `elementList`。
+- **【健壮性·同一弹窗重复计入已答题数】** —— 标准链路（`_solveCurrentPage`）先答上并 +1，若因平台拒绝而关闭失败，会落到 A/B 兜底路径**再答一次又 +1**，同一个弹窗在总结报告里算两道题。现新增 `_countedSig`（本轮已计数的弹窗签名），同一签名只累加一次。
+- **健壮性·弹题自动答题配置字段与调用点不一致（D 项）】** —— `handleDialog(opts)` 的守卫是 `if (!manual && !ZHS.config.autoAnswer) return`，但**调用方**（`src/05-scheduler.js` 守卫 2）在进入前已用 `ZHS.config.autoAnswer && cfg.answerDialog` 双重校验——即「弹题自动答」子开关只被调用方检查，`handleDialog` 自己没查。两者目前等价（都只在守卫 2 内被调用），但函数是 public API（面板「答题」按钮也可直接调用），一旦将来有第二处调用就会绕开子开关，在用户关掉「课中弹题自动答」的情况下悄悄答题。现改为 `if (!manual && (!ZHS.config.autoAnswer || !ZHS.config.answerDialog)) return`（与 `handleHomework` 的同款写法对齐），并把调度器的 `handleDialog()` 显式写成 `handleDialog({ manual: false })` 表明调用意图。语义说明：`autoAnswer` 是「AI 答题总开关」，`answerDialog` 是「课中弹题」子开关，二者都需为真。
+
+### 测试
+- 新增 `test/run.js` 32g / 32h / 32i / 32j 四段共 **23 条**断言：按 Element UI 真实 DOM（`label.el-radio > span.el-radio__input > input.el-radio__original` + `span.el-radio__label`）构造 `.el-dialog` A/B 弹窗，验证 ① `root()` 命中 `.el-dialog` 容器、`present()` 为真、`scene()` 返回 `'dialog'`、共享常量含 `.el-dialog`；② 从 `.el-dialog__body .question-topic` 读到题干、从 `.el-radio__label` 读到 A/B 两个选项且**不重复**、`elementList` 与 `options` 一一对应；③ 选项选择器重叠（`.el-radio` 与 `.radio > label` 同时命中同一项）时去重为 2 个；④ 作答去重签名可区分不同弹题（`collect()` 能读出 Element UI 题面、两道不同题的签名不同）；⑤ 弹题自动答题双开关守卫（子开关 false 不进入流程 / 总开关 false 不进入流程 / 两个都真进入流程 / `manual:true` 绕过开关）。全量回归 **316 通过 / 0 失败**；门禁 `build` + `check-dist-fresh` + `test/run.js` 全绿。
+- 端到端行为验证（本地 jsdom 桩，未纳入单测）：模拟「只有选中正确项才能关闭」的平台规则，实测三条路径均符合预期——①正确答案来自题库 → 选中 A 自检通过 → 关闭成功 → `answeredCount=1`（不重复计数）；②无答题通道 → 兜底猜：第一次猜错、换第二个猜对关闭成功；③两次都猜错 → 转人工（`_pendingHuman=true` + 加入 `_giveUpSigs` + 面板提示手动选 A/B）。
+
+---
+
 ## [0.6.18] - 2026-09-19
 > round-16 第三轮对抗复核收口：针对 round-15 自身新引入的 3 个缺陷（P1/P2/P3）+ 1 个老限制（P4）做修复。对症「自愈之后反而更容易死 / 恢复一次就刷屏 / 平台不打 active 就判切换失败」。
 

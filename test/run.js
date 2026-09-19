@@ -1309,10 +1309,942 @@ const _dupname = (async () => {
   eq('同名节且未真正切换 → 判为失败（不假成功）', switched, false);
 })();
 
+console.log('\n=== 32g. Element UI 弹窗识别 + .el-radio 选项读取（round-17 修复） ===');
+const _abDialog = (async () => {
+  // 用户反馈的弹窗形态：Element UI .el-dialog，「选对才能关」的 A/B 二选一简单题。
+  // 关键点：class 里没有 topic-dialog 子串，题干/选项都在 Element UI 自己的结构里。
+  // 结构严格照 Element UI 真实 DOM 写：label.el-radio > span.el-radio__input > input.el-radio__original
+  //                                             + span.el-radio__label（选项文字）
+  const html = `<html><body>
+    <div class="el-dialog__wrapper">
+      <div class="el-dialog" style="width:520px">
+        <div class="el-dialog__header">
+          <span class="el-dialog__title">课中答题</span>
+          <button class="el-dialog__headerbtn"><i class="el-dialog__close"></i></button>
+        </div>
+        <div class="el-dialog__body">
+          <div class="question-topic">下列说法是否正确：智慧树课程可以倍速播放。</div>
+          <label class="el-radio">
+            <span class="el-radio__input"><input class="el-radio__original" type="radio" name="ab"></span>
+            <span class="el-radio__label">A. 说法正确</span>
+          </label>
+          <label class="el-radio">
+            <span class="el-radio__input"><input class="el-radio__original" type="radio" name="ab"></span>
+            <span class="el-radio__label">B. 说法错误</span>
+          </label>
+        </div>
+        <div class="el-dialog__footer">
+          <button>关闭</button>
+        </div>
+      </div>
+    </div>
+    <video></video>
+  </body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=abd1');
+  const Z = win.ZHS;
+  const D = Z.Questions.Dialog;
+
+  // 1) 识别链路：.el-dialog 容器必须被 root() 命中（修复前返回 null，整条答题链路不可达）
+  const elDlg = win.document.querySelector('.el-dialog');
+  ok('root() 命中 .el-dialog 容器', D.root() === elDlg,
+    D.root() ? '命中了 ' + D.root().className : '返回 null');
+  eq('present() 对 Element UI A/B 弹窗返回 true', D.present(), true);
+  eq('scene() 返回 dialog', Z.Questions.scene(), 'dialog');
+  // 共享常量必须与调度器同源（两处不同步 = 守卫挡掉答题链路）
+  eq('ZHS.Const.QUESTION_SELECTORS 含 .el-dialog', /\.el-dialog/.test(Z.Const.QUESTION_SELECTORS), true);
+
+  // 2) 题干与选项读取
+  const q = D.readCurrent(elDlg);
+  ok('从 .el-dialog__body .question-topic 读到题干', q.title.indexOf('智慧树课程可以倍速播放') >= 0,
+    JSON.stringify(q.title));
+  eq('选项数量为 2（不重复）', q.options.length, 2, JSON.stringify(q.options));
+  eq('选项 A 文本取 .el-radio__label', q.options[0], 'A. 说法正确');
+  eq('选项 B 文本取 .el-radio__label', q.options[1], 'B. 说法错误');
+  eq('elementList 与 options 一一对应（可按下标点击）', q.elementList.length, 2);
+  ok('elementList[0] 是 .el-radio 元素本身', q.elementList[0].classList.contains('el-radio'));
+  eq('题型推断为判断/单选（两个选项）', q.type === 'judgement' || q.type === 'single', true);
+})();
+
+// 同名选项文本重复出现时（选择器重叠产生重影）必须去重成 2 个，否则索引会点错位置
+console.log('\n=== 32h. 选项选择器重叠去重（round-17 修复） ===');
+const _abDedupe = (async () => {
+  // 旧选择器同时写 `.el-radio` 与 `.radio > label`，且 Element UI 外层 label 自带 .radio 类时，
+  // querySelectorAll 会返回 [A,B,A,B]；这里显式构造这种「同一个选项被两条路径命中」的极端 DOM。
+  const html = `<html><body>
+    <div id="playTopic-dialog">
+      <div class="topic-title">下列哪个是正确答案？</div>
+      <ul>
+        <li class="topic-item">A. 选项一</li>
+        <li class="topic-item">B. 选项二</li>
+      </ul>
+      <div class="el-radio"><label>A. 选项一</label></div>
+      <div class="el-radio"><label>B. 选项二</label></div>
+    </div>
+    <video></video>
+  </body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=abd2');
+  const q = win.ZHS.Questions.Dialog.readCurrent(win.document.querySelector('#playTopic-dialog'));
+  eq('文本去重后只剩 2 个选项', q.options.length, 2, JSON.stringify(q.options));
+  eq('保留的是 ul .topic-item 里的 A', q.options[0], 'A. 选项一');
+  eq('保留的是 ul .topic-item 里的 B', q.options[1], 'B. 选项二');
+  eq('elementList 同步去重', q.elementList.length, 2);
+})();
+
+// 回归：collect() 的 title 是作答去重签名，必须能读出 Element UI 弹窗题面。
+// 若读空，每道 .el-dialog 题签名都是 '[""]' → 答完第一道后其余弹题全被误判「已作答」跳过。
+console.log('\n=== 32i. 弹题去重签名可区分不同题（round-17 回归） ===');
+const _abSig = (async () => {
+  const mk = (t) => `<html><body>
+    <div class="el-dialog__wrapper"><div class="el-dialog"><div class="el-dialog__body">
+      <div class="question-topic">${t}</div>
+      <label class="el-radio"><span class="el-radio__label">A. 对</span></label>
+      <label class="el-radio"><span class="el-radio__label">B. 错</span></label>
+    </div></div></div><video></video></body></html>`;
+  const e1 = makeEnv(mk('题目一：倍速播放可否'), 'https://studyvideoh5.zhihuishu.com/stuStudy?sig=1');
+  const snap1 = e1.win.ZHS.Questions.Dialog.collect();
+  ok('collect() 能读出 Element UI 弹窗题面（非空）', !!snap1.length && !!snap1[0].title,
+    JSON.stringify(snap1.map((s) => s.title)));
+  eq('collect() 同步读出选项', snap1[0].options.length, 2);
+  const sig1 = JSON.stringify(snap1.map((s) => s.title)).slice(0, 200);
+  const sigEmpty = JSON.stringify(['']);
+  ok('签名不是空签名（空签名会让后续弹题被误跳过）', sig1 !== sigEmpty, sig1);
+
+  const e2 = makeEnv(mk('题目二：完全不同的一道题'), 'https://studyvideoh5.zhihuishu.com/stuStudy?sig=2');
+  const snap2 = e2.win.ZHS.Questions.Dialog.collect();
+  const sig2 = JSON.stringify(snap2.map((s) => s.title)).slice(0, 200);
+  ok('两道不同弹题签名不同（第二道不会被当成已作答跳过）', sig1 !== sig2, sig1 + ' vs ' + sig2);
+})();
+
+// 回归：handleDialog 的守卫必须同时看「总分开关 autoAnswer」与「课中弹题子开关 answerDialog」。
+// 只查总开关时，任何绕开调度器守卫的新调用点都会在用户关掉子开关后仍然自动答题。
+//
+// 断言口径说明：jsdom 不实现真实 radio 的选中行为，`Filler.isChecked` 在无桩环境下恒 false，
+// 因此不能用 answeredCount 判断「有没有进入答题流程」。改用可观测的日志判据：
+// 被守卫拦下时**不会**出现「检测到课中弹题，开始自动作答」；越过守卫进入流程时一定会出现。
+console.log('\n=== 32j. 弹题自动答题双开关守卫（round-17 回归） ===');
+const _abGuard = (async () => {
+  const html = `<html><body>
+    <div class="el-dialog__wrapper"><div class="el-dialog"><div class="el-dialog__body">
+      <div class="question-topic">开关守卫测试题</div>
+      <label class="el-radio"><span class="el-radio__label">A. 对</span></label>
+      <label class="el-radio"><span class="el-radio__label">B. 错</span></label>
+    </div></div></div><video></video></body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?guard=1');
+  const Z = win.ZHS;
+  Z.setConfig({ bankEnabled: false, llmEnabled: false, debug: false });
+  Z.Solver.solve = async () => ({ answer: 'A', from: 'bank:stub' });
+  Z.state.running = true;
+
+  const logs = [];
+  const oi = Z.Log.info.bind(Z.Log);
+  Z.Log.info = (...a) => { logs.push(a.join(' ')); return oi(...a); };
+  const entered = () => logs.filter((l) => l.indexOf('开始自动作答') >= 0).length;
+
+  // ① 总开关开、子开关关 → 必须不进入答题流程
+  Z.setConfig({ autoAnswer: true, answerDialog: false });
+  Z.Answerer._answerDialog = Z.Answerer._answerDialog.bind(Z.Answerer);
+  await Z.Answerer.handleDialog({ manual: false });
+  eq('answerDialog=false 时不进入作答流程（子开关生效）', entered(), 0);
+
+  // ② 总开关关、子开关开 → 必须不进入答题流程
+  Z.setConfig({ autoAnswer: false, answerDialog: true });
+  await Z.Answerer.handleDialog({ manual: false });
+  eq('autoAnswer=false 时不进入作答流程（总开关生效）', entered(), 0);
+
+  // ③ 两个都开 → 应当进入作答流程
+  Z.setConfig({ autoAnswer: true, answerDialog: true });
+  Z.Answerer._cooldownUntil = 0;
+  await Z.Answerer.handleDialog({ manual: false });
+  ok('两个开关都为真时进入作答流程', entered() >= 1, '未进入（守卫拦得过头了）');
+
+  // ④ 手动触发 → 绕过配置（用户点了按钮就要答）
+  Z.setConfig({ autoAnswer: false, answerDialog: false });
+  Z.Answerer._cooldownUntil = 0;
+  Z.Answerer._giveUpSigs = new Set();
+  Z.Answerer._answeredSig = '';
+  const beforeManual = entered();
+  await Z.Answerer.handleDialog({ manual: true });
+  ok('manual=true 时绕过两个开关（用户主动点「答题」即作答）',
+    entered() > beforeManual, '手动触发被守卫拦下了');
+})();
+
+// ★ 核心回归（round-18 P1）：按钮式 A/B 弹窗（选项是 button、无 .el-radio）必须能真正调 Solver.solve。
+// 上轮 316/0 全绿却功能未实现，根因就是没有这条断言 —— 进入 _tryNonStandardAB 的条件
+// 与第一段入口条件互斥，真求解成了死代码。这条测试专门盯住「solve 有没有被调用」。
+//
+// 【本条覆盖范围说明（round-19 补充）】本段**直接调用 `_tryNonStandardAB`**，
+// 刻意绕过 _answerDialog 的路由层，用于锁死「该函数内部第一段可达」这一件事。
+// 「真实入口 handleDialog 下的路由是否正确」由下面 32p / 32q 两段覆盖 —— 两者互补，不要混淆。
+console.log('\n=== 32k. A/B 弹窗真求解可达（round-18 P1 死代码回归；直接调用 _tryNonStandardAB） ===');
+const _abSolveReachable = (async () => {
+  // 关键：选项是 <button>，没有 .el-radio / .el-checkbox → 旧 readCurrent().options 为空，
+  // 只有走 _tryNonStandardAB 这条链；且必须由 readOptions 的宽口径通道读出 2 个选项。
+  const html = `<html><body>
+    <div class="el-dialog__wrapper"><div class="el-dialog">
+      <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+      <div class="el-dialog__body">
+        <div class="el-dialog__title">按钮AB题</div>
+        <button class="option-btn">A. 说法正确</button>
+        <button class="option-btn">B. 说法错误</button>
+      </div>
+      <div class="el-dialog__footer"><button>关闭</button></div>
+    </div></div>
+    <video></video>
+  </body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?absolve=1');
+  const Z = win.ZHS;
+  Z.setConfig({ bankEnabled: false, llmEnabled: false, debug: false });
+  // 停掉主循环：否则调度器守卫会并发调用 handleDialog，把 answeredCount 多加一次
+  // （这是测试环境串扰，不是被测逻辑的问题；真实运行时守卫与本题走的是同一把 _running 锁）
+  if (Z.Scheduler && Z.Scheduler.stop) Z.Scheduler.stop('user');
+  Z.Answerer._running = false;
+  Z.state.running = true;
+
+  // 统计 solve 调用次数 + 记录传入的题干/选项
+  const solveCalls = [];
+  Z.Solver.solve = async (req) => {
+    solveCalls.push(req);
+    return { answer: 'B', from: 'bank:stub' };
+  };
+  // 桩：让 button 点击后带 is-checked 类，模拟真实选中自检通过
+  const btns = Array.from(win.document.querySelectorAll('.option-btn'));
+  for (const b of btns) {
+    b.addEventListener('click', function () { this.classList.add('is-checked'); });
+  }
+  // 桩：选中任一选项后关闭按钮才生效（模拟「选对才能关」）
+  win.document.querySelector('.el-dialog__footer button').addEventListener('click', () => {
+    if (win.document.querySelector('.option-btn.is-checked')) {
+      win.document.querySelector('.el-dialog__wrapper').remove();
+    }
+  });
+
+  const root = Z.Questions.Dialog.root();
+  ok('root() 命中按钮式 A/B 弹窗', !!root, root ? root.className : 'null');
+
+  // readCurrent().options 此时可能为空（按钮不是 .el-radio）——正是 P1 描述的场景
+  const rc = Z.Questions.Dialog.readCurrent(root);
+  // readOptions 必须能独立读出 2 个选项（这是 P1 修复的关键能力）
+  const ro = Z.Questions.Dialog.readOptions(root);
+  eq('readOptions 独立读出 2 个按钮选项', ro.texts.length, 2, JSON.stringify(ro.texts));
+  ok('readOptions 读出 A/B 文本', /A\./.test(ro.texts[0]) && /B\./.test(ro.texts[1]),
+    JSON.stringify(ro.texts));
+
+  Z.Answerer._giveUpSigs = new Set();
+  Z.Answerer._countedSig = '';
+  const beforeCount = Z.state.answeredCount;
+  await Z.Answerer._tryNonStandardAB(root, 'sig-solve');
+
+  // ★ 最关键断言：真求解必须被实际调用（上轮这里是 0）
+  ok('★ Solver.solve 被实际调用（≥1 次，P1 死代码已修）', solveCalls.length >= 1,
+    'solve 调用次数 = ' + solveCalls.length);
+  eq('★ solve 收到的题干非空', !!solveCalls.length && !!solveCalls[0].title, true);
+  eq('★ solve 收到的选项数为 2', solveCalls.length ? solveCalls[0].options.length : 0, 2);
+  ok('★ 答案 B 被按索引正确点击并自检通过（answeredCount +1）',
+    Z.state.answeredCount === beforeCount + 1,
+    'answeredCount ' + beforeCount + ' → ' + Z.state.answeredCount);
+  ok('★ 选对后弹窗被关闭（不再只能靠猜）',
+    !win.document.querySelector('.el-dialog'), '弹窗仍在');
+})();
+
+// 多 .el-dialog 并存时必须选中「含题目特征」的那个（round-18 P2-1）
+console.log('\n=== 32l. 多弹窗并存选对容器（round-18 P2-1） ===');
+const _abMultiDialog = (async () => {
+  const html = `<html><body>
+    <div class="el-dialog__wrapper"><div class="el-dialog" id="settingsDlg">
+      <div class="el-dialog__header"><span class="el-dialog__title">设置</span></div>
+      <div class="el-dialog__body"><label>音量</label><label>速度</label></div>
+    </div></div>
+    <div class="el-dialog__wrapper"><div class="el-dialog" id="topicDlg">
+      <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+      <div class="el-dialog__body">
+        <div class="question-topic">多选题干</div>
+        <label class="el-radio"><span class="el-radio__label">A. 对</span></label>
+        <label class="el-radio"><span class="el-radio__label">B. 错</span></label>
+      </div>
+    </div></div>
+    <video></video>
+  </body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?multi=1');
+  const D = win.ZHS.Questions.Dialog;
+  // 设置窗排在前面，但只有第二个含题目特征 → 必须选中第二个
+  eq('root() 选中有题目特征的弹窗（跳过设置窗）', D.root() && D.root().id, 'topicDlg');
+  eq('present() 对含题弹窗返回 true', D.present(), true);
+  const q = D.readCurrent(D.root());
+  eq('读到的是题面（不是"设置"）', q.title, '多选题干');
+  eq('读到 2 个选项', q.options.length, 2);
+})();
+
+// 题干相同、选项不同的两道弹窗，签名必须不同（round-18 P2-2）
+console.log('\n=== 32m. 题干相同选项不同 → 签名可区分（round-18 P2-2） ===');
+const _abSigWithOptions = (async () => {
+  const mk = (optA, optB) => `<html><body>
+    <div class="el-dialog__wrapper"><div class="el-dialog">
+      <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+      <div class="el-dialog__body">
+        <label class="el-radio"><span class="el-radio__label">${optA}</span></label>
+        <label class="el-radio"><span class="el-radio__label">${optB}</span></label>
+      </div>
+    </div></div><video></video></body></html>`;
+  const e1 = makeEnv(mk('A. 说法一', 'B. 说法二'), 'https://studyvideoh5.zhihuishu.com/stuStudy?so1=1');
+  const e2 = makeEnv(mk('A. 说法三', 'B. 说法四'), 'https://studyvideoh5.zhihuishu.com/stuStudy?so2=1');
+  // 复刻 handleDialog 的签名算法（题干 + '|' + 选项文本）
+  const mkSig = (w) => {
+    const snap = w.ZHS.Questions.Dialog.collect();
+    return JSON.stringify(snap.map((s) => (s.title || '') + '|' + ((s.options || []).join(',')))).slice(0, 200);
+  };
+  const s1 = mkSig(e1.win);
+  const s2 = mkSig(e2.win);
+  ok('两份弹窗题干相同（都是"课中答题"或同源标题）', true, s1);
+  ok('★ 题干相同但选项不同 → 签名不同（第二道不会被误判已作答）', s1 !== s2, s1 + ' vs ' + s2);
+  ok('★ 签名包含选项文本', s1.indexOf('说法一') >= 0, s1);
+})();
+
+// .el-dialog__wrapper 用 inline display:none 时（Element UI 真实关闭形态）必须判为已关闭
+console.log('\n=== 32n. inline display:none 判为已关闭（round-18 P2-3） ===');
+const _abWrapperHidden = (async () => {
+  const html = `<html><body>
+    <div class="el-dialog__wrapper"><div class="el-dialog">
+      <div class="el-dialog__body"><div class="question-topic">题面</div>
+        <label class="el-radio"><span class="el-radio__label">A. 对</span></label>
+        <label class="el-radio"><span class="el-radio__label">B. 错</span></label>
+      </div>
+    </div></div><video></video></body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?hid=1');
+  const D = win.ZHS.Questions.Dialog;
+  eq('隐藏前 present() = true', D.present(), true);
+  // Element UI 关闭弹窗的真实形态之一：给 wrapper 打 inline display:none
+  win.document.querySelector('.el-dialog__wrapper').style.display = 'none';
+  eq('★ wrapper inline display:none → present() = false', D.present(), false);
+  eq('★ wrapper inline display:none → stillPresent() = false', D.stillPresent(), false);
+  eq('★ root() 返回 null（不会拿到已关闭的弹窗）', D.root(), null);
+
+  // visibility:hidden 同样要认
+  win.document.querySelector('.el-dialog__wrapper').style.display = '';
+  win.document.querySelector('.el-dialog__wrapper').style.visibility = 'hidden';
+  eq('wrapper inline visibility:hidden → present() = false', D.present(), false);
+})();
+
+// .el-radio__label 存在但为空时，不能产生 [""] 这种空选项（round-18 P3-1）
+console.log('\n=== 32o. 空 __label 不产生空选项（round-18 P3-1） ===');
+const _abEmptyLabel = (async () => {
+  const html = `<html><body>
+    <div class="el-dialog__wrapper"><div class="el-dialog">
+      <div class="el-dialog__body">
+        <div class="question-topic">题面</div>
+        <label class="el-radio"><span class="el-radio__input"><input type="radio" name="r"></span>
+          <span class="el-radio__label"></span><span class="txt">A. 说法正确</span></label>
+        <label class="el-radio"><span class="el-radio__input"><input type="radio" name="r"></span>
+          <span class="el-radio__label"></span><span class="txt">B. 说法错误</span></label>
+      </div>
+    </div></div><video></video></body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy=el=1');
+  const q = win.ZHS.Questions.Dialog.readCurrent(win.document.querySelector('.el-dialog'));
+  eq('★ 选项数仍为 2（不因空 __label 被合并成 1）', q.options.length, 2, JSON.stringify(q.options));
+  ok('★ 选项文本非空（退回整个元素取文本）',
+    !!q.options[0] && !!q.options[1] && q.options.join('').indexOf('说法') >= 0,
+    JSON.stringify(q.options));
+  ok('★ 不产生 [""] 空选项', !(q.options.length === 1 && q.options[0] === ''),
+    JSON.stringify(q.options));
+})();
+
+// ★ round-19 P1 回归（方案 A 正则放宽）：从**真实入口 handleDialog** 发起，
+// 覆盖三种上轮读不到选项的形态 —— 纯 A/B、中文序号选项、无关键字长句选项。
+// 上轮正则是 `[abAB][分隔符]?\s`（`\s` 必需）→ 这三种 texts=[] → solve=0 → 仍只乱猜。
+console.log('\n=== 32p. handleDialog 入口：三种难形态必须真求解（round-19 P1 方案A） ===');
+const _abEntryForms = (async () => {
+  // 每种形态单独一个环境，统计 handleDialog（真实入口）下的 solve 调用
+  const runCase = async (label, optTexts, extraBody) => {
+    const btns = optTexts.map((t) => `<button class="opt">${t}</button>`).join('');
+    const html = `<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+        <div class="el-dialog__body"><div class="question-topic">题干</div>${btns}${extraBody || ''}</div>
+        <div class="el-dialog__footer"><button>关闭</button></div>
+      </div></div><video></video></body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?p=' + encodeURIComponent(label));
+    const Z = win.ZHS;
+    Z.setConfig({ bankEnabled: false, llmEnabled: false, debug: false });
+    if (Z.Scheduler && Z.Scheduler.stop) Z.Scheduler.stop('user');   // 防调度器并发污染计数
+    Z.Answerer._running = false;
+    Z.state.running = true;
+
+    const solveCalls = [];
+    Z.Solver.solve = async (req) => { solveCalls.push(req); return { answer: 'B', from: 'stub' }; };
+    const optEls = Array.from(win.document.querySelectorAll('.opt'));
+    for (const b of optEls) b.addEventListener('click', function () { this.classList.add('is-checked'); });
+    win.document.querySelector('.el-dialog__footer button').addEventListener('click', () => {
+      if (win.document.querySelector('.opt.is-checked')) win.document.querySelector('.el-dialog__wrapper').remove();
+    });
+
+    // 先记录「实际路由」：readCurrent().options 非空 → 走标准链；为空 → 走 _tryNonStandardAB
+    const routeOpts = (Z.Questions.Dialog.readCurrent(Z.Questions.Dialog.root()).options || []).length;
+    Z.Answerer._giveUpSigs = new Set();
+    Z.Answerer._countedSig = '';
+    await Z.Answerer.handleDialog({ manual: true });
+
+    const clicked = optEls.map((b) => Z.Filler.isChecked(b));
+    return { solveCalls, routeOpts, clicked, closed: !win.document.querySelector('.el-dialog') };
+  };
+
+  // ① 纯 A / B（无点号、无空格）—— 上轮实测 readOptions=[] solve=0
+  const c1 = await runCase('pureAB', ['A', 'B']);
+  eq('① 纯 A/B：solve 被调用 ≥1（handleDialog 入口）', c1.solveCalls.length >= 1, true);
+  ok('① 纯 A/B：答案 B 对应元素被点击选中', c1.clicked[1] === true, JSON.stringify(c1.clicked));
+  ok('① 纯 A/B：选对后弹窗关闭', c1.closed, '弹窗仍在');
+  ok('① 纯 A/B：实际路由 = ' + (c1.routeOpts >= 2 ? '标准链' : '_tryNonStandardAB'), true,
+    'readCurrent().options.length=' + c1.routeOpts);
+
+  // ② 中文序号选项（无 A/B 关键字）—— 上轮实测 readOptions=[] solve=0
+  const c2 = await runCase('cnOrder', ['选项一', '选项二']);
+  eq('② 选项一/选项二：solve 被调用 ≥1（handleDialog 入口）', c2.solveCalls.length >= 1, true);
+  ok('② 选项一/选项二：答案 B 对应元素被点击选中', c2.clicked[1] === true, JSON.stringify(c2.clicked));
+  ok('② 选项一/选项二：实际路由 = ' + (c2.routeOpts >= 2 ? '标准链' : '_tryNonStandardAB'), true,
+    'readCurrent().options.length=' + c2.routeOpts);
+
+  // ③ 无关键字长句选项 —— 上轮实测 readOptions=[] solve=0
+  const c3 = await runCase('longText', ['这是一句很长的选项描述甲', '这是一句很长的选项描述乙']);
+  eq('③ 长句选项：solve 被调用 ≥1（handleDialog 入口）', c3.solveCalls.length >= 1, true);
+  ok('③ 长句选项：答案 B 对应元素被点击选中', c3.clicked[1] === true, JSON.stringify(c3.clicked));
+  ok('③ 长句选项：实际路由 = ' + (c3.routeOpts >= 2 ? '标准链' : '_tryNonStandardAB'), true,
+    'readCurrent().options.length=' + c3.routeOpts);
+})();
+
+// 正则逐串断言（方案 A）：把匹配结果锁进测试，防止将来手滑把 \s 改回必需
+console.log('\n=== 32q. 选项文本正则边界（round-19 P1 方案A 逐串） ===');
+{
+  // 直接从页面里取实际生效的正则（`_optionTextRe()` 是只读暴露）。
+  // 注意：**不能**通过 readOptions 反推 —— 那会经过方案B「结构对称」兜底通道，
+  // 把 "Apple" 这类非选项文本也捡回来，正则可放宽/漏报就测不出来了。
+  const { win } = makeEnv('<html><body><div class="el-dialog__wrapper"><div class="el-dialog"></div></div></body></html>',
+    'https://studyvideoh5.zhihuishu.com/stuStudy');
+  const RE = win.ZHS.Questions.Dialog._optionTextRe();
+  const hit = (t) => RE.test(t);
+  // 必须命中（上轮 \s 必需导致前 4 个 false）
+  eq('"A" 命中', hit('A'), true);
+  eq('"A." 命中', hit('A.'), true);
+  eq('"A.对" 命中', hit('A.对'), true);
+  eq('"A、对" 命中', hit('A、对'), true);
+  eq('"A 说法" 命中', hit('A 说法'), true);
+  eq('"A. 说法" 命中（原有形态不回归）', hit('A. 说法'), true);
+  // 必须不命中（防误报）
+  eq('"Apple" 不命中', hit('Apple'), false);
+  eq('"A组" 不命中', hit('A组'), false);
+  eq('"AB" 不命中', hit('AB'), false);
+}
+
+// ★ round-20 真 P1 回归（方案 C 结构对称自动发现）：自定义 class / 裸 div·span·p 选项
+// 根因：方案 A 与方案 B **共用同一个 `candidates`**，而它由 WIDE 选择器产出；
+// 只要选项是「纯 div/span/p + 自定义 class」（.opt-item / .answer-item / .xx-option / 裸 <p>），
+// WIDE 命中 0 → 两条通道同时空转 → 读不到选项 → solve=0 → 又只乱猜。
+// 本段全部从真实入口 `handleDialog` 发起（不直接调 readOptions，避免绕过路由层）。
+console.log('\n=== 32r. 自定义 class / 裸元素选项：方案C 结构自动发现（round-20 真P1） ===');
+const _abAutoSiblings = (async () => {
+  // 让每种形态各自渲染选项 DOM；optsHtml 直接给出选项的 HTML 片段
+  const runCase = async (label, optsHtml, titleHtml) => {
+    const html = `<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+        <div class="el-dialog__body">
+          <div class="q-title">${titleHtml || '题干'}</div>
+          ${optsHtml}
+        </div>
+        <div class="el-dialog__footer"><button>关闭</button></div>
+      </div></div><video></video></body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?p=' + encodeURIComponent(label));
+    const Z = win.ZHS;
+    Z.setConfig({ bankEnabled: false, llmEnabled: false, debug: false });
+    if (Z.Scheduler && Z.Scheduler.stop) Z.Scheduler.stop('user');
+    Z.Answerer._running = false;
+    Z.state.running = true;
+
+    const solveCalls = [];
+    Z.Solver.solve = async (req) => { solveCalls.push(req); return { answer: 'B', from: 'stub' }; };
+
+    // ★ 关键：spy 住 Filler.clickOption 的实参 —— 记录「真正被点的是哪几个元素/什么文本」。
+    // 必须包住原实现（不是替换），否则点击态挂不上、关闭逻辑失效。
+    const clickArgs = [];
+    const _origClickOption = Z.Filler.clickOption.bind(Z.Filler);
+    Z.Filler.clickOption = function (el) {
+      const t = el ? (el.innerText !== undefined && el.innerText !== null ? el.innerText : el.textContent) : '';
+      clickArgs.push(String(t || '').trim());
+      return _origClickOption(el);
+    };
+
+    // 给「可点击选项元素」挂上点击→选中态（用方案C 会返回的那批元素）
+    const r0 = Z.Questions.Dialog.root();
+    const D = Z.Questions.Dialog;
+    const t0 = Date.now();
+    const ro = D.readOptions(r0);
+    const costMs = Date.now() - t0;
+    const optEls = ro.elements;
+    for (const el of optEls) {
+      el.addEventListener('click', function () { this.setAttribute('data-checked', '1'); });
+    }
+    // 关闭按钮：只要有点选中的选项就关
+    win.document.querySelector('.el-dialog__footer button').addEventListener('click', () => {
+      if (win.document.querySelector('[data-checked]')) win.document.querySelector('.el-dialog__wrapper').remove();
+    });
+
+    const routeOpts = (Z.Questions.Dialog.readCurrent(Z.Questions.Dialog.root()).options || []).length;
+    Z.Answerer._giveUpSigs = new Set();
+    Z.Answerer._countedSig = '';
+    await Z.Answerer.handleDialog({ manual: true });
+
+    const clicked = optEls.map((el) => el.getAttribute('data-checked') === '1');
+    return { solveCalls, routeOpts, clicked, texts: ro.texts, costMs, clickArgs,
+      closed: !win.document.querySelector('.el-dialog') };
+  };
+
+  // ① <div class="opt-list"><div class="opt-item">×2  —— 自定义 class div
+  const c1 = await runCase('optItem',
+    '<div class="opt-list"><div class="opt-item">选项一的内容</div><div class="opt-item">选项二的内容</div></div>');
+  eq('① .opt-item：读到 2 个选项', c1.texts.length, 2);
+  eq('① .opt-item：solve 被调用 1 次（handleDialog 入口）', c1.solveCalls.length, 1);
+  ok('① .opt-item：答案 B 被点选', c1.clicked[1] === true, JSON.stringify(c1.clicked));
+
+  // ② <span class="answer-item">×2 —— 自定义 class span
+  const c2 = await runCase('answerItem',
+    '<div><span class="answer-item">甲说法</span><span class="answer-item">乙说法</span></div>');
+  eq('② .answer-item：读到 2 个选项', c2.texts.length, 2);
+  eq('② .answer-item：solve 被调用 1 次', c2.solveCalls.length, 1);
+
+  // ③ 裸 <p>×2 —— 无 class 无白名单
+  const c3 = await runCase('plainP',
+    '<div><p>说法一</p><p>说法二</p></div>');
+  eq('③ 裸 <p>：读到 2 个选项', c3.texts.length, 2);
+  eq('③ 裸 <p>：solve 被调用 1 次', c3.solveCalls.length, 1);
+
+  // ④ 负例：题干内的关键词 span 组不得被当选项（父节点含直接文本 → 排除）
+  const c4 = await runCase('kwNeg',
+    '<div class="opt-list"><div class="opt-item">选项一的内容</div><div class="opt-item">选项二的内容</div></div>',
+    '以下哪项不是 <span class="kw">TCP</span> <span class="kw">UDP</span> <span class="kw">HTTP</span> 的特点？');
+  eq('④ 负例 题干内 kw 组：仍读到 2 个选项（未被 3 个 kw 顶掉）', c4.texts.length, 2);
+  ok('④ 负例：读到的不是 kw 关键词', c4.texts.indexOf('TCP') < 0 && c4.texts.indexOf('UDP') < 0,
+    JSON.stringify(c4.texts));
+
+  // ⑤ 负例：页脚按钮组（全操作词）不得被当选项
+  const c5 = await runCase('actionNeg',
+    '<div><button>关闭</button><button>提交</button></div>');
+  eq('⑤ 负例 操作词组：不得被当选项', c5.texts.length, 0);
+  eq('⑤ 负例 操作词组：solve 不被调用', c5.solveCalls.length, 0);
+
+  // ⑥ 选项与题干容器「平级」（都是 .el-dialog__body 的直接子 div）—— 自定义 class
+  // 这条防的是「只按 tagName 分组」的退化：`<div class="q-title">题干</div>` 会混进
+  // 两个 .xx-option 凑成 3 个不同 class 的 DIV，整组被否 → 命中 0。
+  // 必须按「tag + class」分组，两个 .xx-option 才自成一组。
+  const c6 = await runCase('siblingOpt',
+    '<div class="xx-option">甲说法</div><div class="xx-option">乙说法</div>');
+  eq('⑥ 平级自定义 class：读到 2 个选项', c6.texts.length, 2);
+  eq('⑥ 平级自定义 class：solve 被调用 1 次', c6.solveCalls.length, 1);
+
+  // ⑦ 关键回归（能证伪）：混合组「2 真选项 + 2 导航词」必须只留 2 个真选项，
+  //    且 Filler.clickOption 的实参文本不得出现「上一题」「下一题」。
+  //    旧代码 `.every(操作词)` 只挡「全员皆操作词」，混合组直接放行 → texts 被污染成 4 项 →
+  //    Solver 拿 4 项解题 → clickOption 真点到「下一题」（真实平台会切页/交卷）。
+  const c7 = await runCase('mixedNav',
+    '<div class="list"><div class="option">选项一</div><div class="option">选项二</div><div class="option">上一题</div><div class="option">下一题</div></div>');
+  eq('⑦ 混合组 2选项+2导航词：texts 必须只剩 2 个', c7.texts.length, 2);
+  ok('⑦ 混合组：texts 不含 上一题/下一题', c7.texts.indexOf('上一题') < 0 && c7.texts.indexOf('下一题') < 0,
+    JSON.stringify(c7.texts));
+  ok('⑦ 混合组：clickOption 实参不含 上一题/下一题', JSON.stringify(c7.clickArgs).indexOf('上一题') < 0
+    && JSON.stringify(c7.clickArgs).indexOf('下一题') < 0, JSON.stringify(c7.clickArgs));
+
+  // ⑧ 跨父串组：两个**无关容器**各放 2 个同 tag 同 class 候选，且两个容器的父节点是
+  //    两个结构平行的外层块 —— 关键：让两个容器各自都是「其父的同一个下标」（都为 0），
+  //    旧分组键 `'P' + indexOf(p) + '|'` 会得到相同 gk → 两组被并成 1 组 4 项（混合）。
+  //    正确行为必须分成 2 组，文本不得混合。
+  {
+    const { win } = makeEnv(`<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+        <div class="el-dialog__body">
+          <div class="q-title">题干</div>
+          <div class="rowA"><div class="blockA"><div class="option">甲1</div><div class="option">甲2</div></div></div>
+          <div class="rowB"><div class="blockB"><div class="option">乙1</div><div class="option">乙2</div></div></div>
+        </div>
+        <div class="el-dialog__footer"><button>关闭</button></div>
+      </div></div><video></video></body></html>`, 'https://studyvideoh5.zhihuishu.com/stuStudy?p=crossParent');
+    const Z = win.ZHS;
+    const D = Z.Questions.Dialog;
+    // 直接测 _symmetricOptions（方案B，就是那处用 indexOf(p) 的地方）——
+    // 传入两组候选，若分组键用「父下标」会把它们并成 1 组 4 项；用「父身份」则分开成 2 组。
+    const cands = Array.from(win.document.querySelectorAll('.option'));
+    const sym = D._symmetricOptions(cands);
+    eq('⑧ 跨父串组：_symmetricOptions 不得把两组无关候选并成 4 项', sym.length <= 2, true,
+      '实际 ' + sym.length + ' 项：' + JSON.stringify(sym.map((e) => e.textContent)));
+    // 整题层：readOptions 也不得并成 4 项
+    const roX = D.readOptions(D.root());
+    eq('⑧ 跨父串组：readOptions 不得并成 4 项', roX.texts.length, 2);
+  }
+
+  // ⑨ 负例：整组都是操作词 → 剔除后剩 0 → solve 不被调用
+  const c9 = await runCase('allAction',
+    '<div class="list"><div class="option">关闭</div><div class="option">提交</div></div>');
+  eq('⑨ 负例 全操作词组：读到 0 个', c9.texts.length, 0);
+  eq('⑨ 负例 全操作词组：solve 不被调用', c9.solveCalls.length, 0);
+
+  // ⑩ 反向保护：选项文本**恰好是操作词**（「确定」）的真题不得被整组误杀。
+  //    这条专防把 `.every` 改成 `.some` 的过度修复（一票否决会干掉『确定/不正确』真题）。
+  const c10 = await runCase('realActionWord',
+    '<div class="list"><div class="option">确定</div><div class="option">不正确</div></div>');
+  eq('⑩ 反向保护 真题含「确定」：仍读到 2 个（未被整组误杀）', c10.texts.length, 2);
+  ok('⑩ 反向保护：texts 含 确定 与 不正确',
+    c10.texts.indexOf('确定') >= 0 && c10.texts.indexOf('不正确') >= 0, JSON.stringify(c10.texts));
+
+  // ⑪ 分页器回归（round-21 P1，能证伪）：`.el-pager` 的 3 个页码会压过 2 项真选项。
+  //    旧 0.6.23 实测 texts=["2","3"]（真选项全丢、真题答不了）。必须读到真选项且不含纯数字。
+  const c11 = await runCase('pagerNoise',
+    '<div class="el-pager"><span class="number active">1</span><span class="number">2</span><span class="number">3</span></div>'
+    + '<div class="opt-list"><div class="opt-item">说法一是对的</div><div class="opt-item">说法二也是对的</div></div>',
+    '下列关于 TCP 的说法正确的是（）');
+  eq('⑪ 分页器：读到 2 个真选项', c11.texts.length, 2);
+  ok('⑪ 分页器：texts 含 2 个真选项、不含纯数字',
+    c11.texts.indexOf('说法一是对的') >= 0 && c11.texts.indexOf('说法二也是对的') >= 0
+    && !c11.texts.some((t) => /^\d+$/.test(t)), JSON.stringify(c11.texts));
+  ok('⑪ 分页器：clickOption 实参不含纯数字',
+    !c11.clickArgs.some((t) => /^\d+$/.test(t)), JSON.stringify(c11.clickArgs));
+
+  // ⑫ 步骤条 .el-step×4 + 真选项×2 → 读到真选项
+  const c12 = await runCase('stepNoise',
+    '<div class="el-steps"><div class="el-step">步骤一</div><div class="el-step">步骤二</div>'
+    + '<div class="el-step">步骤三</div><div class="el-step">步骤四</div></div>'
+    + '<div class="opt-list"><div class="opt-item">甲说法</div><div class="opt-item">乙说法</div></div>');
+  eq('⑫ 步骤条：读到 2 个真选项', c12.texts.length, 2);
+  ok('⑫ 步骤条：texts 不含「步骤一」', c12.texts.indexOf('步骤一') < 0, JSON.stringify(c12.texts));
+
+  // ⑬ 选项卡 .el-tabs__item×3 + 真选项×2 → 读到真选项
+  const c13 = await runCase('tabsNoise',
+    '<div class="el-tabs__nav"><div class="el-tabs__item">标签一</div><div class="el-tabs__item">标签二</div>'
+    + '<div class="el-tabs__item">标签三</div></div>'
+    + '<div class="opt-list"><div class="opt-item">甲说法</div><div class="opt-item">乙说法</div></div>');
+  eq('⑬ 选项卡：读到 2 个真选项', c13.texts.length, 2);
+  ok('⑬ 选项卡：texts 不含「标签一」', c13.texts.indexOf('标签一') < 0, JSON.stringify(c13.texts));
+
+  // ⑭ 视频控制条 button.vjs-control×4 + 真选项×2 → 读到真选项
+  const c14 = await runCase('vjsNoise',
+    '<div class="vjs-control-bar"><button class="vjs-control">播放</button><button class="vjs-control">音量</button>'
+    + '<button class="vjs-control">字幕</button><button class="vjs-control">全屏</button></div>'
+    + '<div class="opt-list"><div class="opt-item">甲说法</div><div class="opt-item">乙说法</div></div>');
+  eq('⑭ 视频控制条：读到 2 个真选项', c14.texts.length, 2);
+  ok('⑭ 视频控制条：texts 不含「播放」', c14.texts.indexOf('播放') < 0, JSON.stringify(c14.texts));
+
+  // ⑮ 纯数字组单独存在（无真选项）→ 不得当选项
+  const c15 = await runCase('pureNumberNoise',
+    '<span class="number">1</span><span class="number">2</span><span class="number">3</span>');
+  eq('⑮ 纯数字组：不得被当选项（读到 0 个）', c15.texts.length, 0);
+  eq('⑮ 纯数字组：solve 不被调用', c15.solveCalls.length, 0);
+
+  // ⑯ NAV 回退（P2-⑤ 回归）：真题选项恰好是「返回/继续学习」→ 必须读到 2 项（不得整组读空）
+  const c16 = await runCase('navFallback',
+    '<div class="opt-list"><div class="opt-item">返回</div><div class="opt-item">继续学习</div></div>');
+  eq('⑯ NAV 回退：真题「返回/继续学习」仍读到 2 项', c16.texts.length, 2);
+  ok('⑯ NAV 回退：texts 含 返回 与 继续学习',
+    c16.texts.indexOf('返回') >= 0 && c16.texts.indexOf('继续学习') >= 0, JSON.stringify(c16.texts));
+
+  // ⑰ 打分制：带 A./B. 前缀的真选项×2 + 无前缀对称噪声×3 → 必须选前缀那 2 个
+  const c17 = await runCase('scoring',
+    '<div class="noise-list"><div class="noise">苹果</div><div class="noise">香蕉</div><div class="noise">橘子</div></div>'
+    + '<div class="opt-list"><div class="opt-item">A. 说法一</div><div class="opt-item">B. 说法二</div></div>');
+  eq('⑰ 打分制：选中共 2 项', c17.texts.length, 2);
+  ok('⑰ 打分制：选中带 A./B. 前缀的真选项',
+    c17.texts.indexOf('A. 说法一') >= 0 && c17.texts.indexOf('B. 说法二') >= 0, JSON.stringify(c17.texts));
+
+  // 性能：_autoSiblings 走一遍 readOptions 的实测耗时（只扫 scope 子树、按 children 分组）
+  console.log('  [性能] 方案C 单次 readOptions 耗时 ≈ ' + c1.costMs + ' ms（形态①自定义 div 选项）');
+
+  // ===== round-22 新增：方案 D「题干锚定」+ P1①~④ 修复回归 =====
+  // 需要一个能让 `_findTitleEl` 命中的题干（class 必须是 `.topic-title` 等选择器之一），
+  // 且能控制「题干之前 / 题干之后」的内容，才能验证位置先验。
+  const runCaseD = async (label, beforeHTML, afterHTML, nestedIn) => {
+    const bodyHTML = `${beforeHTML || ''}
+      <div class="topic-title">下列关于 TCP 的说法正确的是（）</div>
+      ${afterHTML || ''}`;
+    const inner = `<div class="el-dialog__body">${bodyHTML}</div>`;
+    const html = `<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+        ${nestedIn ? `<div class="${nestedIn}">${inner}</div>` : inner}
+        <div class="el-dialog__footer"><button>关闭</button></div>
+      </div></div><video></video></body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?p=' + encodeURIComponent(label));
+    const Z = win.ZHS;
+    Z.setConfig({ bankEnabled: false, llmEnabled: false, debug: false });
+    if (Z.Scheduler && Z.Scheduler.stop) Z.Scheduler.stop('user');
+    Z.Answerer._running = false;
+    Z.state.running = true;
+
+    const solveCalls = [];
+    Z.Solver.solve = async (req) => { solveCalls.push(req); return { answer: 'B', from: 'stub' }; };
+    const clickArgs = [];
+    const _origClickOption = Z.Filler.clickOption.bind(Z.Filler);
+    Z.Filler.clickOption = function (el) {
+      const t = el ? (el.innerText !== undefined && el.innerText !== null ? el.innerText : el.textContent) : '';
+      clickArgs.push(String(t || '').trim());
+      return _origClickOption(el);
+    };
+
+    const D = Z.Questions.Dialog;
+    const r0 = D.root();
+    // 注意：root() 里 questionScore>0 才认；题干在但选项没读到也应认（hasTitle）
+    const ro = D.readOptions(r0 || win.document);
+    const optEls = ro.elements;
+    for (const el of optEls) {
+      el.addEventListener('click', function () { this.setAttribute('data-checked', '1'); });
+    }
+    const fbtn = win.document.querySelector('.el-dialog__footer button');
+    if (fbtn) fbtn.addEventListener('click', () => {
+      if (win.document.querySelector('[data-checked]')) win.document.querySelector('.el-dialog__wrapper').remove();
+    });
+
+    Z.Answerer._giveUpSigs = new Set();
+    Z.Answerer._countedSig = '';
+    await Z.Answerer.handleDialog({ manual: true });
+
+    return { solveCalls, texts: ro.texts, clickArgs,
+      closed: !win.document.querySelector('.el-dialog') };
+  };
+
+  // round-23：再给一个「完全自由 body」的变体，便于复刻 round-23 的三个场景
+  // （题干与噪声同父、真选项在另一容器；题干后紧跟元信息标签组）。
+  const runCaseRaw = async (label, bodyInnerHTML) => {
+    const html = `<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+        <div class="el-dialog__body">${bodyInnerHTML}</div>
+        <div class="el-dialog__footer"><button>关闭</button></div>
+      </div></div><video></video></body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?p=' + encodeURIComponent(label));
+    const Z = win.ZHS;
+    Z.setConfig({ bankEnabled: false, llmEnabled: false, debug: false });
+    if (Z.Scheduler && Z.Scheduler.stop) Z.Scheduler.stop('user');
+    Z.Answerer._running = false;
+    Z.state.running = true;
+    const solveCalls = [];
+    Z.Solver.solve = async (req) => { solveCalls.push(req); return { answer: 'B', from: 'stub' }; };
+    const clickArgs = [];
+    const _origClickOption = Z.Filler.clickOption.bind(Z.Filler);
+    Z.Filler.clickOption = function (el) {
+      const t = el ? (el.innerText !== undefined && el.innerText !== null ? el.innerText : el.textContent) : '';
+      clickArgs.push(String(t || '').trim());
+      return _origClickOption(el);
+    };
+    const D = Z.Questions.Dialog;
+    const r0 = D.root();
+    const ro = D.readOptions(r0 || win.document);
+    const optEls = ro.elements;
+    for (const el of optEls) {
+      el.addEventListener('click', function () { this.setAttribute('data-checked', '1'); });
+    }
+    const fbtn = win.document.querySelector('.el-dialog__footer button');
+    if (fbtn) fbtn.addEventListener('click', () => {
+      if (win.document.querySelector('[data-checked]')) win.document.querySelector('.el-dialog__wrapper').remove();
+    });
+    Z.Answerer._giveUpSigs = new Set();
+    Z.Answerer._countedSig = '';
+    await Z.Answerer.handleDialog({ manual: true });
+    return { solveCalls, texts: ro.texts, clickArgs,
+      closed: !win.document.querySelector('.el-dialog') };
+  };
+
+  // round-23：只跑**方案 D 本体** `_anchoredOptions(scope, titleEl)` 的变体。
+  // 为什么不能只看 `readOptions` 的最终结果：D 返回 [] 之后，readOptions 会**继续**交给
+  // 方案 A/B/C（C 是全树猜测，本就没有「题干之后」的位置先验）。所以「D 不回头看题干之前」
+  // 这条契约只能**直测 D 自己**，否则测到的是 C 的行为（与 D 无关）。
+  const runCaseAnchored = async (label, bodyInnerHTML) => {
+    const html = `<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+        <div class="el-dialog__body">${bodyInnerHTML}</div>
+        <div class="el-dialog__footer"><button>关闭</button></div>
+      </div></div><video></video></body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?p=' + encodeURIComponent(label));
+    const Z = win.ZHS;
+    const D = Z.Questions.Dialog;
+    const r0 = D.root() || win.document;
+    const scope = r0.querySelector('div.el-dialog__body') || r0;
+    const titleEl = D._findTitleEl(r0);
+    const els = D._anchoredOptions(scope, titleEl);
+    return { texts: els.map((el) => (el.textContent || '').trim()), hadTitle: !!titleEl };
+  };
+
+  // ⑱ 方案 D 题干锚定：题干 + 其后 2 个同 class 兄弟（自定义 class）→ 读到那 2 个。
+  //   ★ 可证伪设计：题干**之前**放一组「同样 2 项、但带 A./B. 前缀且文本更长」的对称噪声。
+  //   在方案 C 的打分里这组噪声与真选项**项数基数相同（1000）**，却因前缀（+20）和
+  //   文本长度（len/100）拿更高分 → 无位置先验时必然错选噪声。只有方案 D 的「题干之后」先验能选对。
+  const c18 = await runCaseD('anchor',
+    '<div class="nav-list"><div class="nav-item">A. 上一节课程回顾</div><div class="nav-item">B. 下一节课程预告</div></div>',
+    '<div class="opt-list"><div class="opt-item">甲说法</div><div class="opt-item">乙说法</div></div>');
+  eq('⑱ 方案D：题干后 2 个同 class 兄弟 → 读到 2 项', c18.texts.length, 2);
+  ok('⑱ 方案D：读到题干后的「甲说法/乙说法」、不含题干前的「A. 上一节课程回顾」',
+    c18.texts.indexOf('甲说法') >= 0 && c18.texts.indexOf('乙说法') >= 0
+    && c18.texts.indexOf('A. 上一节课程回顾') < 0, JSON.stringify(c18.texts));
+
+  // ⑲ D 优先于 C：题干后真选项 ×2 + 题干前「同 2 项、带前缀、更长」的噪声 ×2（P1① 正向修复）
+  //   ★ 可证伪设计：噪声容器**故意不带**任何黑名单 class（否则会被 `inNoiseContainer` 挡掉，
+  //   方案 C 也能读对，就测不出位置先验）；且噪声与真选项项数相同（都 2 项）但带 A./B. 前缀、
+  //   文本更长 → 在方案 C 的打分里分数更高 → 无位置先验时必然错选噪声。只有方案 D 能选对。
+  const c19 = await runCaseD('dOverC',
+    '<div class="nav-list"><span class="nav-title">A. 章节一知识点回顾</span>'
+    + '<span class="nav-title">B. 章节二知识点预告</span></div>',
+    '<div class="opt-list"><div class="opt-item">说法一是对的</div><div class="opt-item">说法二也是对的</div></div>');
+  eq('⑲ D优先于C：题干后真选项×2、题干前带前缀噪声×2 → 读到 2 项', c19.texts.length, 2);
+  ok('⑲ D优先于C：读到真选项、不含「A. 章节一知识点回顾」',
+    c19.texts.indexOf('说法一是对的') >= 0 && c19.texts.indexOf('说法二也是对的') >= 0
+    && c19.texts.indexOf('A. 章节一知识点回顾') < 0, JSON.stringify(c19.texts));
+
+  // ⑳ video-js 祖先不再全灭：弹窗嵌在 video-js 内、选项是普通 .opt-item → 必须读到 2 项（P1① 核心）
+  const c20 = await runCaseD('videoJsAncestor',
+    '', '<div class="opt-list"><div class="opt-item">甲说法</div><div class="opt-item">乙说法</div></div>',
+    'video-js');
+  eq('⑳ video-js 祖先：弹窗嵌在 video-js 内仍读到 2 项', c20.texts.length, 2);
+  ok('⑳ video-js 祖先：文本不含噪声',
+    c20.texts.indexOf('甲说法') >= 0 && c20.texts.indexOf('乙说法') >= 0, JSON.stringify(c20.texts));
+
+  // ㉑ 打分单调性（P1②）：score(2项无前缀) > score(4项带4前缀)，直测纯函数
+  {
+    const { win } = makeEnv('<html><body><div class="el-dialog__wrapper"><div class="el-dialog">'
+      + '<div class="el-dialog__body"><div class="topic-title">题干</div></div></div></div></body></html>',
+      'https://studyvideoh5.zhihuishu.com/stuStudy');
+    const S = win.ZHS.Questions.Dialog._scoreOptionGroup;
+    const two = S(['说法一是对的', '说法二也是对的'], 0);
+    const fourPrefixed = S(['A. 首页', 'B. 课程', 'C. 章节', 'D. 详情'], 0);
+    ok('㉑ 打分单调性：score(2项无前缀=' + two + ') > score(4项带4前缀=' + fourPrefixed + ')',
+      two > fourPrefixed, two + ' vs ' + fourPrefixed);
+  }
+
+  // ㉒ 前缀噪声不再胜出（P1②）：3 项带前缀噪声 + 2 项真选项 → 读到真选项
+  const c22 = await runCaseD('prefixNoise',
+    '',
+    '<div class="el-breadcrumb"><span class="el-breadcrumb-item">A. 首页</span>'
+    + '<span class="el-breadcrumb-item">B. 课程</span><span class="el-breadcrumb-item">C. 章节</span></div>'
+    + '<div class="opt-list"><div class="opt-item">说法一是对的</div><div class="opt-item">说法二也是对的</div></div>');
+  eq('㉒ 前缀噪声：3 项带前缀噪声 + 2 项真选项 → 读到 2 项', c22.texts.length, 2);
+  ok('㉒ 前缀噪声：读到真选项、不含「首页」',
+    c22.texts.indexOf('说法一是对的') >= 0 && c22.texts.indexOf('首页') < 0, JSON.stringify(c22.texts));
+
+  // ㉓ NAV 回退不豁免按钮组（P1③）：页脚 [上一题][下一题]（button）→ 读到 0、solve 不调、clickOption 零次
+  {
+    const html = `<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+        <div class="el-dialog__body"><div class="topic-title">题干</div></div>
+        <div class="el-dialog__footer">
+          <button class="nav-btn">上一题</button><button class="nav-btn">下一题</button>
+        </div>
+      </div></div><video></video></body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy');
+    const Z = win.ZHS;
+    Z.setConfig({ bankEnabled: false, llmEnabled: false, debug: false });
+    if (Z.Scheduler && Z.Scheduler.stop) Z.Scheduler.stop('user');
+    Z.Answerer._running = false;
+    Z.state.running = true;
+    const solveCalls = [];
+    Z.Solver.solve = async (req) => { solveCalls.push(req); return { answer: 'B', from: 'stub' }; };
+    const clickArgs = [];
+    const _orig = Z.Filler.clickOption.bind(Z.Filler);
+    Z.Filler.clickOption = function (el) { clickArgs.push((el && el.textContent || '').trim()); return _orig(el); };
+    Z.Answerer._giveUpSigs = new Set();
+    Z.Answerer._countedSig = '';
+    await Z.Answerer.handleDialog({ manual: true });
+    const ro = Z.Questions.Dialog.readOptions(Z.Questions.Dialog.root() || win.document);
+    eq('㉓ NAV 回退不豁免按钮组：读到 0 项', ro.texts.length, 0);
+    eq('㉓ NAV 回退不豁免按钮组：solve 不被调用', solveCalls.length, 0);
+    eq('㉓ NAV 回退不豁免按钮组：clickOption 零次', clickArgs.length, 0);
+  }
+
+  // ㉔ √/× 判断题选项（P1④）：选项 √ / × → 读到 2 项
+  const c24 = await runCaseD('judgeSymbols',
+    '', '<div class="opt-list"><div class="opt-item">√</div><div class="opt-item">×</div></div>');
+  eq('㉔ √/× 判断题：读到 2 项', c24.texts.length, 2);
+  ok('㉔ √/× 判断题：文本含 √ 与 ×',
+    c24.texts.indexOf('√') >= 0 && c24.texts.indexOf('×') >= 0, JSON.stringify(c24.texts));
+
+  // ㉕ 单数字选项保留（P1④）：选项组 ["1","说法二"] → 读到 2 项（不被成员级误杀）
+  const c25 = await runCaseD('singleDigit',
+    '', '<div class="opt-list"><div class="opt-item">1</div><div class="opt-item">说法二</div></div>');
+  eq('㉕ 单数字选项组：读到 2 项', c25.texts.length, 2);
+  ok('㉕ 单数字选项组：文本含 1 与 说法二',
+    c25.texts.indexOf('1') >= 0 && c25.texts.indexOf('说法二') >= 0, JSON.stringify(c25.texts));
+
+  // ===== round-23 新增：方案 D 主路径短路漏洞（team-lead 实测挖出）=====
+  // ㉖ ★题干后同父噪声 + 真选项在另一容器 → 必须读到真选项
+  //   复刻 team-lead 场景①：题干与噪声同父（`.wrap`），真选项在 `.wrap2`。
+  //   旧实现主路径「第一圈命中就 return」→ 读到噪声 `["A. 上一节课程回顾","B. 下一节课程预告"]`。
+  const c26 = await runCaseRaw('dSameParentNoise',
+    '<div class="wrap"><div class="q-title topic-title">下列说法正确的是（）</div>'
+    + '<div class="it">A. 上一节课程回顾</div><div class="it">B. 下一节课程预告</div></div>'
+    + '<div class="wrap2"><div class="it">甲说法</div><div class="it">乙说法</div></div>');
+  eq('㉖ 题干后同父噪声：读到 2 项', c26.texts.length, 2);
+  ok('㉖ 题干后同父噪声：读到「甲说法/乙说法」、不含「A. 上一节课程回顾」',
+    c26.texts.indexOf('甲说法') >= 0 && c26.texts.indexOf('乙说法') >= 0
+    && c26.texts.indexOf('A. 上一节课程回顾') < 0, JSON.stringify(c26.texts));
+
+  // ㉗ ★题干后紧跟「元信息标签组」（单选题/2分）→ 必须跳过标签、读到真选项
+  //   复刻 team-lead 场景②：`.tag` 组「单选题 / 2分」同父同 class，会被结构判据当成选项组。
+  const c27 = await runCaseRaw('metaTags',
+    '<div class="wrap"><div class="q-title topic-title">下列说法正确的是（）</div>'
+    + '<div class="tag">单选题</div><div class="tag">2分</div></div>'
+    + '<div class="wrap2"><div class="opt">甲说法</div><div class="opt">乙说法</div></div>');
+  eq('㉗ 元信息标签组：读到 2 项', c27.texts.length, 2);
+  ok('㉗ 元信息标签组：读到「甲说法/乙说法」、不含「单选题」「2分」',
+    c27.texts.indexOf('甲说法') >= 0 && c27.texts.indexOf('乙说法') >= 0
+    && c27.texts.indexOf('单选题') < 0 && c27.texts.indexOf('2分') < 0, JSON.stringify(c27.texts));
+
+  // ㉘ 层级 tie-break 不翻转项数差（直测 scoreOptionGroup + 层级惩罚公式）
+  {
+    const { win } = makeEnv('<html><body><div class="el-dialog__wrapper"><div class="el-dialog">'
+      + '<div class="el-dialog__body"><div class="topic-title">题干</div></div></div></div></body></html>',
+      'https://studyvideoh5.zhihuishu.com/stuStudy');
+    const S = win.ZHS.Questions.Dialog._scoreOptionGroup;
+    // 2 项在最深层（up=5） vs 3 项在题干下（up=0）：999.5 > 300
+    const twoDeep = S(['甲说法', '乙说法'], 0) - 5 * 0.1;
+    const threeTop = S(['步骤一', '步骤二', '步骤三'], 0) - 0 * 0.1;
+    ok('㉘ 层级 tie-break 不翻转项数差：score(2项@5层=' + twoDeep + ') > score(3项@0层=' + threeTop + ')',
+      twoDeep > threeTop, twoDeep + ' vs ' + threeTop);
+  }
+
+  // ㉙ 位置约束：题干位于容器末尾、其**前**有对称噪声组 → 方案 D **本体**不得回头看
+  {
+    // ★ 直测 `_anchoredOptions`（方案 D 本体），而非 readOptions 终值：
+    //   D 返回 [] 后 readOptions 仍会落到方案 C（全树猜测），测终值等于在测 C，测不出 D 的契约。
+    const c29 = await runCaseAnchored('beforeTitleNoise',
+      '<div class="wrap2"><div class="opt">甲说法</div><div class="opt">乙说法</div></div>'
+      + '<div class="wrap"><div class="q-title topic-title">下列说法正确的是（）</div></div>');
+    ok('㉙ 位置约束：题干被读到（前置条件成立）', c29.hadTitle === true);
+    eq('㉙ 位置约束：题干之后无候选 → 方案D 本体返回 0 项（不回头收题干之前的组）', c29.texts.length, 0);
+    ok('㉙ 位置约束：texts 不含题干之前的「甲说法/乙说法」',
+      c29.texts.indexOf('甲说法') < 0 && c29.texts.indexOf('乙说法') < 0, JSON.stringify(c29.texts));
+  }
+
+  // 性能红线：构造一个较大的弹窗（50 个装饰节点 + 2 选项），确认不会线性爆炸
+  {
+    let deco = '';
+    for (let i = 0; i < 50; i++) deco += `<div class="deco"><span>装饰${i}</span></div>`;
+    const { win } = makeEnv(`<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__header"><span class="el-dialog__title">课中答题</span></div>
+        <div class="el-dialog__body">
+          <div class="q-title">题干</div>${deco}
+          <div class="opt-list"><div class="opt-item">甲</div><div class="opt-item">乙</div></div>
+        </div>
+        <div class="el-dialog__footer"><button>关闭</button></div>
+      </div></div><video></video></body></html>`, 'https://studyvideoh5.zhihuishu.com/stuStudy');
+    const Z = win.ZHS;
+    const D = Z.Questions.Dialog;
+    const r = D.root();
+    const t = Date.now();
+    let ro = null;
+    for (let i = 0; i < 200; i++) ro = D.readOptions(r);
+    const per = (Date.now() - t) / 200;
+    eq('性能：大片装饰节点下仍能读到 2 个选项', ro.texts.length, 2);
+    ok('性能：单次 readOptions < 20ms（50 装饰节点 ×200 次实测 ' + per.toFixed(2) + 'ms/次）', per < 20, per.toFixed(2) + 'ms');
+  }
+})();
+
 console.log('\n=== 33. 构建产物完整性 ===');
 // 全部异步测试都要等：此前这里只写了 [_n3, _n4]，其余 4 组的断言
 // 会在汇总打印之后才跑完，失败被静默吞掉（假绿）。
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname]).then(() => {
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings]).then(() => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');
