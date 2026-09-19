@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.13
+// @version      0.6.14
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.13";
+window.__ZHS_BUILD__.version = "0.6.14";
 
 /* ===== 00-config.js ===== */
 /**
@@ -863,7 +863,13 @@ window.__ZHS_BUILD__.version = "0.6.13";
         },
         ['a', 'b', 'c'],
         null
-      ) || (location.hash.match(/courseId[=\/](\w+)/) || [])[1] || 'unknown-course';
+      ) || (location.hash.match(/courseId[=\/](\w+)/) || [])[1]
+      // round-12：URL 全空时的兜底链——优先用课程中心进入时记录的真实课程 id（hubKey），
+      // 再退而求其次读 DOM 上的 data-course-id；避免长期返回 'unknown-course' 导致断点串台、自动跳课去重失效。
+      || (ZHS.state && ZHS.state.hubKey) || (function () {
+        const el = document.querySelector('[data-course-id]');
+        return el ? el.getAttribute('data-course-id') : null;
+      })() || 'unknown-course';
     },
 
     /** 课程名 */

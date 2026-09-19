@@ -4,6 +4,17 @@
 
 ---
 
+## [0.6.14] - 2026-09-19
+> round-12 审查修复：getCourseId 兜底链（对症「断点串台 / 自动跳课去重失效」）。
+
+### 修复
+- **【核心·课程 id 取空 · 断点串台 / 去重失效】** —— `src/02-adapter.js` 的 `getCourseId()` 在 hash 路由只带 `recruitAndCourseId`、不带 `courseId` 参数时，原正则 `courseId[=\/](\w+)` 匹配不到、恒返回字面量 `'unknown-course'`。后果：断点续播 key 串台、课程中心自动跳课去重键退化失效。现加兜底链：URL 全空时优先用课程中心进入时记录的真实课程 id（`ZHS.state.hubKey`），再退读 DOM 上的 `[data-course-id]`，仍取空才回退 `'unknown-course'`；原 URL 解析路径优先级不变，零回归。
+
+### 测试
+- 既有回归（259 项）全绿；本轮仅扩展 getCourseId 兜底分支，门禁以 `check-dist-fresh` + 全量 `test/run.js` 验证 dist 与 src 同步、核心逻辑无回归。
+
+---
+
 ## [0.6.13] - 2026-09-19
 > round-11 审查修复：弹题容器选择器兜底（对症「自动答题没用」）+ 切集后 boot 名额重置（对症「装了没反应」）+ 完成判定阈值统一。
 
