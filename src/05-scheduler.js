@@ -19,7 +19,7 @@
   // 必须严格限定在弹题容器内，不能用裸的 .topic-title：
   // 作业页同样有 .topic-title，裸选择器会在作业页被误判成「弹题」，
   // 于是先暂停视频、再试图关窗，最后还要耗掉一轮 await 才放行。
-  const QUESTION_SELECTORS = '#playTopic-dialog';
+  const QUESTION_SELECTORS = '#playTopic-dialog, [class*="topic-dialog"]';
   // 其他阻塞弹窗
   const BLOCK_SELECTORS = '.ss2077-custom-dialog';
 
@@ -385,7 +385,7 @@
         let cur = locateCur();
         while (Date.now() < settleDeadline) {
           cur = locateCur();
-          if (cur && (ZHS.Catalog.isFinished(cur) || ZHS.Catalog.progressOf(cur) >= 90)) break;
+          if (cur && (ZHS.Catalog.isFinished(cur) || ZHS.Catalog.progressOf(cur) >= 95)) break;
           await U.sleep(300);
         }
 

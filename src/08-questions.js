@@ -88,7 +88,7 @@
   const DialogQuestions = {
     /** 弹题容器（考虑 iframe 情况） */
     root() {
-      let r = document.querySelector('#playTopic-dialog');
+      let r = document.querySelector('#playTopic-dialog, [class*="topic-dialog"]');
       if (r && U.isStructurallyVisible(r)) return r;
       // 关键坑：弹题可能渲染在 iframe 里
       const iframe = document.getElementById('tmDialog_iframe');
