@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.7
+// @version      0.6.8
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.7";
+window.__ZHS_BUILD__.version = "0.6.8";
 
 /* ===== 00-config.js ===== */
 /**
@@ -1612,11 +1612,12 @@ window.__ZHS_BUILD__.version = "0.6.7";
     bindVideo(video, courseId, lessonKey) {
       if (!video || !courseId) return false;
 
-      // 守卫前置：同一个 video 重复绑定直接返回（视频元素被替换时才会真正重绑）
-      if (this._boundVideo === video) return true;
+      // 守卫前置：同一 video + 同一课程 + 同一课时 → 无需重绑（保留进度记录，避免重复绑定覆盖节流函数）
+      if (this._boundVideo === video && this._boundCourse === courseId && this._boundLesson === lessonKey) return true;
 
-      // 解绑旧的：视频元素被换掉了，旧监听留在旧元素上没意义
+      // 解绑旧的：视频元素被换掉，或 SPA 复用同一节点但切了课/切了节（闭包里的课程/课时标识需刷新）
       this._detach();
+      this._lastDuration = 0;   // 切课/切节：清零旧时长，避免把旧课的时长比例套到新课算出错误恢复位置
 
       const bindId = ++this._bindSeq;
       this._boundVideo = video;
@@ -1673,7 +1674,9 @@ window.__ZHS_BUILD__.version = "0.6.7";
         });
       } catch (e) { /* 忽略 */ }
 
-      ZHS.Log.debug('已绑定进度记录到视频（bind#' + bindId + '）');
+      this._boundCourse = courseId;
+      this._boundLesson = lessonKey;
+      ZHS.Log.debug('已绑定进度记录到视频（bind#' + bindId + '，课程 ' + courseId + ' / 节 ' + lessonKey + '）');
       return true;
     },
 
@@ -1688,6 +1691,8 @@ window.__ZHS_BUILD__.version = "0.6.7";
       } catch (e) { /* 忽略 */ }
       this._boundVideo = null;
       this._bindId = -1;
+      this._boundCourse = null;
+      this._boundLesson = null;
       this._saveThrottled = null;
     },
 
@@ -5702,11 +5707,8 @@ window.__ZHS_BUILD__.version = "0.6.7";
       if (!r) return null;
       const titleEl = r.querySelector('.topic-title, .topic-content, .topic-question');
       const title = readText(titleEl);
-      // 选项：优先 ul .topic-item，兜底 radio 列表
-      let optionEls = Array.from(r.querySelectorAll('ul .topic-item'));
-      if (!optionEls.length) {
-        optionEls = Array.from(r.querySelectorAll('.topic .radio ul > li'));
-      }
+      // 选项：覆盖主文档与 iframe 变体的多种选择器（含 Element UI 的 el-radio/el-checkbox）
+      let optionEls = Array.from(r.querySelectorAll('ul .topic-item, .topic .radio ul > li, .answerOption label, .el-radio, .el-checkbox, .radio > label, .checkbox > label'));
       const options = optionEls.map((o) => readText(o));
       const typeText = readText(r.querySelector('.topic-type, .subject_type'));
       return {
@@ -5714,6 +5716,7 @@ window.__ZHS_BUILD__.version = "0.6.7";
         options,
         type: guessType(typeText + ' ' + title, options),
         elementList: optionEls,
+        node: r,   // 供 Filler.fill 在弹题容器内定位输入框，避免填空题退化到整页 document
       };
     },
 
@@ -5724,13 +5727,13 @@ window.__ZHS_BUILD__.version = "0.6.7";
 
       // 按优先级找关闭按钮（智慧树弹题的关闭控件在多个位置出现过）
       const CANDIDATES = [
-        '#playTopic-dialog .close-btn',
-        '#playTopic-dialog .el-dialog__close',
-        '#playTopic-dialog .close',
-        '#playTopic-dialog .topic-close',
         '.close-btn',
         '.el-dialog__close',
+        '.close',
         '.topic-close',
+        '.popbtn_cancel',
+        'button[class*="close"]',
+        '.btn-cancel',
       ];
 
       for (const sel of CANDIDATES) {
@@ -6705,6 +6708,7 @@ ${question}${optionText}
       if (ZHS.config.autoCloseDialog === false) {
         ZHS.Log.info('已作答完成（自动关闭已关闭，请手动关闭弹题）');
         this._lastDialogSig = '';
+        this._answeredSig = sig || '';   // 标记已作答，避免下一轮因签名变化反复点击取消已选项
         return;
       }
 
