@@ -41,6 +41,8 @@
       if (!root) {
         // 弹窗已消失（人工答完/平台收走）→ 复位待人工标记，让下一道题正常走流程
         this._pendingHuman = false;
+        // round-8 A1：弹窗消失即解除退避，否则退避期内新弹题会被跳过且不答（旧题卡死新题）
+        this._cooldownUntil = 0;
         return;
       }
 
@@ -357,7 +359,6 @@
 
     /** 重置弹题签名（切课后调用） */
     reset() {
-      this._lastDialogSig = '';
       this._answeredSig = '';
       this._skippedSigs = new Set();
       this._lastSkipWarnAt = 0;
