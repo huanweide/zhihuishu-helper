@@ -16,6 +16,8 @@
     _noSelfCheckSig: '',    // round-10 A3：上一轮判定「点击未生效/无法自检」的题签名
     _noSelfCheckUntil: 0,   // round-10 A3：该判定的节流截止时间
     _giveUpSigs: null,      // round-13：已放弃处理的弹窗签名集合（关不掉/非标准答题），避免每轮死磕关闭刷屏
+    _countedSig: '',        // round-17：本轮已计入 answeredCount 的弹窗签名
+                            // （标准链路先答一次、A/B 兜底再答一次会重复计数，同一个弹窗只许计一次）
     _skippedSigs: null,     // 无通道已跳过的弹题签名集合
     _lastSkipWarnAt: 0,     // 跳过告警节流时间戳
     _failCount: 0,          // 同一弹题连续处理失败次数
@@ -29,7 +31,13 @@
     async handleDialog(opts) {
       const manual = !!(opts && opts.manual);
       if (this._running) return;
-      if (!manual && !ZHS.config.autoAnswer) return;   // 手动模式绕过配置
+      // 手动模式绕过配置；自动模式要求两个开关都为真：
+      //   autoAnswer    = AI 答题总开关
+      //   answerDialog  = 「课中弹题自动答」子开关
+      // 为什么两个都要查：调用方（调度器守卫 2）虽然已做双重校验，但本函数是 public API
+      // （面板「答题」按钮也能直接调用）。只查总开关的话，任何新增调用点都会绕开子开关，
+      // 在用户明确关掉「课中弹题自动答」的情况下仍然替他答题。
+      if (!manual && (!ZHS.config.autoAnswer || !ZHS.config.answerDialog)) return;
 
       // 退避期内不重试作答（防止关闭失败导致死循环作答）。
       // 但退避 ≠ 卡死：主循环会走 forceCloseDialog() 直接关弹窗恢复播放。
@@ -52,8 +60,16 @@
       // 防止同一份弹题重复处理（用题干+选项拼接作签名）。
       // 手动触发例外：用户主动点了「答题」按钮，即使签名没变也必须重试，
       // 否则按钮看起来就是「点了没反应」。
+      //
+      // 【P2-2 修复 · 2026-09-19】签名必须**叠加选项文本**。
+      // 起因：无标准题面的弹窗（题面靠 .el-dialog__title 这类固定文案兜底，例如"课中答题"），
+      // 同一课程内多道题的标题完全一样 → 签名全相同 → 第二道起被 `sig === _answeredSig`
+      // 误判「已作答完成」跳过，用户看到「只有第一道会答」。
+      // 选项文本能区分同一标题下的不同题（题干+选项一起构成题的指纹），故纳入签名。
       const snapshot = ZHS.Questions.Dialog.collect();
-      const sig = JSON.stringify(snapshot.map((s) => s.title)).slice(0, 200);
+      const sig = JSON.stringify(snapshot.map(
+        (s) => (s.title || '') + '|' + ((s.options || []).join(','))
+      )).slice(0, 200);
       // round-13：本题已放弃处理（非标准 A/B 简单答题，自动随机选都没猜对）。
       // 直接跳过，不再每轮死磕关闭刷屏；弹窗消失后（handleDialog 的 !root 分支）会自动清空放弃集合。
       if (this._giveUpSigs && this._giveUpSigs.has(sig)) {
@@ -227,48 +243,172 @@
     },
 
     /**
-     * round-13：处理「非标准 A/B 简单答题」弹窗（标准题面/选项识别不到，如 .el-dialog 容器）。
-     * 策略：在弹窗内按 A/B 文本或通用选项结构随机选一个点击一次 → 尝试关闭；
-     * 选对就关掉恢复播放；选错（需选对才能关）或结构不符导致关不掉 → 放弃本题，
-     * 加入 _giveUpSigs（后续轮次跳过，不再刷屏），并面板提示用户手动选 A 或 B。
+     * 处理「非标准 A/B 简单答题」弹窗（标准题面/选项一段都识别不到时的最后兜底）。
+     *
+     * 用户诉求（2026-09-19 原话）：「猜两次可以，问题是脚本没有在答这种题——它只是乱点；
+     * 如果你能检测出题目、能答出来，那就答对再关。」
+     * 因此本函数改成两段式，**先真求解，求不出来才猜**：
+     *
+     *   第一段（优先）：Dialog.readCurrent 读题干+选项 → Solver.solve（题库/LLM）
+     *                  → 按答案索引点击 → Filler.isChecked 自检选中态
+     *                  → 自检通过才作答成功计数 → 关闭弹窗。
+     *   第二段（兜底）：第一段任何一步失败（读不到题、求解返回 null、自检不过）
+     *                  都落到这里 —— 扫文本前缀找 A/B 选项，随机选一个点掉试关，
+     *                  失败再换另一个（最多 2 轮，「猜两次」），两轮都关不掉才放弃转人工。
+     *
+     * 为什么要自检：平台规则是「未作答的弹题不能关闭」，脚本若自以为答完了去硬关，
+     * 只会被平台拒绝，再陷入「关不掉 → 退避 → 再关」的死循环骚扰用户。
+     * 宁可明确转人工，也不假装答上了。
      */
     async _tryNonStandardAB(root, sig) {
-      ZHS.Log.info('round-13：识别到非标准 A/B 简单答题（标准选项识别不到），尝试随机选 A/B');
-      // 在弹窗内查找看起来像 A/B 选项的可点击元素（兜底多种结构）
-      const optSel = 'li, label, .el-radio, .el-checkbox, [role="radio"], [role="option"], .option-item, .choice-item, .answer-option';
-      let opts = Array.from(root.querySelectorAll(optSel)).filter((el) => {
+      ZHS.Log.info('识别到非标准 A/B 简单答题弹窗，先尝试真作答（题库/LLM），失败再猜 A/B');
+
+      // 读取选项：**必须用 Dialog.readOptions 独立读，不能复用 readCurrent().options**。
+      //
+      // 【P1 死代码修复 · 2026-09-19】进入本函数的条件是「readCurrent().options 为空」，
+      // 而旧代码第一段的入口条件却是「options.length >= 2」——两者**互斥**，
+      // 导致第一段（真求解作答）永远不执行，用户要的「能答就答对再关」形同虚设，
+      // 只剩乱猜（实测 Solver.solve 调用次数 = 0）。
+      // 根因是把「标准选择器读不到选项」错当成「这题没有选项」：
+      // 按钮式/div 式 A/B 题（选项是 button，没有 .el-radio）标准选择器读不到，
+      // 但它确实有选项、确实可作答。readOptions 提供更宽的独立通道，读不到再降级。
+      const ro = (ZHS.Questions.Dialog.readOptions && ZHS.Questions.Dialog.readOptions(root))
+        || { elements: [], texts: [] };
+      const optEls = ro.elements || [];
+      const optTexts = ro.texts || [];
+
+      // 题干兜底链：标准题面 → .el-dialog__title（弹窗标题）→ body 整段文本。
+      // 只要拿到任一非空题面就可以交给 Solver 去匹配，总好过完全不读题。
+      const q = ZHS.Questions.Dialog.readCurrent(root);
+      let title = q && q.title ? String(q.title).trim() : '';
+      if (!title) {
+        // 【P2 修复 · round-22】root 本身可能是 null（调用方未传/弹窗已消失），
+        // 必须先判 root 再判 root.querySelector —— 与上面 :282 readCurrent(root) 的容忍度一致
+        // （readCurrent 内部 `if (!r) return null` 不崩，这里若不判 root 就会 TypeError）。
+        const b = root && root.querySelector
+          && (root.querySelector('.el-dialog__title') || root.querySelector('.el-dialog__body'));
+        if (b) title = (U.normText(b.textContent || '') || '').trim();
+      }
+
+      // ===== 第一段：真求解（优先，能答对就答对再关） =====
+      // 入口条件与「进入本函数的原因」自洽：不再看 readCurrent().options，
+      // 而是看「独立读到的选项 >= 2」+「拿到题面」。
+      if (title && optTexts.length >= 2) {
+        try {
+          ZHS.Log.info('A/B 弹窗题干：' + title.slice(0, 60) + '（选项 ' + optTexts.length + ' 个）');
+          const result = await ZHS.Solver.solve({ title, options: optTexts, type: q ? q.type : 'unknown' });
+          if (result && result.answer) {
+            const idxs = ZHS.Bank.toIndexes(result.answer);
+            let answered = false;
+            for (const idx of idxs) {
+              const el = optEls[idx];
+              if (!el) continue;   // 索引越界守卫：取不到就跳过该索引，不崩
+              // Filler.clickOption：内含 .el-radio__input 内层点击 + input.checked 兜底 + 重试。
+              // 返回值的意义：完成「点击动作」并尽量确认选中态。
+              // eslint-disable-next-line no-await-in-loop
+              const clicked = await ZHS.Filler.clickOption(el);
+              // eslint-disable-next-line no-await-in-loop
+              await U.sleep(600);
+              // 判据只认 isChecked（自检真实选中态）——clicked 仅用于日志：
+              // `(clicked || isChecked) && isChecked` 在布尔代数上等价于 isChecked，clicked 被短路，
+              // 写成这样容易让读者误以为 clicked 也参与判定，故显式分开写。
+              const checked = ZHS.Filler.isChecked(el);
+              if (checked) {
+                answered = true;
+              } else {
+                ZHS.Log.debug('A/B 弹窗选项点击后未选中（clicked=' + clicked + '），尝试二次点击');
+                // 点完仍检不到选中态，再点一次（Element UI 的 label 偶发需要二次点击）
+                // eslint-disable-next-line no-await-in-loop
+                try { el.click(); } catch (e) { /* 忽略 */ }
+                // eslint-disable-next-line no-await-in-loop
+                await U.sleep(400);
+                if (ZHS.Filler.isChecked(el)) answered = true;
+              }
+            }
+            if (answered) {
+              // 防重复计数：同一个弹窗可能先被标准链路答过一次（_solveCurrentPage），
+              // 关闭失败后又落到这里再答一次；answeredCount 是给用户看「答了几道题」的，
+              // 同一弹窗计两次会让总结报告虚高。用签名去重，只计第一次。
+              if (sig !== this._countedSig) {
+                this._countedSig = sig || '';
+                ZHS.state.answeredCount++;
+              }
+              ZHS.Log.info('已作答（A/B 弹窗）：' + result.answer + '（来源 ' + result.from + '）');
+              const ok = await this.closeDialogAndResume();
+              if (ok) {
+                this._answeredSig = sig || '';
+                return;
+              }
+              ZHS.Log.warn('A/B 弹窗已作答但关闭失败，转入随机猜的兜底流程');
+            } else {
+              ZHS.Log.warn('A/B 弹窗答案已求出（' + result.answer + '）但点击未生效，不硬关，转入随机猜');
+            }
+          } else {
+            ZHS.Log.info('A/B 弹窗无可用答题通道（题库查不到且未配置 LLM Key），转入随机猜');
+          }
+        } catch (e) {
+          ZHS.Log.warn('A/B 弹窗真作答异常（' + (e && e.message) + '），转入随机猜');
+        }
+      } else {
+        ZHS.Log.debug('A/B 弹窗题干或选项读不到（题面「' + title.slice(0, 30)
+          + '」/ 选项 ' + optTexts.length + ' 个），跳过真作答，直接随机猜');
+      }
+
+      // ===== 第二段：兜底随机猜（最多 2 轮，对应用户说的「猜两次」） =====
+      // 选择器取材：优先复用第一段已独立读出的选项元素（optEls）——
+      // 它对「按钮式 / div 式 A/B 题」也有效（readOptions 的宽口径通道已覆盖）；
+      // 只有 optEls 为空（第一段连选项都没读出来）时，才退回下面这组窄选择器兜底。
+      //
+      // 为什么不再用裸的 `li, label`：弹窗页脚/按钮条本身也是 li/label，
+      // `slice(0,2)` 会把它们当选项点掉，既没答上题、还可能误触按钮
+      //（用户抱怨的「只是乱点」很大一部分来自这里）。
+      const optSel = '.el-radio, .el-checkbox, [role="radio"], [role="option"],'
+        + ' .option-item, .choice-item, .answer-option, .option-btn, .option, .choice';
+      const allOpts = optEls.length >= 2 ? optEls : Array.from(root.querySelectorAll(optSel));
+      let opts = allOpts.filter((el) => {
         const t = (el.textContent || '').replace(/\s+/g, '').toLowerCase();
         return /^([ab][.、:：]?|是|否|对|错|正确|错误|√|×)/.test(t);
       });
       if (!opts.length) {
-        // 退一步：直接取弹窗内前两个可点选项（不强制 A/B 文本）
-        opts = Array.from(root.querySelectorAll(optSel)).slice(0, 2);
+        // 退一步：直接取弹窗内前两个选项元素（不强制 A/B 文本前缀）
+        opts = allOpts.slice(0, 2);
       }
       if (!opts.length) {
         // 连选项元素都找不到 → 直接放弃，提示用户手动选
         if (this._giveUpSigs) this._giveUpSigs.add(sig);
         this._pendingHuman = true;
         if (ZHS.panel) ZHS.panel.alert('检测到选对才能关的简单 A/B 题，但自动找不到选项，请手动选 A 或 B', 'warn', 10000);
-        ZHS.Log.warn('round-13：非标准 A/B 答题找不到选项元素，放弃自动处理，提示用户手动选');
+        ZHS.Log.warn('非标准 A/B 答题找不到选项元素，放弃自动处理，提示用户手动选');
         return;
       }
-      // 随机选 A 或 B 之一点一次
-      const idx = opts.length > 1 ? (Math.random() < 0.5 ? 0 : 1) : 0;
-      const pick = opts[idx];
-      try { pick.click(); } catch (e) { /* 点击异常不影响后续关闭尝试 */ }
-      await U.sleep(400);
-      const ok = await this.closeDialogAndResume({ noChannel: true });
-      if (ok) {
-        this._answeredSig = sig || '';
-        ZHS.Log.info('round-13：随机选 A/B 成功关闭弹窗，恢复播放');
-      } else {
-        // 选错（需选对才能关）或结构不符 → 放弃本题，提示用户手动选 A 或 B
-        if (this._giveUpSigs) this._giveUpSigs.add(sig);
-        this._pendingHuman = true;
-        if (ZHS.panel) ZHS.panel.alert('这是选对才能关的简单 A/B 题，自动没猜对，请手动选 A 或 B', 'warn', 10000);
-        ZHS.Log.warn('round-13：随机选 A/B 仍未关闭（需选对才能关），放弃自动处理，提示用户手动选');
-        this._resumePlay();
+
+      const first = opts.length > 1 ? (Math.random() < 0.5 ? 0 : 1) : 0;
+      const order = opts.length > 1 ? [first, 1 - first] : [0];   // 最多试 2 个（先随机，再换另一个）
+      for (let round = 0; round < order.length; round++) {
+        const pick = opts[order[round]];
+        ZHS.Log.info('A/B 弹窗兜底猜第 ' + (round + 1) + ' 次（选项 ' + (order[round] + 1) + '）');
+        // 优先走 Filler.clickOption（内部有内层点击 + input.checked 兜底 + 重试）
+        try {
+          await ZHS.Filler.clickOption(pick);
+        } catch (e) {
+          try { pick.click(); } catch (e2) { /* 点击异常不影响后续关闭尝试 */ }
+        }
+        await U.sleep(600);
+        // eslint-disable-next-line no-await-in-loop
+        const ok = await this.closeDialogAndResume({ noChannel: true });
+        if (ok) {
+          this._answeredSig = sig || '';
+          ZHS.Log.info('A/B 弹窗兜底猜第 ' + (round + 1) + ' 次成功关闭，恢复播放');
+          return;
+        }
       }
+
+      // 两轮都没关掉（需选对才能关）→ 放弃本题，提示用户手动选 A 或 B
+      if (this._giveUpSigs) this._giveUpSigs.add(sig);
+      this._pendingHuman = true;
+      if (ZHS.panel) ZHS.panel.alert('这是选对才能关的简单 A/B 题，自动没答上，请手动选 A 或 B', 'warn', 10000);
+      ZHS.Log.warn('A/B 弹窗真作答与两次兜底猜均未关闭，放弃自动处理，提示用户手动选');
+      this._resumePlay();
     },
 
     /**
@@ -367,7 +507,12 @@
           const flex = q.elementList[idx] ||
             root.querySelector('.topic .radio ul > li:nth-child(' + (idx + 1) + ')');
           if (flex) {
-            flex.click();
+            // 【P3-2 修复 · 2026-09-19】改走 Filler.clickOption，与 A/B 兜底路径统一。
+            // 原先这里用裸 `flex.click()`：对标准 .topic-item 够用，但对 Element UI 的
+            // `.el-radio`（外层 label 拦住点击、真正生效的是内层 .el-radio__input）常常点不上，
+            // 且若该元素已被选中，裸点击会把它**取消**（无「已选中则跳过」保护）。
+            // clickOption 内含：已选中防取消 → 点内层 __input → input.checked 兜底 → 重试。
+            await ZHS.Filler.clickOption(flex);
             await U.sleep(600);
             // 自检：点击后确认选项真的处于选中态。查不到选中就当作没答上
             // （宁可交给人工，也不能让脚本以为答完了去关一个平台不认的弹窗）
@@ -464,6 +609,7 @@
       this._cooldownUntil = 0;
       this._pendingHuman = false;
       this._giveUpSigs = new Set();   // round-13：已放弃的非标准弹窗签名集合
+      this._countedSig = '';          // round-17：切课后重开计数闸门，新弹题可正常计数
     },
   };
 

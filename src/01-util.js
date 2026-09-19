@@ -181,4 +181,24 @@
   };
 
   ZHS.Util = Util;
+
+  /**
+   * 共享常量（单一真源）。
+   *
+   * 为什么要抽出来：弹题容器的选择器此前在 src/05-scheduler.js 与 src/08-questions.js
+   * 各写了一份字面量。两份只要有一处改动没同步，就会出现：
+   *   调度器守卫判定「这是弹题」→ 答题模块却找不到容器（或反过来），
+   *   表现是弹窗明明在屏幕上、脚本却完全不处理（2026-09-19 用户报的「脚本没有在答这种题」）。
+   * 现在统一从这里取，两边都用 `ZHS.Const.QUESTION_SELECTORS || '<兜底字面量>'` 兜底取值——
+   * 兜底字面量是为了防模块加载顺序异常（例如本模块被重入守卫提前 return），
+   * 拿不到常量时至少还能用默认串工作，而不是整个答题链路静默失效。
+   *
+   * 选择器说明：
+   *  - `#playTopic-dialog` / `[class*="topic-dialog"]`：智慧树标准课中弹题容器。
+   *  - `.el-dialog__wrapper .el-dialog`：Element UI 弹窗（「选对才能关」的 A/B 简单答题就是这种），
+   *    它的 class 里不含 `topic-dialog` 子串，只写前两个选择器会完全匹配不到。
+   */
+  ZHS.Const = ZHS.Const || {};
+  ZHS.Const.QUESTION_SELECTORS =
+    '#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog';
 })();

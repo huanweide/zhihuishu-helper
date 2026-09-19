@@ -14,12 +14,20 @@
 
   // 需要用户手动处理才能继续的遮挡层（验证码）
   const VERIFY_SELECTORS = '.yidun_popup, .yidun_modal, [id^="tcaptcha_transform"]';
-  // 弹题遮挡层
   // 弹题遮挡层。
   // 必须严格限定在弹题容器内，不能用裸的 .topic-title：
   // 作业页同样有 .topic-title，裸选择器会在作业页被误判成「弹题」，
   // 于是先暂停视频、再试图关窗，最后还要耗掉一轮 await 才放行。
-  const QUESTION_SELECTORS = '#playTopic-dialog, [class*="topic-dialog"]';
+  //
+  // 【2026-09-19 修正】选择器改为从 ZHS.Const 共享常量读取（单一真源），
+  // 并补上 Element UI 弹窗 `.el-dialog__wrapper .el-dialog`。
+  // 原先这里与 src/08-questions.js 的 Dialog.root() 各写一份 `#playTopic-dialog, [class*="topic-dialog"]`，
+  // 两份必须逐字一致才不出错：调度器靠它放行守卫 2，答题器靠它找容器。
+  // 而 Element UI 的「选对才能关」A/B 弹窗 class 里没有 `topic-dialog` 子串 →
+  // 守卫 2 进不去、Dialog.root() 返回 null，脚本对这类弹窗完全无反应（用户报的「脚本没有在答这种题」）。
+  // 现在两边同源，且字面量兜底防模块加载顺序异常。
+  const QUESTION_SELECTORS = ZHS.Const && ZHS.Const.QUESTION_SELECTORS
+    || '#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog';
   // 其他阻塞弹窗
   const BLOCK_SELECTORS = '.ss2077-custom-dialog';
 
@@ -339,7 +347,7 @@
             // 但它可能调 LLM（网络慢/超时），必须套总预算：
             // 宁可这道题不答，也不能让主循环一直吊在这儿。
             const done = await this._withBudget(
-              ZHS.Answerer.handleDialog(), DIALOG_BUDGET_MS, '弹题作答'
+              ZHS.Answerer.handleDialog({ manual: false }), DIALOG_BUDGET_MS, '弹题作答'
             );
             if (!done) {
               ZHS.Log.warn('弹题作答超时（>' + (DIALOG_BUDGET_MS / 1000) + ' 秒），交由人工处理');

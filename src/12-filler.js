@@ -100,6 +100,13 @@
 
   const Filler = {
     isChecked,
+    /**
+     * 点击一个选项（对外暴露）。
+     * 原先 clickOption 只在模块内部使用，13-answerer.js 的 A/B 兜底路径
+     * 只能用裸 `el.click()` —— 而 Element UI 的 .el-radio 外层 label 被点常常不生效，
+     * 需要点内层 .el-radio__input + input.checked 兜底。统一走这里，避免两套点击逻辑漂移。
+     */
+    clickOption,
 
     /**
      * 按答案回填一道题
