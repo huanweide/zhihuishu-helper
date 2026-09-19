@@ -922,9 +922,28 @@ const _fakeFin = (async () => {
   const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=fakefin');
   const S = win.ZHS.Scheduler;
 
+  // 在停机发生的当下同步抓取状态：gotoNext 的 await 链中有等待，
+  // 期间 watchSpa 的 MutationObserver（1s 防抖）可能已自愈重启，
+  // 直接读 _timer 会被异步干扰，故用 hook 捕获停机瞬间的语义。
+  let haltSnap = null;
+  const _origStop = S.stop.bind(S);
+  S.stop = function (why) { _origStop(why); haltSnap = { why: S._haltReason, halted: S._halted }; };
+
   await S.gotoNext('手动', { manual: true });
-  eq('目录为空时运行态关闭（停止）', win.ZHS.state.running, false);
+
+  ok('目录为空时确实触发了停机', !!haltSnap, JSON.stringify(haltSnap));
+  eq('目录为空停机原因为瞬时故障（允许自愈）', haltSnap && haltSnap.why, 'transient');
+  eq('瞬时故障停不置 _halted（可被自愈拉起）', haltSnap && haltSnap.halted, false);
   ok('目录为空时不生成「全部看完」总结', !S.lastReport(), String(S.lastReport()));
+
+  // round-14 安全边界核心断言：用户主动停 / 达标停 绝不能被自愈偷偷拉起
+  const S2b = win.ZHS.Scheduler;
+  S2b.stop = _origStop;             // 还原真实 stop，避免 hook 干扰
+  S2b._transientReloads = 0;
+  S2b.stop();                       // 默认 'user'
+  eq('用户主动停后 _haltReason 为 user', S2b._haltReason, 'user');
+  eq('用户主动停后自愈必须返回 false', S2b.tryResumeAfterTransientStop(), false);
+  eq('用户主动停后定时器仍为 null', S2b._timer, null);
 })();
 
 console.log('\n=== 31. 视频放完且平台进度读不到 → 直接切下一集（修复重播 bug） ===');
@@ -962,6 +981,61 @@ const _noreplay = (async () => {
   ok('平台进度 0% 也切换了课时', cat.itemTitle(cat.current()) === '第二节',
     cat.itemTitle(cat.current()));
   ok('完成计数 +1', S._completedThisRun === 1, String(S._completedThisRun));
+})();
+
+console.log('\n=== 31b. 瞬时故障停机的受限自愈（round-14） ===');
+const _transient = (async () => {
+  const html = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo current"><span class="child-name">第一节</span></div>
+  <div class="child-info hasvideo"><span class="child-name">第二节</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=trans1');
+  const S = win.ZHS.Scheduler;
+  win.ZHS.state.videoEl = win.document.querySelector('video');
+
+  // ① 冷却期内不救：刚停机立刻调用必须返回 false
+  S._transientReloads = 0;
+  S.stop('transient');
+  eq('瞬时故障停后 _haltReason 为 transient', S._haltReason, 'transient');
+  eq('瞬时故障停不置 _halted', S._halted, false);
+  eq('冷却期内不自愈（防高频空转）', S.tryResumeAfterTransientStop(), false);
+
+  // ② 冷却期满 + 视频就绪 → 自愈成功
+  S._transientStoppedAt = Date.now() - 61000;   // 伪造已过 60s 冷却
+  eq('冷却期满后自愈返回 true', S.tryResumeAfterTransientStop(), true);
+  eq('自愈后主循环定时器已建立', S._timer !== null, true);
+  eq('自愈次数 +1', S._transientReloads, 1);
+  S.stop();
+
+  // ③ 超过次数上限后不再自愈（防无限重试）
+  S._transientReloads = 3;
+  S.stop('transient');
+  S._transientStoppedAt = Date.now() - 61000;
+  eq('超过自愈上限后返回 false', S.tryResumeAfterTransientStop(), false);
+  eq('超限后定时器仍为 null', S._timer, null);
+
+  // ④ 视频未就绪时不救（等 DOM 恢复再来）
+  //    注意：实现里有 `videoEl || document.querySelector('video')` 兜底，
+  //    所以要真正验证「无视频不救」，必须把 DOM 里的 video 也移除，只置 videoEl=null 不够。
+  S._transientReloads = 0;
+  const _v = win.document.querySelector('video');
+  if (_v && _v.parentNode) _v.parentNode.removeChild(_v);
+  win.ZHS.state.videoEl = null;
+  S.stop('transient');
+  S._transientStoppedAt = Date.now() - 61000;
+  eq('视频缺失时不自愈', S.tryResumeAfterTransientStop(), false);
+
+  // ⑤ 达标停（condition）同样不可被自愈拉起
+  win.document.body.appendChild(win.document.createElement('video'));
+  win.ZHS.state.videoEl = win.document.querySelector('video');
+  S._transientReloads = 0;
+  S.stop('condition');
+  S._transientStoppedAt = Date.now() - 61000;
+  eq('达标停后自愈必须返回 false', S.tryResumeAfterTransientStop(), false);
+  eq('达标停后 _halted 为 true（彻底封死）', S._halted, true);
 })();
 
 console.log('\n=== 32. 手动答题绕过配置（面板「答题」按钮必须有效） ===');
@@ -1145,7 +1219,7 @@ console.log('\n=== 32e. 弹题选项选择器覆盖（round-6 修复） ===');
 console.log('\n=== 33. 构建产物完整性 ===');
 // 全部异步测试都要等：此前这里只写了 [_n3, _n4]，其余 4 组的断言
 // 会在汇总打印之后才跑完，失败被静默吞掉（假绿）。
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay]).then(() => {
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient]).then(() => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');

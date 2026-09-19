@@ -15,6 +15,37 @@
   const BOOT_MAX_TRIES = 3;
 
   /**
+   * round-14：面板外兜底提示条。
+   *
+   * 背景：面板是脚本唯一的可见界面。一旦 ZHS.panel 缺失或 mount 失败，
+   * 原代码只写一行 ZHS.Log.error —— 而日志恰恰是写进「面板自己的日志缓冲」里的，
+   * 面板正是此刻看不见的那个东西，等于零提示；普通用户也不会开 F12。
+   * 结果就是「脚本在后台照常跑，用户一个界面元素都看不到」= 用户报的「装了跟没装一样」。
+   *
+   * 这里直接在页面根节点挂一条固定定位的红条，不依赖面板、不依赖 Shadow DOM，
+   * 只用最朴素的 DOM 操作，尽可能在任何环境下都能显示出来。
+   */
+  function showPanelMissingNotice(detail) {
+    try {
+      if (document.getElementById('zhs-panel-missing-notice')) return;   // 去重
+      const bar = document.createElement('div');
+      bar.id = 'zhs-panel-missing-notice';
+      bar.setAttribute('style',
+        'position:fixed;top:0;left:0;right:0;z-index:2147483647;'
+        + 'background:#e74c3c;color:#fff;font-size:13px;line-height:1.7;'
+        + 'padding:8px 14px;text-align:center;font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;'
+        + 'box-shadow:0 2px 8px rgba(0,0,0,.25)');
+      bar.textContent = '智慧树助手：脚本正在后台运行，但控制面板初始化失败'
+        + (detail ? '（' + detail + '）' : '')
+        + '。请刷新页面重试；若仍不显示，可在控制台执行 zhs.boot()。';
+      // 点一下可关闭，不打扰用户
+      bar.addEventListener('click', () => { try { bar.remove(); } catch (e) { /* 忽略 */ } });
+      (document.body || document.documentElement).appendChild(bar);
+      ZHS.Log.warn('已显示面板外兜底提示条（面板不可用）');
+    } catch (e) { /* 连兜底条都挂不上，只能留在日志里 */ }
+  }
+
+  /**
    * 启动外壳：负责「失败要能看得见，且允许重试」
    *
    * 【2026-09-19 修正】原来的 boot() 第一句就是 `initialized = true`。
@@ -61,10 +92,14 @@
     //    （原来排在第 3 步，且整条链无 try/catch → 前一步出错就永远看不到面板）
     if (ZHS.panel) {
       try { ZHS.panel.mount(); }
-      catch (e) { ZHS.Log.warn('面板挂载失败：' + e.message); }
+      catch (e) {
+        ZHS.Log.warn('面板挂载失败：' + e.message);
+        showPanelMissingNotice('挂载异常');
+      }
     } else {
       // 挂不上必须说出来。静默跳过的话，用户眼里就是「装了跟没装一样」。
       ZHS.Log.error('面板模块不可用（ZHS.panel 未定义），界面不会显示；核心逻辑仍会继续尝试');
+      showPanelMissingNotice('模块未就绪');
     }
 
     // 1. 识别页面版本
@@ -150,6 +185,11 @@
       }
       // 页面还没初始化但出现视频 → 补启动（含启动失败后的重试，受次数上限约束）
       if (!initialized && bootTries < BOOT_MAX_TRIES && v) boot();
+      // round-14：瞬时故障（目录临时读不到 / 节点临时定位不到 / 连点无反应）导致的停机，
+      // 在视频恢复后允许受限自愈重启；用户主动停 / 达标停不受影响（内部有原因判定与冷却/次数上限）
+      if (ZHS.Scheduler && ZHS.Scheduler.tryResumeAfterTransientStop) {
+        ZHS.Scheduler.tryResumeAfterTransientStop();
+      }
     }, 1000);
 
     try {

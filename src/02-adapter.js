@@ -640,7 +640,12 @@
       }
       try { if (ad.active && el.matches && el.matches(ad.active)) return true; } catch (e) { /* 选择器兼容 */ }
       try {
-        const cur = ad.active ? document.querySelector(ad.active) : null;
+        // round-14【P4】：限定在目录容器内查询，而不是整个 document。
+        // 原先 document.querySelector(ad.active) 会命中页面别处任意带 active 的容器
+        // （如播放器控制条、其他 tab），只要与 el 存在祖先/包含关系就误判为「当前项」，
+        // 造成「0 毫秒假成功」。收窄到 adapter.container 内可基本消除这类误判。
+        const scope = (ad.container && document.querySelector(ad.container)) || document;
+        const cur = ad.active ? scope.querySelector(ad.active) : null;
         if (cur && (cur === el || el.contains(cur) || cur.contains(el))) return true;
       } catch (e) { /* 选择器兼容 */ }
       return false;
@@ -687,16 +692,45 @@
       opt = opt || {};
       const timeout = opt.timeout || 3000;
       const tries = opt.tries || 2;
+      const fromKey = opt.fromKey || null;   // round-14：切换前的课时标识，用第二信号比对
       if (!el) return false;
 
       const titleKey = this.itemTitle(el);
+
+      /**
+       * round-14【P4】第二信号：目标条目拿到 active 只是「间接信号」，会双向误判 ——
+       *   · 平台不打 active（改版/异步慢）→ 假失败：白等 9s、重复点、凑齐 5 次硬停；
+       *   · 页面别处恰有带 active 的容器（全局 querySelector 命中）→ 假成功：0 毫秒判过、完成计数虚增。
+       * 这里补一个独立判据：点完之后「目录里当前播放的那一项」必须确实等于目标项。
+       * 判据强度取「或」：只要 currentTitle 明确等于目标标题，就算成功（不依赖 active class）。
+       */
+      const nowIsTarget = () => {
+        try {
+          const cur = this.current();
+          if (!cur) return false;
+          const curKey = this.itemTitle(cur);
+          if (!curKey) return false;
+          // 目标本身就等于当前项 → 明确切过去了
+          if (curKey === titleKey) return true;
+          // 若传入 fromKey：还停在原来那一节 → 明确没切
+          if (fromKey && curKey === fromKey) return false;
+          return curKey === titleKey;
+        } catch (e) { return false; }
+      };
+
       let target = el;
       for (let i = 0; i < tries; i++) {
         // 点击前先确认还没切过去：若上次点击其实已生效（active 只是晚几拍才落到 DOM），
         // 直接判成功即可，避免「重复点击当前节 → 平台重新加载本节」的怪象。
-        if (this.hasActive(target)) return true;
+        // round-14：只有「目标已是当前项」才算已生效；仅凭 active 不算（防假成功）。
+        if (nowIsTarget()) return true;
         this.click(target);
-        if (await waitUntil(() => this.hasActive(target), i === 0 ? timeout : timeout * 2, 150)) return true;
+        // 第一信号（active）或第二信号（当前项标题）任一确认即可
+        if (await waitUntil(
+          () => this.hasActive(target) && !this._stillOnFrom(fromKey, titleKey),
+          i === 0 ? timeout : timeout * 2, 150
+        )) return true;
+        if (nowIsTarget()) return true;
         // 节点被 SPA 换掉 → 按标题重定位
         if (!target.isConnected) {
           const again = this.findByName(titleKey);
@@ -711,6 +745,21 @@
       }
       ZHS.Log.warn('点击「' + titleKey + '」' + tries + ' 次仍未见页面切换');
       return false;
+    },
+
+    /**
+     * round-14【P4 辅助】：判定「是否仍停在切换前那一节」。
+     * 用第二信号（当前项标题）做交叉校验，避免仅凭 active 判成功。
+     * 场景：目标条目拿到 active，但当前项其实还是 fromKey（回绕/误判）→ 不能算成功。
+     */
+    _stillOnFrom(fromKey, targetKey) {
+      if (!fromKey) return false;
+      try {
+        const cur = this.current();
+        if (!cur) return false;
+        const curKey = this.itemTitle(cur);
+        return !!curKey && curKey === fromKey && curKey !== targetKey;
+      } catch (e) { return false; }
     },
 
     /** 全部章节完成度统计 */
