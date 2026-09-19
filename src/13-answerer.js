@@ -15,6 +15,7 @@
     _answeredSig: '',       // 已成功作答完成的弹题签名（去重跳过用）
     _noSelfCheckSig: '',    // round-10 A3：上一轮判定「点击未生效/无法自检」的题签名
     _noSelfCheckUntil: 0,   // round-10 A3：该判定的节流截止时间
+    _giveUpSigs: null,      // round-13：已放弃处理的弹窗签名集合（关不掉/非标准答题），避免每轮死磕关闭刷屏
     _skippedSigs: null,     // 无通道已跳过的弹题签名集合
     _lastSkipWarnAt: 0,     // 跳过告警节流时间戳
     _failCount: 0,          // 同一弹题连续处理失败次数
@@ -44,6 +45,7 @@
         this._pendingHuman = false;
         // round-8 A1：弹窗消失即解除退避，否则退避期内新弹题会被跳过且不答（旧题卡死新题）
         this._cooldownUntil = 0;
+        if (this._giveUpSigs) this._giveUpSigs = new Set(); // round-13：弹窗消失，重置放弃集合，下一题可正常处理
         return;
       }
 
@@ -52,6 +54,12 @@
       // 否则按钮看起来就是「点了没反应」。
       const snapshot = ZHS.Questions.Dialog.collect();
       const sig = JSON.stringify(snapshot.map((s) => s.title)).slice(0, 200);
+      // round-13：本题已放弃处理（非标准 A/B 简单答题，自动随机选都没猜对）。
+      // 直接跳过，不再每轮死磕关闭刷屏；弹窗消失后（handleDialog 的 !root 分支）会自动清空放弃集合。
+      if (this._giveUpSigs && this._giveUpSigs.has(sig)) {
+        ZHS.Log.debug('本题已放弃处理（非标准 A/B 答题，自动未猜对），跳过检测');
+        return;
+      }
       // 已成功作答完成的弹题才去重跳过；无通道/未答上的弹题仍需每轮重试关闭（避免卡死）
       if (!manual && sig && sig === this._answeredSig) {
         ZHS.Log.debug('弹题已作答完成，跳过重复处理');
@@ -109,6 +117,17 @@
       // 每次处理新弹题都重置「无通道/无法自检」标记，避免上一题的状态污染本题
       this._noChannelThisRound = false;
       this._noSelfCheck = false;
+
+      // round-13：识别「非标准 A/B 简单答题」弹窗（如 .el-dialog 容器，标准题面/选项均识别不到）。
+      // 这类弹窗是「选对才能关」的简单 A/B 题，平台不按标准课中弹题结构渲染，
+      // 强行点 .el-dialog__close 三次全失败、刷屏卡死。直接走随机选 A/B 专用逻辑，不进标准求解。
+      const qSnap = (ZHS.Questions.Dialog.readCurrent && ZHS.Questions.Dialog.readCurrent(root)) || null;
+      const nonStandardOpts = (qSnap && qSnap.options) || [];
+      if (!nonStandardOpts.length) {
+        await this._tryNonStandardAB(root, sig);
+        return;
+      }
+
       // round-10 A3：上一轮已判定本题「点击未生效/无法自检」，在节流期内直接尝试关闭恢复，
       // 跳过 ZHS.Solver.solve 重复重作答，避免反复求解刷屏；节流到期后再恢复重试。
       if (sig && sig === this._noSelfCheckSig && Date.now() < this._noSelfCheckUntil) {
@@ -205,6 +224,51 @@
       }
       this._answeredSig = sig || '';   // 标记已作答完成（全部页都已答上），后续轮次去重跳过
       await this.closeDialogAndResume();
+    },
+
+    /**
+     * round-13：处理「非标准 A/B 简单答题」弹窗（标准题面/选项识别不到，如 .el-dialog 容器）。
+     * 策略：在弹窗内按 A/B 文本或通用选项结构随机选一个点击一次 → 尝试关闭；
+     * 选对就关掉恢复播放；选错（需选对才能关）或结构不符导致关不掉 → 放弃本题，
+     * 加入 _giveUpSigs（后续轮次跳过，不再刷屏），并面板提示用户手动选 A 或 B。
+     */
+    async _tryNonStandardAB(root, sig) {
+      ZHS.Log.info('round-13：识别到非标准 A/B 简单答题（标准选项识别不到），尝试随机选 A/B');
+      // 在弹窗内查找看起来像 A/B 选项的可点击元素（兜底多种结构）
+      const optSel = 'li, label, .el-radio, .el-checkbox, [role="radio"], [role="option"], .option-item, .choice-item, .answer-option';
+      let opts = Array.from(root.querySelectorAll(optSel)).filter((el) => {
+        const t = (el.textContent || '').replace(/\s+/g, '').toLowerCase();
+        return /^([ab][.、:：]?|是|否|对|错|正确|错误|√|×)/.test(t);
+      });
+      if (!opts.length) {
+        // 退一步：直接取弹窗内前两个可点选项（不强制 A/B 文本）
+        opts = Array.from(root.querySelectorAll(optSel)).slice(0, 2);
+      }
+      if (!opts.length) {
+        // 连选项元素都找不到 → 直接放弃，提示用户手动选
+        if (this._giveUpSigs) this._giveUpSigs.add(sig);
+        this._pendingHuman = true;
+        if (ZHS.panel) ZHS.panel.alert('检测到选对才能关的简单 A/B 题，但自动找不到选项，请手动选 A 或 B', 'warn', 10000);
+        ZHS.Log.warn('round-13：非标准 A/B 答题找不到选项元素，放弃自动处理，提示用户手动选');
+        return;
+      }
+      // 随机选 A 或 B 之一点一次
+      const idx = opts.length > 1 ? (Math.random() < 0.5 ? 0 : 1) : 0;
+      const pick = opts[idx];
+      try { pick.click(); } catch (e) { /* 点击异常不影响后续关闭尝试 */ }
+      await U.sleep(400);
+      const ok = await this.closeDialogAndResume({ noChannel: true });
+      if (ok) {
+        this._answeredSig = sig || '';
+        ZHS.Log.info('round-13：随机选 A/B 成功关闭弹窗，恢复播放');
+      } else {
+        // 选错（需选对才能关）或结构不符 → 放弃本题，提示用户手动选 A 或 B
+        if (this._giveUpSigs) this._giveUpSigs.add(sig);
+        this._pendingHuman = true;
+        if (ZHS.panel) ZHS.panel.alert('这是选对才能关的简单 A/B 题，自动没猜对，请手动选 A 或 B', 'warn', 10000);
+        ZHS.Log.warn('round-13：随机选 A/B 仍未关闭（需选对才能关），放弃自动处理，提示用户手动选');
+        this._resumePlay();
+      }
     },
 
     /**
@@ -399,6 +463,7 @@
       this._failCount = 0;
       this._cooldownUntil = 0;
       this._pendingHuman = false;
+      this._giveUpSigs = new Set();   // round-13：已放弃的非标准弹窗签名集合
     },
   };
 
