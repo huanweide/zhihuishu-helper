@@ -161,11 +161,8 @@
       if (!r) return null;
       const titleEl = r.querySelector('.topic-title, .topic-content, .topic-question');
       const title = readText(titleEl);
-      // 选项：优先 ul .topic-item，兜底 radio 列表
-      let optionEls = Array.from(r.querySelectorAll('ul .topic-item'));
-      if (!optionEls.length) {
-        optionEls = Array.from(r.querySelectorAll('.topic .radio ul > li'));
-      }
+      // 选项：覆盖主文档与 iframe 变体的多种选择器（含 Element UI 的 el-radio/el-checkbox）
+      let optionEls = Array.from(r.querySelectorAll('ul .topic-item, .topic .radio ul > li, .answerOption label, .el-radio, .el-checkbox, .radio > label, .checkbox > label'));
       const options = optionEls.map((o) => readText(o));
       const typeText = readText(r.querySelector('.topic-type, .subject_type'));
       return {
@@ -173,6 +170,7 @@
         options,
         type: guessType(typeText + ' ' + title, options),
         elementList: optionEls,
+        node: r,   // 供 Filler.fill 在弹题容器内定位输入框，避免填空题退化到整页 document
       };
     },
 
@@ -183,13 +181,13 @@
 
       // 按优先级找关闭按钮（智慧树弹题的关闭控件在多个位置出现过）
       const CANDIDATES = [
-        '#playTopic-dialog .close-btn',
-        '#playTopic-dialog .el-dialog__close',
-        '#playTopic-dialog .close',
-        '#playTopic-dialog .topic-close',
         '.close-btn',
         '.el-dialog__close',
+        '.close',
         '.topic-close',
+        '.popbtn_cancel',
+        'button[class*="close"]',
+        '.btn-cancel',
       ];
 
       for (const sel of CANDIDATES) {

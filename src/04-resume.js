@@ -127,11 +127,12 @@
     bindVideo(video, courseId, lessonKey) {
       if (!video || !courseId) return false;
 
-      // 守卫前置：同一个 video 重复绑定直接返回（视频元素被替换时才会真正重绑）
-      if (this._boundVideo === video) return true;
+      // 守卫前置：同一 video + 同一课程 + 同一课时 → 无需重绑（保留进度记录，避免重复绑定覆盖节流函数）
+      if (this._boundVideo === video && this._boundCourse === courseId && this._boundLesson === lessonKey) return true;
 
-      // 解绑旧的：视频元素被换掉了，旧监听留在旧元素上没意义
+      // 解绑旧的：视频元素被换掉，或 SPA 复用同一节点但切了课/切了节（闭包里的课程/课时标识需刷新）
       this._detach();
+      this._lastDuration = 0;   // 切课/切节：清零旧时长，避免把旧课的时长比例套到新课算出错误恢复位置
 
       const bindId = ++this._bindSeq;
       this._boundVideo = video;
@@ -188,7 +189,9 @@
         });
       } catch (e) { /* 忽略 */ }
 
-      ZHS.Log.debug('已绑定进度记录到视频（bind#' + bindId + '）');
+      this._boundCourse = courseId;
+      this._boundLesson = lessonKey;
+      ZHS.Log.debug('已绑定进度记录到视频（bind#' + bindId + '，课程 ' + courseId + ' / 节 ' + lessonKey + '）');
       return true;
     },
 
@@ -203,6 +206,8 @@
       } catch (e) { /* 忽略 */ }
       this._boundVideo = null;
       this._bindId = -1;
+      this._boundCourse = null;
+      this._boundLesson = null;
       this._saveThrottled = null;
     },
 

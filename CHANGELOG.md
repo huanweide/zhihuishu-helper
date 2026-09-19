@@ -4,6 +4,20 @@
 
 ---
 
+## [0.6.8] - 2026-09-19
+> round-6 审查修复：断点续播进度记错旧课 + 自动答题 iframe/Element UI 选不中。
+
+### 修复
+- **【核心·进度记错旧课 · SPA 复用 video 节点】** —— `src/04-resume.js` 的 `bindVideo` 原守卫只看 `video` 元素身份，SPA 复用同一 `<video>` 节点切课/切节时，闭包里的 `courseId`/`lessonKey` 永不被刷新，进度被静默记到旧课/旧节（「跳错节/进度记错」根因）。现改为「video + 课程 + 课时」三重判定：任一变化即强制解绑重绑，保证进度记到当前课；并在切课/切节时清零 `_lastDuration`，避免旧课时长比例套到新课算出错误恢复位置。
+- **【核心·自动答题选不中 · iframe 弹题漏识别】** —— `src/08-questions.js` 的 `root()` 原只在主文档外壳不可见时才降级到 iframe，导致 iframe 内真实弹题永远读不到选项。现优先识别 iframe 变体（`.answerOption/.el-radio/.el-checkbox` 等结构），主文档空壳不再误判；`readCurrent` 选项选择器扩展覆盖 `.answerOption label`、Element UI 的 `.el-radio/.el-checkbox`，并回填 `node` 字段供填空题在弹题容器内定位输入框（不再退化到整页 `document` 抓错框）。
+- **【核心·课中弹题点击绕过已验证逻辑】** —— `src/13-answerer.js` 课中弹题原用裸 `flex.click()`，Element UI 下外层 label 点击可能被拦截、且反复点击会取消已选项。现统一复用已打磨的 `Filler.clickOption`（自带「已选中跳过防取消」+ 内层点击/改 input 兜底）；`autoCloseDialog=false` 分支补 `_answeredSig`，避免下一轮反复取消已选项。
+- **【体验·关闭按钮选择器】** —— `src/08-questions.js` 的 `close()` 候选选择器去掉 `#playTopic-dialog` 前缀（iframe 内无此后代），并补充 `.popbtn_cancel` 等，提升跨版本关闭命中率。
+
+### 测试
+- 新增 `test/run.js` 回归：bindVideo 强制重绑（32d，验证 SPA 复用节点切课后进度记到新课程）、弹题选项选择器覆盖（32e，验证 `.answerOption`/`.el-radio` 提取与 `node` 回填）；全量 259 项通过。
+
+---
+
 ## [0.6.7] - 2026-09-19
 > round-5 审查修复：补虚拟滚动目录漏读、SPA 切课状态残留、面板首跑确认提示。
 

@@ -133,6 +133,7 @@
       if (ZHS.config.autoCloseDialog === false) {
         ZHS.Log.info('已作答完成（自动关闭已关闭，请手动关闭弹题）');
         this._lastDialogSig = '';
+        this._answeredSig = sig || '';   // 标记已作答，避免下一轮因签名变化反复点击取消已选项
         return;
       }
 

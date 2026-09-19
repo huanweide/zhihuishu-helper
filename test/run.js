@@ -1102,6 +1102,46 @@ console.log('\n=== 32c. ensureCatalogLoaded 安全降级 ===');
   eq('无布局环境直接标记 _catalogLoaded', C._catalogLoaded, true);
 }
 
+console.log('\n=== 32d. bindVideo 强制重绑（round-6 修复） ===');
+{
+  const { win } = makeEnv('<html><body><video></video></body></html>', 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=cA');
+  const R = win.ZHS.Resume;
+  win.ZHS.setConfig({ resume: true, saveIntervalMs: 1000 });
+  const v = win.document.querySelector('video');
+  // 第一次绑定到课程 cA / 节 A1
+  R.bindVideo(v, 'cA', 'A1');
+  // 模拟 SPA 切课：复用同一个 <video> DOM 节点（只换 src），切到课程 cB / 节 B1
+  R.bindVideo(v, 'cB', 'B1');
+  eq('切课后绑定课程更新为 cB', R._boundCourse, 'cB');
+  eq('切课后绑定课时更新为 B1', R._boundLesson, 'B1');
+  // 推进进度并触发一次 pause，进度应写到新课程 cB 而非旧课 cA
+  v.currentTime = 50; v.duration = 100;
+  v.dispatchEvent(new win.Event('pause'));
+  const recB = R.load('cB');
+  ok('进度记录写入新课程 cB（lessonKey=B1）', !!recB && recB.lessonKey === 'B1');
+  const recA = R.load('cA');
+  ok('旧课程 cA 未被错误写入', !recA);
+}
+
+console.log('\n=== 32e. 弹题选项选择器覆盖（round-6 修复） ===');
+{
+  const html = `<html><body>
+    <div id="playTopic-dialog">
+      <div class="topic-title">1+1=?</div>
+      <div class="answerOption"><label>A. 2</label></div>
+      <div class="answerOption"><label>B. 3</label></div>
+      <div class="el-radio"><label>C. 4</label></div>
+    </div>
+    <video></video>
+  </body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=opt1');
+  const dlg = win.document.querySelector('#playTopic-dialog');
+  const q = win.ZHS.Questions.Dialog.readCurrent(dlg);
+  eq('提取到 3 个选项（含 .answerOption / .el-radio）', q.options.length, 3);
+  eq('选项文本取 .answerOption label', q.options[0], 'A. 2');
+  ok('返回 node 字段（填空题在弹题容器内定位输入框）', !!q.node);
+}
+
 console.log('\n=== 33. 构建产物完整性 ===');
 // 全部异步测试都要等：此前这里只写了 [_n3, _n4]，其余 4 组的断言
 // 会在汇总打印之后才跑完，失败被静默吞掉（假绿）。
