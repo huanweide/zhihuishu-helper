@@ -110,19 +110,36 @@
 
     const stats = ZHS.Catalog.stats();
     ZHS.Log.info('课程进度：' + stats.done + '/' + stats.total + ' (' + stats.percent + '%)');
+    // 成功初始化后给一个明确提示，让用户确信「脚本装上了、在干活」（回应面板首跑可见性）
+    if (ZHS.panel) ZHS.panel.alert('智慧树助手已就绪，开始自动学习', 'info', 4000);
     ZHS.Log.info('=== 初始化完成 ===');
   }
 
   /** SPA 路由变化监听：DOM 重建后重新初始化 */
   function watchSpa() {
     const onDomChange = U.debounce(() => {
+      // 切课检测：courseId 变了（SPA 不刷新页面直接换课）→ 重置目录缓存与断点上下文，
+      // 否则会残留旧课程的 courseId/lessonKey，导致 gotoNext 跳错节或把进度记到别的课。
+      const newCourseId = ZHS.Catalog.getCourseId();
+      if (newCourseId && newCourseId !== 'unknown-course' && newCourseId !== ZHS.state.courseId) {
+        ZHS.Catalog.resetCatalogCache();
+        ZHS.state.courseId = newCourseId;
+        ZHS.Log.info('检测到切换课程，已重置目录缓存与断点上下文 → ' + newCourseId);
+      }
+      // 当前课时变化（同课程内切章节，或切课后）同步 state，避免 gotoNext 用旧 lessonKey 定位错节
+      const cur = ZHS.Catalog.current();
+      const newLessonKey = cur ? ZHS.Catalog.itemTitle(cur) : null;
+      if (newLessonKey && newLessonKey !== ZHS.state.lessonKey) {
+        ZHS.state.lessonKey = newLessonKey;
+        ZHS.Log.debug('当前课时更新：' + newLessonKey);
+      }
+
       // 视频元素被替换 → 重新绑定，但不重启整套流程
       const v = document.querySelector('video');
       if (v && v !== ZHS.state.videoEl) {
         ZHS.Log.debug('检测到视频元素变化，重新绑定');
         ZHS.state.videoEl = v;
-        const cur = ZHS.Catalog.current();
-        if (cur) ZHS.state.lessonKey = ZHS.Catalog.itemTitle(cur);
+        if (newLessonKey) ZHS.state.lessonKey = newLessonKey;
         ZHS.Resume.bindVideo(v, ZHS.state.courseId, ZHS.state.lessonKey);
       }
       // 页面还没初始化但出现视频 → 补启动（含启动失败后的重试，受次数上限约束）

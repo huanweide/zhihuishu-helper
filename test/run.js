@@ -1036,6 +1036,72 @@ const _manualAns = (async () => {
   win.ZHS.setConfig({ gatedRandom: false });
 })();
 
+console.log('\n=== 32b. 虚拟滚动目录补全（round-5 修复） ===');
+{
+  // 构造「虚拟滚动」场景：初始只渲染 3 节在 DOM，后面 3 节要靠「滚动容器到底」才懒加载进 DOM。
+  const html = `<html><body>
+    <div class="chapter-tree-74" id="scrollbox">
+      <div class="child-info hasvideo current"><span class="child-name" title="1.1 A">1.1 A</span><i class="child-check"></i></div>
+      <div class="child-info hasvideo"><span class="child-name" title="1.2 B">1.2 B</span></div>
+      <div class="child-info hasvideo"><span class="child-name" title="1.3 C">1.3 C</span></div>
+    </div>
+    <video></video>
+  </body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=vr1');
+  const C = win.ZHS.Catalog;
+  eq('识别为 wisdom', C.adapter.name, 'wisdom');
+  eq('初始仅渲染 3 节', C.items().length, 3);
+
+  // 把 1.2/1.3 标成已完成，使第一轮 findNext 找不到未完成节 → 触发懒加载补全
+  C.items()[1].insertAdjacentHTML('beforeend', '<i class="child-check"></i>');
+  C.items()[2].insertAdjacentHTML('beforeend', '<i class="child-check"></i>');
+
+  // 桩：模拟懒加载——容器 scrollTop 被推到底时，向 DOM 注入剩余 3 节
+  let injected = false;
+  C._scrollContainers = function () {
+    return [{
+      get scrollHeight() { return 1000; },
+      get clientHeight() { return 100; },
+      get scrollTop() { return 0; },
+      set scrollTop(v) {
+        if (!injected) {
+          injected = true;
+          const tree = win.document.querySelector('.chapter-tree-74');
+          ['1.4 D', '1.5 E', '1.6 F'].forEach((t) => {
+            const d = win.document.createElement('div');
+            d.className = 'child-info hasvideo';
+            d.innerHTML = '<span class="child-name" title="' + t + '">' + t + '</span>';
+            tree.appendChild(d);
+          });
+        }
+      },
+    }];
+  };
+
+  // 第一轮（1.1~1.3 都已完成）找不到 → ensureCatalogLoaded 注入后 → 第二轮找到 1.4
+  const next = C.findNext(C.current());
+  eq('虚拟滚动补全后找到 1.4', C.itemTitle(next), '1.4 D');
+  eq('补全后可从 1.4 继续找到 1.5', C.itemTitle(C.findNext(next)), '1.5 E');
+
+  // 切课缓存重置
+  C.resetCatalogCache();
+  eq('resetCatalogCache 清空加载缓存', C._catalogLoaded, false);
+}
+
+console.log('\n=== 32c. ensureCatalogLoaded 安全降级 ===');
+{
+  const { win } = makeEnv(
+    '<html><body><div class="child-info hasvideo current"><span class="child-name" title="x">x</span></div><video></video></body></html>',
+    'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=safe'
+  );
+  const C = win.ZHS.Catalog;
+  // 无滚动容器（jsdom 无布局，scrollHeight/clientHeight 恒 0）→ 不应抛错，且应直接标记完成
+  let threw = false;
+  try { C.ensureCatalogLoaded(); } catch (e) { threw = true; }
+  ok('无布局环境下 ensureCatalogLoaded 不抛错', !threw);
+  eq('无布局环境直接标记 _catalogLoaded', C._catalogLoaded, true);
+}
+
 console.log('\n=== 33. 构建产物完整性 ===');
 // 全部异步测试都要等：此前这里只写了 [_n3, _n4]，其余 4 组的断言
 // 会在汇总打印之后才跑完，失败被静默吞掉（假绿）。
