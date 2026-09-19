@@ -3383,12 +3383,19 @@ window.__ZHS_BUILD__.version = "0.6.10";
 
           btnTest.textContent = '测试中…';
           btnTest.className = 'mini-btn btn-lmtest';
-          const r = await ZHS.LLM.test();
-          btnTest.textContent = r.ok ? '连接正常' : '连接失败';
-          btnTest.className = 'mini-btn btn-lmtest ' + (r.ok ? 'ok' : 'bad');
-          const msg = box.querySelector('.s-keymsg');
-          if (msg) msg.textContent = r.msg;
-          ZHS.Log[r.ok ? 'info' : 'warn']('模型连通性：' + r.msg);
+          // round-8 B1：test() 抛错必须被捕获，否则未捕获 Promise 拒绝 + 文案卡死在「测试中…」
+          try {
+            const r = await ZHS.LLM.test();
+            btnTest.textContent = r.ok ? '连接正常' : '连接失败';
+            btnTest.className = 'mini-btn btn-lmtest ' + (r.ok ? 'ok' : 'bad');
+            const msg = box.querySelector('.s-keymsg');
+            if (msg) msg.textContent = r.msg;
+            ZHS.Log[r.ok ? 'info' : 'warn']('模型连通性：' + r.msg);
+          } catch (e) {
+            btnTest.textContent = '连接异常';
+            btnTest.className = 'mini-btn btn-lmtest bad';
+            ZHS.Log.warn('模型连通性测试出错：' + e.message);
+          }
         };
       }
 
@@ -3444,6 +3451,8 @@ window.__ZHS_BUILD__.version = "0.6.10";
         btn.disabled = true;
         try {
           await fn();
+        } catch (e) {
+          ZHS.Log.warn('按钮操作失败：' + e.message);
         } finally {
           btn.classList.remove('loading', 'btn-plain');
           btn.disabled = false;
@@ -3913,7 +3922,10 @@ window.__ZHS_BUILD__.version = "0.6.10";
   /** 是否在课程中心页 */
   function isHubPage() {
     try {
-      return location.pathname.includes('ai-course-center');
+      // round-8 M4：pathname / search / hash 任一含课程中心标识即判定命中，抗 query/hash 路由与大小写变化
+      const p = (location.pathname || '').toLowerCase();
+      const s = ((location.search || '') + (location.hash || '')).toLowerCase();
+      return p.includes('ai-course-center') || s.includes('ai-course-center');
     } catch (e) {
       return false;
     }
@@ -4052,10 +4064,29 @@ window.__ZHS_BUILD__.version = "0.6.10";
     return found;
   }
 
+  /** 依次尝试多个选择器，返回第一个命中的单元素（带兜底，抗平台改类名） */
+  function qsFirst(sels) {
+    for (const s of sels) {
+      try { const el = document.querySelector(s); if (el) return el; } catch (e) {}
+    }
+    return null;
+  }
+  /** 依次尝试多个选择器，合并返回所有命中（去重，抗平台改类名） */
+  function qsaAll(sels) {
+    const out = [];
+    for (const s of sels) {
+      try {
+        const els = document.querySelectorAll(s);
+        for (const el of els) if (out.indexOf(el) < 0) out.push(el);
+      } catch (e) {}
+    }
+    return out;
+  }
+
   /** 找虚拟滚动的容器 */
   function findScroller() {
     try {
-      const body = document.querySelector('.ai-course-center-body');
+      const body = qsFirst(['.ai-course-center-body', '[class*="course-center"]']);
       if (body) {
         // 自身可滚就用自己，否则向上找可滚祖先
         if (body.scrollHeight > body.clientHeight) return body;
@@ -4075,7 +4106,7 @@ window.__ZHS_BUILD__.version = "0.6.10";
   function collectInto(found) {
     let cards = [];
     try {
-      cards = document.querySelectorAll('.ai-course-center-body div.course-card');
+      cards = qsaAll(['.ai-course-center-body div.course-card', '[class*="course-card"]', '[class*="courseCard"]']);
     } catch (e) {
       ZHS.Log.warn('课程卡片选择器匹配失败：' + e.message);
       return;
@@ -4345,7 +4376,10 @@ window.__ZHS_BUILD__.version = "0.6.10";
 
   /** 把某课程记为「已全部学完」 */
   function markCourseDone(courseId) {
-    const key = courseId || (ZHS.state && ZHS.state.courseId);
+    // round-8 H1：与课程中心 pickNext 读键（cardIdentity）同源，避免「写用 id / 读用另一 id」导致去重失效
+    const key = courseId
+      || (ZHS.state && ZHS.state.hubKey)
+      || (ZHS.state && ZHS.state.courseId);
     if (!key) {
       ZHS.Log.warn('[课程中心] markCourseDone 缺少课程标识，忽略');
       return false;
@@ -4358,9 +4392,14 @@ window.__ZHS_BUILD__.version = "0.6.10";
   }
 
   /** 把某课程记为「进入失败」，防止下次再选它形成死循环 */
-  function markCourseFailed(courseId) {    if (!courseId) return false;
+  function markCourseFailed(courseId) {
+    // round-8 H1：与 markCourseDone 同源，优先用进入时记录的卡片标识
+    const key = courseId
+      || (ZHS.state && ZHS.state.hubKey)
+      || (ZHS.state && ZHS.state.courseId);
+    if (!key) return false;
     const store = readStore();
-    pushList(store.failedCourses, String(courseId));
+    pushList(store.failedCourses, String(key));
     writeStore(store);
     bumpStat('failed');
     return true;
@@ -4403,6 +4442,16 @@ window.__ZHS_BUILD__.version = "0.6.10";
     if (!isStudentPage()) return false;
     const it = getIntent();
     if (!it) return false;
+    // round-8 H1：把进入时记录的卡片标识（与 pickNext 读键同源）存到 state，供 markCourseDone/Failed 写入去重键
+    try { ZHS.state.hubKey = it.courseId || null; } catch (e) {}
+    // round-8 M2：标记待确认跳转已落地，解除看门狗
+    try {
+      const st = readStore();
+      if (st.pendingHop && st.pendingHop.courseId === (it.courseId || '')) {
+        st.pendingHop.settled = true;
+        writeStore(st);
+      }
+    } catch (e) {}
     clearIntent();
     ZHS.Log.info('[课程中心] 已进入课程：' + (it.courseName || it.courseId || '未知'));
     bumpStat('hopped');
@@ -4413,6 +4462,17 @@ window.__ZHS_BUILD__.version = "0.6.10";
 
   async function runOnHub(via) {
     if (!isHubPage()) return false;
+    // round-8 M2：清理卡住的待确认跳转（超过 5 分钟未 settled → 视为进入失败，移出待学防死循环）
+    try {
+      const st = readStore();
+      if (st.pendingHop && !st.pendingHop.settled
+        && Date.now() - (st.pendingHop.at || 0) > 5 * 60 * 1000) {
+        ZHS.Log.warn('[课程中心] 检测到卡住的进入请求（' + st.pendingHop.courseId + '），标记为进入失败');
+        markCourseFailed(st.pendingHop.courseId);
+        st.pendingHop = null;
+        writeStore(st);
+      }
+    } catch (e) {}
 
     // 等待课程卡片渲染出来（页面可能异步出数据）
     const first = await waitForCards(15000);
@@ -4452,7 +4512,7 @@ window.__ZHS_BUILD__.version = "0.6.10";
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
-        const el = document.querySelector('.ai-course-center-body div.course-card');
+        const el = qsFirst(['.ai-course-center-body div.course-card', '[class*="course-card"]']);
         if (el) return el;
       } catch (e) { /* 忽略 */ }
       await U.sleep(300);
@@ -6620,7 +6680,6 @@ ${question}${optionText}
 
   const Answerer = {
     _running: false,
-    _lastDialogSig: '',
     _answeredSig: '',       // 已成功作答完成的弹题签名（去重跳过用）
     _skippedSigs: null,     // 无通道已跳过的弹题签名集合
     _lastSkipWarnAt: 0,     // 跳过告警节流时间戳
@@ -6664,8 +6723,6 @@ ${question}${optionText}
         ZHS.Log.debug('弹题已作答完成，跳过重复处理');
         return;
       }
-      this._lastDialogSig = sig;
-
       this._running = true;
       try {
         const before = ZHS.state.answeredCount;
@@ -6742,7 +6799,6 @@ ${question}${optionText}
       // N4：按配置决定是否自动关闭弹题
       if (ZHS.config.autoCloseDialog === false) {
         ZHS.Log.info('已作答完成（自动关闭已关闭，请手动关闭弹题）');
-        this._lastDialogSig = '';
         this._answeredSig = sig || '';   // 标记已作答，避免下一轮因签名变化反复点击取消已选项
         return;
       }
@@ -6794,7 +6850,6 @@ ${question}${optionText}
 
         if (!Q.stillPresent()) {
           ZHS.Log.info('弹题已关闭' + (attempt > 1 ? '（第 ' + attempt + ' 次尝试）' : ''));
-          this._lastDialogSig = '';   // 重置，允许下次处理新弹题
           this._failCount = 0;
           this._cooldownUntil = 0;
           this._pendingHuman = false;
@@ -6811,7 +6866,6 @@ ${question}${optionText}
       // 有通道场景（明确需要人工）：平台大概率是因为「未作答」拒绝关闭，
       // 退避 30s 防反复骚扰，明确告知用户手动作答，脚本安静等待，弹窗消失后自动复位。
       this._cooldownUntil = Date.now() + 30 * 1000;   // 退避 30s，防关不掉的弹窗反复骚扰
-      this._lastDialogSig = '';
       this._pendingHuman = true;
       ZHS.Log.warn('弹题自动关闭失败（累计 ' + this._failCount + ' 次），已转人工：请手动作答或关闭弹窗');
       if (ZHS.panel) {
