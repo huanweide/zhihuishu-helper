@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.16
+// @version      0.6.17
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.16";
+window.__ZHS_BUILD__.version = "0.6.17";
 
 /* ===== 00-config.js ===== */
 /**
@@ -905,10 +905,29 @@ window.__ZHS_BUILD__.version = "0.6.16";
       return list;
     },
 
-    /** 当前播放入的条目 */
+    /** 当前播放的条目 */
     current() {
-      const cur = document.querySelector(this.adapter.active);
-      if (cur) return cur;
+      const ad = this.adapter;
+      // round-15【D3】：active 查询必须限定在目录容器内。
+      // 原先用 document.querySelector(ad.active) 全局查，只要页面别处（播放器控制条、
+      // 顶部导航、其他 tab）恰有带 active/current 类且标题文本又碰巧等于目标节的元素，
+      // 就会把「当前播放项」判成它 —— 于是 nowIsTarget()/_stillOnFrom() 全部跟着错，
+      // 「假成功」从另一侧回流（切错节也判成功、完成计数虚增）。
+      let cur = null;
+      try {
+        const scope = (ad.container && document.querySelector(ad.container)) || document;
+        cur = scope.querySelector(ad.active);
+      } catch (e) { /* 选择器兼容：失败则回落全局 */ }
+      if (!cur) {
+        try { cur = document.querySelector(ad.active); } catch (e) { /* 选择器兼容 */ }
+      }
+      // round-15【D3 强化】：命中的元素必须确实是目录条目之一，否则不算「当前播放项」。
+      // 这挡住「页面别处有同名 active 元素」的最后一种漏网情形。
+      if (cur) {
+        const list = this.items();
+        const isItem = list.some((el) => el === cur || el.contains(cur) || cur.contains(el));
+        if (isItem) return cur;
+      }
       // 兜底：用 lessonKey 文本匹配
       const key = ZHS.state.lessonKey;
       if (key) {
@@ -1225,6 +1244,16 @@ window.__ZHS_BUILD__.version = "0.6.16";
       if (!el) return false;
 
       const titleKey = this.itemTitle(el);
+      let target = el;
+      // round-15【D1】：预先记下目标与「切换前那一节」在目录里的索引，供 nowIsTarget 做身份比对
+      const _idxOf = (node) => {
+        try {
+          if (!node) return -1;
+          const list = this.items();
+          return list.findIndex((it) => it === node || it.contains(node) || node.contains(it));
+        } catch (e) { return -1; }
+      };
+      const fromIdx = fromKey ? _idxOf(this.items().find((it) => this.itemTitle(it) === fromKey)) : -1;
 
       /**
        * round-14【P4】第二信号：目标条目拿到 active 只是「间接信号」，会双向误判 ——
@@ -1237,26 +1266,40 @@ window.__ZHS_BUILD__.version = "0.6.16";
         try {
           const cur = this.current();
           if (!cur) return false;
+          // round-15【D1】：优先用「元素身份 / 目录索引」判断，而不是纯标题文本比对。
+          // 智慧树「习题讲解」「章节测验」这类同名节很常见：纯标题比对时，
+          // 只要第一节被设为 current，目标是第二节也会判成「已切到第二节」→ 假成功、
+          // 切错节、完成计数虚增。改用索引比对后可根治。
+          const list = this.items();
+          const curIdx = list.findIndex((it) => it === cur || it.contains(cur) || cur.contains(it));
+          const tgtIdx = list.findIndex((it) => it === target || it.contains(target) || target.contains(it));
+          if (curIdx >= 0 && tgtIdx >= 0) {
+            if (curIdx === tgtIdx) return true;     // 索引一致 → 确实切到目标
+            // 索引不一致且当前项就是切换前那一节 → 明确没切（即便标题同名也不误判）
+            if (fromIdx >= 0 && curIdx === fromIdx && curIdx !== tgtIdx) return false;
+            return false;                            // 当前项既不是目标也不是原节 → 未切到目标
+          }
+          // 索引取不到（SPA 换节点/items 未识别）→ 回落标题比对兜底
           const curKey = this.itemTitle(cur);
           if (!curKey) return false;
-          // 目标本身就等于当前项 → 明确切过去了
-          if (curKey === titleKey) return true;
-          // 若传入 fromKey：还停在原来那一节 → 明确没切
-          if (fromKey && curKey === fromKey) return false;
+          if (fromKey && curKey === fromKey && curKey !== titleKey) return false;
           return curKey === titleKey;
         } catch (e) { return false; }
       };
 
-      let target = el;
       for (let i = 0; i < tries; i++) {
         // 点击前先确认还没切过去：若上次点击其实已生效（active 只是晚几拍才落到 DOM），
         // 直接判成功即可，避免「重复点击当前节 → 平台重新加载本节」的怪象。
         // round-14：只有「目标已是当前项」才算已生效；仅凭 active 不算（防假成功）。
         if (nowIsTarget()) return true;
         this.click(target);
-        // 第一信号（active）或第二信号（当前项标题）任一确认即可
+        // round-15【D2】判据修正：原先写的是 `hasActive(target) && !_stillOnFrom(...)`，
+        // 其中 _stillOnFrom 在 fromKey 为空时**恒返回 false**，于是整条判据退化成
+        // 「只要目标拿到 active 就算成功」= 第二信号完全失效，假成功/假失败的老问题回流。
+        // 现在改成「第二信号（nowIsTarget，基于目录索引的身份比对）为真才算成功」，
+        // active 只在第二信号无法判定（目录未识别）时才作为兜底。
         if (await waitUntil(
-          () => this.hasActive(target) && !this._stillOnFrom(fromKey, titleKey),
+          () => nowIsTarget() || this._activeOnlyFallback(target, fromKey),
           i === 0 ? timeout : timeout * 2, 150
         )) return true;
         if (nowIsTarget()) return true;
@@ -1274,6 +1317,33 @@ window.__ZHS_BUILD__.version = "0.6.16";
       }
       ZHS.Log.warn('点击「' + titleKey + '」' + tries + ' 次仍未见页面切换');
       return false;
+    },
+
+    /**
+     * round-15【D2】：active 兜底判据 —— 仅在「目录索引完全不可用」时才允许依赖 active。
+     *
+     * 为什么需要兜底：某些页面 items() 识别不到（改版/未进播放页），此时基于索引的
+     * nowIsTarget 恒为 false，若只认它就会「明明切过去了却判失败」→ 白等 + 重复点 + 硬停。
+     * 但兜底必须比原来严格：光有 active 不够，还得确认「当前项已不是切换前那一节」，
+     * 否则回绕/同名节场景仍会假成功。
+     */
+    _activeOnlyFallback(target, fromKey) {
+      try {
+        if (!target || !this.hasActive(target)) return false;
+        // 目录索引可用时不许走兜底（交给更可靠的 nowIsTarget 判定）
+        const list = this.items();
+        const tgtIdx = list.findIndex((it) => it === target || it.contains(target) || target.contains(it));
+        if (tgtIdx >= 0) return false;
+        // 有 fromKey 时必须确认已离开原节
+        if (fromKey) {
+          const cur = this.current();
+          if (cur) {
+            const curKey = this.itemTitle(cur);
+            if (curKey && curKey === fromKey) return false;
+          }
+        }
+        return true;
+      } catch (e) { return false; }
     },
 
     /**
@@ -1891,6 +1961,9 @@ window.__ZHS_BUILD__.version = "0.6.16";
   const BLOCK_GUARD_MAX_TICKS = 15;            // 阻塞弹窗连续点不掉的轮数上限
   // 切课点击「点了没动」检测：连点同一目标 N 次仍未前进则判失败停手（根治静默死循环）
   const SAME_NAV_MAX = 5;
+  // round-15【C2】：本轮「不同坏节点轮流失败」的累计上限（全局兜底）。
+  // 只靠 SAME_NAV_MAX 时，5 个不同的坏节点轮着失败永远凑不满同一目标计数 → 无声空转。
+  const NAV_FAIL_TOTAL_MAX = 8;
 
   const Scheduler = {
     _timer: null,
@@ -1910,6 +1983,12 @@ window.__ZHS_BUILD__.version = "0.6.16";
      */
     start(opts) {
       const manual = !!(opts && opts.manual);
+      // round-15【A2】：resume = 瞬时故障自愈后的恢复启动，区别于「全新一轮启动」。
+      // 恢复启动绝不能清零 startedAt / _completedThisRun / _navCount，
+      // 否则会连锁引发两个老毛病复发：
+      //   ①「设了看 N 节就停」——计数被清 0 后永远凑不够阈值，停止条件形同虚设；
+      //   ②总结报告里的「总耗时 / 切换课时数」只统计自愈之后的一段，明显少算。
+      const resume = !!(opts && opts.resume);
       if (this._timer) return;
       if (this._halted && !manual) {
         ZHS.Log.debug('此前已判定停止，自动启动被忽略（如需重跑请手动点「启动」）');
@@ -1917,13 +1996,22 @@ window.__ZHS_BUILD__.version = "0.6.16";
       }
       this._halted = false;
       ZHS.state.running = true;
-      ZHS.state.startedAt = Date.now();   // 每次启动重置计时
-      this._navCount = 0;
-      this._navFailKey = null;
-      this._navFailCount = 0;
-      this._completedThisRun = 0;         // 停止条件：本次运行完成节数
+      if (resume) {
+        ZHS.Log.info('主循环已恢复（保留本轮计时与完成计数）');
+      } else {
+        ZHS.state.startedAt = Date.now();   // 每次「全新」启动才重置计时
+        this._navCount = 0;
+        this._navFailKey = null;
+        this._navFailCount = 0;
+        this._navFailTotal = 0;             // round-15【C2】：本轮累计切课失败
+        this._completedThisRun = 0;         // 停止条件：本次运行完成节数
+      }
+      // round-15【A1】：自愈名额只在「全新一轮启动」时重置（含用户手动点「启动」）。
+      // 原先 _transientReloads 全仓库只增不减，用满 3 次后即便用户手动重启也救不回来，
+      // 第 4 次故障起永久失去自愈能力。手动启动 = 用户明确要求重来，理应重新给名额。
+      if (!resume) this._transientReloads = 0;
       this._timer = setInterval(() => this.tick(), LOOP_INTERVAL);
-      ZHS.Log.info('主循环已启动');
+      if (!resume) ZHS.Log.info('主循环已启动');
       this.preflight();                   // 启动即做一次全量体检（N1）
     },
 
@@ -2062,7 +2150,9 @@ window.__ZHS_BUILD__.version = "0.6.16";
       if (!v) return false;                                      // 视频还没回来，再等 DOM 变化
       this._transientReloads = (this._transientReloads || 0) + 1;
       ZHS.Log.info('检测到瞬时故障停机，视频已恢复，尝试自动重启（第 ' + this._transientReloads + ' 次）');
-      this.start({ manual: true });
+      // round-15【A2】：必须传 resume:true —— 这是「故障后的续跑」而非「新一轮」，
+      // 不能让 start 把已完成节数 / 开始时间 / 切换课时的统计清零。
+      this.start({ manual: true, resume: true });
       return true;
     },
 
@@ -2374,7 +2464,8 @@ window.__ZHS_BUILD__.version = "0.6.16";
             if (canHop) {
               hub.markCourseDone(ZHS.state.courseId);
               ZHS.Log.info('[课程中心] 本课程已全部学完，准备返回课程中心寻找下一门课');
-              this.stop();
+              // round-15【A4】：本课程学完回课程中心属「正当结束」，用 'condition' 与瞬时故障区分
+              this.stop('condition');
               hub.returnToHub();
             } else {
               await this.finishAll(reason);
@@ -2427,12 +2518,22 @@ window.__ZHS_BUILD__.version = "0.6.16";
         if (!switched) {
           // round-14【P1】：点击失败 → 课时标识必须回滚，绝不让「记错节」发生
           ZHS.state.lessonKey = _prevKey;
+          // round-15【C2】：原判据「同一目标才累加、目标一变就清零」有软死循环漏洞 ——
+          // 若目录里有 5 个不同的坏节点轮流失败，计数永远凑不满 5，于是既不停机也不前进，
+          // 无声空转。现在改为双计数：同目标连续失败（快速止损）+ 本轮累计失败（全局兜底）。
           this._navFailCount = (_targetKey === this._navFailKey ? this._navFailCount : 0) + 1;
           this._navFailKey = _targetKey;
-          ZHS.Log.warn('点击「' + _targetKey + '」后未检测到切换（第 ' + this._navFailCount + ' 次），已回滚课时标识');
-          if (this._navFailCount >= SAME_NAV_MAX) {
-            ZHS.Log.error('连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」都无反应（疑似平台改版或目录节点不可点），已停止自动跳转');
-            if (ZHS.panel) ZHS.panel.alert('切课失败：连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」无效，已停止自动跳转，请手动切换', 'error', 15000);
+          this._navFailTotal = (this._navFailTotal || 0) + 1;
+          const hitSame = this._navFailCount >= SAME_NAV_MAX;
+          const hitTotal = this._navFailTotal >= NAV_FAIL_TOTAL_MAX;
+          ZHS.Log.warn('点击「' + _targetKey + '」后未检测到切换（同目标 ' + this._navFailCount
+            + ' 次 / 本轮累计 ' + this._navFailTotal + ' 次），已回滚课时标识');
+          if (hitSame || hitTotal) {
+            const _why = hitSame
+              ? '连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」都无反应'
+              : '本轮累计 ' + this._navFailTotal + ' 次切课失败（多个节点轮番点击无反应）';
+            ZHS.Log.error(_why + '（疑似平台改版或目录节点不可点），已停止自动跳转');
+            if (ZHS.panel) ZHS.panel.alert('切课失败：' + _why + '，已停止自动跳转，请手动切换', 'error', 15000);
             // round-14：平台响应慢时也可能凑齐连点次数，属瞬时故障，允许冷却后自愈重试
             this.stop('transient');
             return;
@@ -2449,8 +2550,9 @@ window.__ZHS_BUILD__.version = "0.6.16";
         // round-14【P1】：确认切换成功后才写新课时标识（此时记进度才是对的）
         ZHS.state.lessonKey = _targetKey;
 
-        // 确实切过去了 → 失败计数清零
+        // 确实切过去了 → 失败计数清零（含 round-15 新增的本轮累计失败）
         this._navFailCount = 0;
+        this._navFailTotal = 0;
         this._navFailKey = null;
         this._navCount++;
         this._completedThisRun = (this._completedThisRun || 0) + 1;   // 停止条件：完成节数
@@ -2536,7 +2638,9 @@ window.__ZHS_BUILD__.version = "0.6.16";
       } catch (e) { /* 忽略 */ }
 
       ZHS.state.lastReport = report;
-      this.stop();
+      // round-15【A4】：finishAll 是「任务达标/全部完成」的正当结束，标 'condition' 彻底封死，
+      // 绝不能被瞬时故障自愈逻辑误判为可恢复。
+      this.stop('condition');
 
       if (ZHS.panel) ZHS.panel.showReport(report);
     },
@@ -5672,16 +5776,23 @@ window.__ZHS_BUILD__.version = "0.6.16";
 
     // 0. 面板最先挂载：后续任何一步炸了，用户至少能看见脚本存在
     //    （原来排在第 3 步，且整条链无 try/catch → 前一步出错就永远看不到面板）
-    if (ZHS.panel) {
+    // round-15【B】：判据不能只看 `ZHS.panel` 是否为真 —— round-14 改成「先发布空对象占位」
+    // 后，即使面板模块体后半段抛异常，ZHS.panel 也是个 truthy 的空对象 {}，
+    // 于是这里会进 true 分支去调不存在的 mount()，抛 TypeError，
+    // 结果把「面板模块本身加载失败」的真实原因掩盖成「mount is not a function」，排查被带偏。
+    // 正确判据：既要有对象，也要 mount 真的是函数（即 __panel_ready 已置位）。
+    const panelUsable = !!(ZHS.panel && typeof ZHS.panel.mount === 'function');
+    if (panelUsable) {
       try { ZHS.panel.mount(); }
       catch (e) {
         ZHS.Log.warn('面板挂载失败：' + e.message);
-        showPanelMissingNotice('挂载异常');
+        showPanelMissingNotice('挂载异常：' + (e && e.message ? e.message : '未知'));
       }
     } else {
       // 挂不上必须说出来。静默跳过的话，用户眼里就是「装了跟没装一样」。
-      ZHS.Log.error('面板模块不可用（ZHS.panel 未定义），界面不会显示；核心逻辑仍会继续尝试');
-      showPanelMissingNotice('模块未就绪');
+      ZHS.Log.error('面板模块不可用（ZHS.panel 未就绪或 mount 缺失，__panel_ready='
+        + String(ZHS.__panel_ready) + '），界面不会显示；核心逻辑仍会继续尝试');
+      showPanelMissingNotice(ZHS.panel ? '模块加载中断（未完成初始化）' : '模块未加载');
     }
 
     // 1. 识别页面版本

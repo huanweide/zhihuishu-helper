@@ -1036,6 +1036,28 @@ const _transient = (async () => {
   S._transientStoppedAt = Date.now() - 61000;
   eq('达标停后自愈必须返回 false', S.tryResumeAfterTransientStop(), false);
   eq('达标停后 _halted 为 true（彻底封死）', S._halted, true);
+
+  // ⑥ round-15【A2】：自愈恢复不得清零「本次完成节数 / 开始时间 / 切换课时数」，
+  //    否则「设了看 N 节就停」永远凑不够阈值、总结总耗时少算。
+  S._halted = false; S._haltReason = ''; S._transientReloads = 0;
+  S._completedThisRun = 7;
+  S._navCount = 4;
+  const _t0 = 1234567890;
+  win.ZHS.state.startedAt = _t0;
+  S.stop('transient');
+  S._transientStoppedAt = Date.now() - 61000;
+  eq('自愈可成功拉起', S.tryResumeAfterTransientStop(), true);
+  eq('自愈后完成节数未被清零（A2 核心）', S._completedThisRun, 7);
+  eq('自愈后切换课时数未被清零', S._navCount, 4);
+  eq('自愈后开始时间未被重置（总耗时不丢）', win.ZHS.state.startedAt, _t0);
+  S.stop();
+
+  // ⑦ round-15【A1】：用户手动「启动」应重置自愈名额，否则用满 3 次后永久失去自愈能力
+  S._transientReloads = 3;
+  S.start({ manual: true });
+  eq('手动启动后自愈名额已重置', S._transientReloads, 0);
+  eq('手动启动属全新一轮，完成计数归零', S._completedThisRun, 0);
+  S.stop();
 })();
 
 console.log('\n=== 32. 手动答题绕过配置（面板「答题」按钮必须有效） ===');
@@ -1216,10 +1238,40 @@ console.log('\n=== 32e. 弹题选项选择器覆盖（round-6 修复） ===');
   ok('返回 node 字段（填空题在弹题容器内定位输入框）', !!q.node);
 }
 
+console.log('\n=== 32f. 同名节不误判 + 当前项收窄（round-15 D1/D3） ===');
+const _dupname = (async () => {
+  // 目录里两节同名（智慧树「习题讲解」很常见），第一节是当前项
+  const html = `<html><body>
+    <div class="chapter-tree-74">
+      <div class="child-info hasvideo current"><span class="child-name">习题讲解</span></div>
+      <div class="child-info hasvideo"><span class="child-name">习题讲解</span></div>
+    </div>
+    <video></video>
+  </body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=dup1');
+  const cat = win.ZHS.Catalog;
+  const list = cat.items();
+  eq('识别到 2 个同名节', list.length, 2);
+
+  // 当前项应是第一节（按身份），而不是靠标题撞运气
+  const cur = cat.current();
+  ok('current() 命中的是第一节（身份而非标题）', cur === list[0],
+    cur === list[1] ? '误命中第二节' : String(!!cur));
+
+  // D1 核心：目标=第二节时，不应因为标题同名就判成「已切到」
+  const tgt = list[1];
+  // 模拟：把第一节重新标为 current（等于没切过去），目标仍是第二节
+  list[1].classList.remove('current');
+  list[0].classList.add('current');
+  // 用 clickAndVerify 的 fromKey 传第一节标题，目标是第二节 → 应判失败（未切）
+  const switched = await cat.clickAndVerify(tgt, { timeout: 120, tries: 1, fromKey: '习题讲解' });
+  eq('同名节且未真正切换 → 判为失败（不假成功）', switched, false);
+})();
+
 console.log('\n=== 33. 构建产物完整性 ===');
 // 全部异步测试都要等：此前这里只写了 [_n3, _n4]，其余 4 组的断言
 // 会在汇总打印之后才跑完，失败被静默吞掉（假绿）。
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient]).then(() => {
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname]).then(() => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');

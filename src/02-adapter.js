@@ -376,10 +376,29 @@
       return list;
     },
 
-    /** 当前播放入的条目 */
+    /** 当前播放的条目 */
     current() {
-      const cur = document.querySelector(this.adapter.active);
-      if (cur) return cur;
+      const ad = this.adapter;
+      // round-15【D3】：active 查询必须限定在目录容器内。
+      // 原先用 document.querySelector(ad.active) 全局查，只要页面别处（播放器控制条、
+      // 顶部导航、其他 tab）恰有带 active/current 类且标题文本又碰巧等于目标节的元素，
+      // 就会把「当前播放项」判成它 —— 于是 nowIsTarget()/_stillOnFrom() 全部跟着错，
+      // 「假成功」从另一侧回流（切错节也判成功、完成计数虚增）。
+      let cur = null;
+      try {
+        const scope = (ad.container && document.querySelector(ad.container)) || document;
+        cur = scope.querySelector(ad.active);
+      } catch (e) { /* 选择器兼容：失败则回落全局 */ }
+      if (!cur) {
+        try { cur = document.querySelector(ad.active); } catch (e) { /* 选择器兼容 */ }
+      }
+      // round-15【D3 强化】：命中的元素必须确实是目录条目之一，否则不算「当前播放项」。
+      // 这挡住「页面别处有同名 active 元素」的最后一种漏网情形。
+      if (cur) {
+        const list = this.items();
+        const isItem = list.some((el) => el === cur || el.contains(cur) || cur.contains(el));
+        if (isItem) return cur;
+      }
       // 兜底：用 lessonKey 文本匹配
       const key = ZHS.state.lessonKey;
       if (key) {
@@ -696,6 +715,16 @@
       if (!el) return false;
 
       const titleKey = this.itemTitle(el);
+      let target = el;
+      // round-15【D1】：预先记下目标与「切换前那一节」在目录里的索引，供 nowIsTarget 做身份比对
+      const _idxOf = (node) => {
+        try {
+          if (!node) return -1;
+          const list = this.items();
+          return list.findIndex((it) => it === node || it.contains(node) || node.contains(it));
+        } catch (e) { return -1; }
+      };
+      const fromIdx = fromKey ? _idxOf(this.items().find((it) => this.itemTitle(it) === fromKey)) : -1;
 
       /**
        * round-14【P4】第二信号：目标条目拿到 active 只是「间接信号」，会双向误判 ——
@@ -708,26 +737,40 @@
         try {
           const cur = this.current();
           if (!cur) return false;
+          // round-15【D1】：优先用「元素身份 / 目录索引」判断，而不是纯标题文本比对。
+          // 智慧树「习题讲解」「章节测验」这类同名节很常见：纯标题比对时，
+          // 只要第一节被设为 current，目标是第二节也会判成「已切到第二节」→ 假成功、
+          // 切错节、完成计数虚增。改用索引比对后可根治。
+          const list = this.items();
+          const curIdx = list.findIndex((it) => it === cur || it.contains(cur) || cur.contains(it));
+          const tgtIdx = list.findIndex((it) => it === target || it.contains(target) || target.contains(it));
+          if (curIdx >= 0 && tgtIdx >= 0) {
+            if (curIdx === tgtIdx) return true;     // 索引一致 → 确实切到目标
+            // 索引不一致且当前项就是切换前那一节 → 明确没切（即便标题同名也不误判）
+            if (fromIdx >= 0 && curIdx === fromIdx && curIdx !== tgtIdx) return false;
+            return false;                            // 当前项既不是目标也不是原节 → 未切到目标
+          }
+          // 索引取不到（SPA 换节点/items 未识别）→ 回落标题比对兜底
           const curKey = this.itemTitle(cur);
           if (!curKey) return false;
-          // 目标本身就等于当前项 → 明确切过去了
-          if (curKey === titleKey) return true;
-          // 若传入 fromKey：还停在原来那一节 → 明确没切
-          if (fromKey && curKey === fromKey) return false;
+          if (fromKey && curKey === fromKey && curKey !== titleKey) return false;
           return curKey === titleKey;
         } catch (e) { return false; }
       };
 
-      let target = el;
       for (let i = 0; i < tries; i++) {
         // 点击前先确认还没切过去：若上次点击其实已生效（active 只是晚几拍才落到 DOM），
         // 直接判成功即可，避免「重复点击当前节 → 平台重新加载本节」的怪象。
         // round-14：只有「目标已是当前项」才算已生效；仅凭 active 不算（防假成功）。
         if (nowIsTarget()) return true;
         this.click(target);
-        // 第一信号（active）或第二信号（当前项标题）任一确认即可
+        // round-15【D2】判据修正：原先写的是 `hasActive(target) && !_stillOnFrom(...)`，
+        // 其中 _stillOnFrom 在 fromKey 为空时**恒返回 false**，于是整条判据退化成
+        // 「只要目标拿到 active 就算成功」= 第二信号完全失效，假成功/假失败的老问题回流。
+        // 现在改成「第二信号（nowIsTarget，基于目录索引的身份比对）为真才算成功」，
+        // active 只在第二信号无法判定（目录未识别）时才作为兜底。
         if (await waitUntil(
-          () => this.hasActive(target) && !this._stillOnFrom(fromKey, titleKey),
+          () => nowIsTarget() || this._activeOnlyFallback(target, fromKey),
           i === 0 ? timeout : timeout * 2, 150
         )) return true;
         if (nowIsTarget()) return true;
@@ -745,6 +788,33 @@
       }
       ZHS.Log.warn('点击「' + titleKey + '」' + tries + ' 次仍未见页面切换');
       return false;
+    },
+
+    /**
+     * round-15【D2】：active 兜底判据 —— 仅在「目录索引完全不可用」时才允许依赖 active。
+     *
+     * 为什么需要兜底：某些页面 items() 识别不到（改版/未进播放页），此时基于索引的
+     * nowIsTarget 恒为 false，若只认它就会「明明切过去了却判失败」→ 白等 + 重复点 + 硬停。
+     * 但兜底必须比原来严格：光有 active 不够，还得确认「当前项已不是切换前那一节」，
+     * 否则回绕/同名节场景仍会假成功。
+     */
+    _activeOnlyFallback(target, fromKey) {
+      try {
+        if (!target || !this.hasActive(target)) return false;
+        // 目录索引可用时不许走兜底（交给更可靠的 nowIsTarget 判定）
+        const list = this.items();
+        const tgtIdx = list.findIndex((it) => it === target || it.contains(target) || target.contains(it));
+        if (tgtIdx >= 0) return false;
+        // 有 fromKey 时必须确认已离开原节
+        if (fromKey) {
+          const cur = this.current();
+          if (cur) {
+            const curKey = this.itemTitle(cur);
+            if (curKey && curKey === fromKey) return false;
+          }
+        }
+        return true;
+      } catch (e) { return false; }
     },
 
     /**
