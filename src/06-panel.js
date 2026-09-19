@@ -1144,6 +1144,15 @@
      * 绝不能影响主流程，所以这里兜住并只在 debug 日志里留痕。
      */
     refresh() {
+      // 自愈：面板宿主被页面脚本移除后，重新挂载，避免静默消失（round-7 面板⑨）
+      if (this._root && !document.contains(this._root)) {
+        try {
+          if (this._root.parentNode) this._root.parentNode.removeChild(this._root);
+          this._root = null;
+          this._shadow = null;
+          this.mount();
+        } catch (e) { ZHS.Log.debug('面板自愈重挂失败：' + e.message); }
+      }
       try { this._refreshInner(); } catch (e) {
         ZHS.Log.debug('面板刷新异常（已忽略）：' + e.message);
       }

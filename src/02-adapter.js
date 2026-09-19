@@ -322,6 +322,10 @@
 
     /** 课程唯一标识 */
     getCourseId() {
+      // 路径解析优先：polymas AI 课程学习页形如 /AIstudent/{courseId}/{lessonId}?key=…
+      // 此前只查 query/hash，学习页恒返回 'unknown-course'，导致断点 key 串台、去重失效（round-7 H2）
+      const pm = location.pathname.match(/\/AIstudent\/([^/?#]+)/);
+      if (pm && pm[1]) return pm[1];
       return U.pick(
         {
           a: U.getUrlParam('recruitAndCourseId'),
