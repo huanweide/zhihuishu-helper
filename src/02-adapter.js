@@ -334,7 +334,13 @@
         },
         ['a', 'b', 'c'],
         null
-      ) || (location.hash.match(/courseId[=\/](\w+)/) || [])[1] || 'unknown-course';
+      ) || (location.hash.match(/courseId[=\/](\w+)/) || [])[1]
+      // round-12：URL 全空时的兜底链——优先用课程中心进入时记录的真实课程 id（hubKey），
+      // 再退而求其次读 DOM 上的 data-course-id；避免长期返回 'unknown-course' 导致断点串台、自动跳课去重失效。
+      || (ZHS.state && ZHS.state.hubKey) || (function () {
+        const el = document.querySelector('[data-course-id]');
+        return el ? el.getAttribute('data-course-id') : null;
+      })() || 'unknown-course';
     },
 
     /** 课程名 */
