@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.8
+// @version      0.6.9
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.8";
+window.__ZHS_BUILD__.version = "0.6.9";
 
 /* ===== 00-config.js ===== */
 /**
@@ -851,6 +851,10 @@ window.__ZHS_BUILD__.version = "0.6.8";
 
     /** 课程唯一标识 */
     getCourseId() {
+      // 路径解析优先：polymas AI 课程学习页形如 /AIstudent/{courseId}/{lessonId}?key=…
+      // 此前只查 query/hash，学习页恒返回 'unknown-course'，导致断点 key 串台、去重失效（round-7 H2）
+      const pm = location.pathname.match(/\/AIstudent\/([^/?#]+)/);
+      if (pm && pm[1]) return pm[1];
       return U.pick(
         {
           a: U.getUrlParam('recruitAndCourseId'),
@@ -3593,6 +3597,15 @@ window.__ZHS_BUILD__.version = "0.6.8";
      * 绝不能影响主流程，所以这里兜住并只在 debug 日志里留痕。
      */
     refresh() {
+      // 自愈：面板宿主被页面脚本移除后，重新挂载，避免静默消失（round-7 面板⑨）
+      if (this._root && !document.contains(this._root)) {
+        try {
+          if (this._root.parentNode) this._root.parentNode.removeChild(this._root);
+          this._root = null;
+          this._shadow = null;
+          this.mount();
+        } catch (e) { ZHS.Log.debug('面板自愈重挂失败：' + e.message); }
+      }
       try { this._refreshInner(); } catch (e) {
         ZHS.Log.debug('面板刷新异常（已忽略）：' + e.message);
       }
@@ -4110,7 +4123,9 @@ window.__ZHS_BUILD__.version = "0.6.8";
       }
     } catch (e) { /* 忽略 */ }
 
-    const finished = (percent !== null && percent >= 100)
+    // 完成阈值与目录 isFinished（FINISH_PCT=98）对齐：
+    // 否则 98~99% 卡住的课程在中心页仍判「未完成」→ 被反复重新进入，形成「中心页↔该课」死循环（round-7 H3）
+    const finished = (percent !== null && percent >= 98)
       || text.includes('已完成') || text.includes('已学完');
 
     return { el, name, percent, finished };
@@ -5445,7 +5460,12 @@ window.__ZHS_BUILD__.version = "0.6.8";
     // 3. 面板先挂载：不等视频，进来就能看到界面。
     //    以前写在 waitFor 之后，在作业页 / 尚未进入播放页时要干等 30 秒才出面板，
     //    用户会误以为脚本没装上（BUG-UX-2）。
-    if (ZHS.panel) ZHS.panel.mount();
+    //    注意：此处必须 try/catch 包裹——若面板挂载持续失败（如模板改坏），
+    //    裸调用会把异常抛给 bootOnce → 被 boot 记成「初始化失败」→ Scheduler 永不启动，
+    //    整脚本（含核心逻辑）都不跑，正是「装了但功能全无用」的直接成因（round-7 面板①）。
+    if (ZHS.panel) {
+      try { ZHS.panel.mount(); } catch (e) { ZHS.Log.warn('面板二次挂载失败：' + e.message); }
+    }
 
     // 4. 等视频出现（有些页面懒加载）
     let video = await U.waitFor('video', 30000);

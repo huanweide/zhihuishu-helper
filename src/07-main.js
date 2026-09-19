@@ -77,7 +77,12 @@
     // 3. 面板先挂载：不等视频，进来就能看到界面。
     //    以前写在 waitFor 之后，在作业页 / 尚未进入播放页时要干等 30 秒才出面板，
     //    用户会误以为脚本没装上（BUG-UX-2）。
-    if (ZHS.panel) ZHS.panel.mount();
+    //    注意：此处必须 try/catch 包裹——若面板挂载持续失败（如模板改坏），
+    //    裸调用会把异常抛给 bootOnce → 被 boot 记成「初始化失败」→ Scheduler 永不启动，
+    //    整脚本（含核心逻辑）都不跑，正是「装了但功能全无用」的直接成因（round-7 面板①）。
+    if (ZHS.panel) {
+      try { ZHS.panel.mount(); } catch (e) { ZHS.Log.warn('面板二次挂载失败：' + e.message); }
+    }
 
     // 4. 等视频出现（有些页面懒加载）
     let video = await U.waitFor('video', 30000);

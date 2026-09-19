@@ -4,6 +4,20 @@
 
 ---
 
+## [0.6.9] - 2026-09-19
+> round-7 审查修复：polymas 课程断点串台/去重失效 + 课程中心 98~99% 死循环 + 面板挂不上整脚本不跑 + 面板被移除后静默消失。
+
+### 修复
+- **【核心·断点串台 / 去重失效 · getCourseId 不解析路径】** —— `src/02-adapter.js` 的 `getCourseId()` 原先只从 URL 查询参数（`recruitAndCourseId`/`courseId`/`recruitId`）和 hash 里取课程号，遇到 polymas 学习页路径 `/AIstudent/{cid}/{clid}` 时恒返回 `unknown-course`。这同时拖垮两处：① `src/04-resume.js` 断点续播用 courseId 当 key，串到别的课；② 课程中心 done/failed 去重键（基于 courseId）永远相同，去重失效。现改为**路径解析优先**：先匹配 `/AIstudent/{cid}/`，命中即用，再回退到查询参数，彻底修复 polymas 课程的断点与去重。
+- **【核心·课程中心↔98~99% 课程死循环】** —— `src/06b-course-hub.js` 的 `parseCard` 完成阈值原先是 `percent >= 100`，而目录侧的已完成判定 `FINISH_PCT = 98`。两者不一致导致进度停在 98~99% 的课程：目录认为「没看完」于是反复重新进入，中心页又认为「已完成」跳过，形成无限循环。现把 `parseCard` 阈值对齐为 `percent >= 98`，与目录判定同源。
+- **【体验·面板挂不上 → 整脚本不跑】** —— `src/07-main.js` 第 3 步面板二次挂载原先裸调用 `ZHS.panel.mount()`，一旦抛错会中断后续初始化，表现为「面板都没有、装了没反应」。现包 `try/catch`，挂载失败仅告警不影响主流程，其余自动化照常运行。
+- **【体验·面板被移除后静默消失】** —— `src/06-panel.js` 的 `refresh()` 原先不感知面板节点已被平台 DOM 变动移除，导致面板永久消失且无自愈。现增加自愈：检测到 `_root` 已脱离 `document` 时自动清理并重新 `mount()`，保证面板长期在屏。
+
+### 测试
+- 既有回归（259 项）全绿；本轮修复集中在适配层与课程中心路径分支，门禁以 `check-dist-fresh` + 全量 `test/run.js` 验证 dist 与 src 同步、核心逻辑无回归。
+
+---
+
 ## [0.6.8] - 2026-09-19
 > round-6 审查修复：断点续播进度记错旧课 + 自动答题 iframe/Element UI 选不中。
 

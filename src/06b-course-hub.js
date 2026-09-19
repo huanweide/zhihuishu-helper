@@ -317,7 +317,9 @@
       }
     } catch (e) { /* 忽略 */ }
 
-    const finished = (percent !== null && percent >= 100)
+    // 完成阈值与目录 isFinished（FINISH_PCT=98）对齐：
+    // 否则 98~99% 卡住的课程在中心页仍判「未完成」→ 被反复重新进入，形成「中心页↔该课」死循环（round-7 H3）
+    const finished = (percent !== null && percent >= 98)
       || text.includes('已完成') || text.includes('已学完');
 
     return { el, name, percent, finished };
