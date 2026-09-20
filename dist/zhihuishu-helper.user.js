@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.28
+// @version      0.6.29
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.28";
+window.__ZHS_BUILD__.version = "0.6.29";
 
 /* ===== 00-config.js ===== */
 /**
@@ -2275,6 +2275,15 @@ window.__ZHS_BUILD__.version = "0.6.28";
       if (this._busy) return;      // 防重入
       this._busy = true;
       try {
+        // M8 学习时长统计：只在本轮主循环真正在跑、且视频处于播放态时累加。
+        // 暂停 / 等待加载 / 弹题阻塞都不计入——习惯分计的是「实际学习时长」，
+        // 把空转时间算进去会让面板显示的进度虚高，反而误导用户。
+        // 同样用可选调用：统计模块缺失或抛错都不得影响主循环。
+        if (ZHS.Stats && ZHS.state && ZHS.state.running) {
+          const v = ZHS.Player && ZHS.Player.video && ZHS.Player.video();
+          if (v && !v.paused && !v.ended) ZHS.Stats.addStudyTime(LOOP_INTERVAL);
+        }
+
         // 停止条件优先于一切业务（达标立即停，不再看视频）
         this._checkStopCondition();
         if (!ZHS.state.running) return;   // _stopByCondition 已停止
@@ -3566,6 +3575,16 @@ window.__ZHS_BUILD__.version = "0.6.28";
       </div>
       <div class="hint s-health"></div>
 
+      <div class="sec-title">学习记录（M8）</div>
+      <div class="hint">统计本次与今日的答题来源分布，以及习惯分进度（平台规则：每天学满 30 分钟得 1 分）</div>
+      <div class="hint s-stats"></div>
+      <div class="row"><label></label>
+        <span>
+          <button class="mini-btn btn-refreshstats">刷新</button>
+          <button class="mini-btn btn-clearstats">清空记录</button>
+        </span>
+      </div>
+
       <div class="sec-title">自动停止（达标自动结束并弹总结）</div>
       <div class="row"><label>停止条件</label>
         <select class="sel-stop sel-inp inp">
@@ -3766,6 +3785,44 @@ window.__ZHS_BUILD__.version = "0.6.28";
             if (out) out.textContent = '检测过程出错：' + e.message;
             ZHS.Log.warn('通道健康检测出错：' + e.message);
           }
+        };
+      }
+
+      // 学习记录（M8）：答题来源分布 + 学习时长 + 习惯分进度
+      const statsBox = box.querySelector('.s-stats');
+      const renderStats = () => {
+        if (!statsBox) return;
+        if (!ZHS.Stats) { statsBox.textContent = '统计模块未加载'; return; }
+        try {
+          const s = ZHS.Stats.summary();
+          const min = Math.floor((s.today.studyMs || 0) / 60000);
+          // 习惯分进度：平台按「每天学满 30 分钟得 1 分」计，这里显示已得与还差多久
+          const remainMin = Math.ceil((s.todayHabitRemainMs || 0) / 60000);
+          const line1 = '今日：答题 ' + s.today.answered + ' 题'
+            + '（题库 ' + s.today.bank + ' / 模型 ' + s.today.llm + ' / 跳过 ' + s.today.skipped + '）';
+          const line2 = '今日学习 ' + min + ' 分钟｜习惯分已得 ' + s.todayHabitDone
+            + ' 分，下一分还差约 ' + remainMin + ' 分钟';
+          const line3 = '累计答题 ' + s.totalAnswered + ' 题，活跃 ' + s.activeDays + ' 天';
+          statsBox.textContent = line1 + '　·　' + line2;
+          // 明细与累计信息挂 title：面板窄，正文只放最关键的两行，悬停可看全部 + 最近作答
+          const recent = (s.recent || []).slice(0, 5)
+            .map((r) => '· ' + r.q + ' → ' + (r.a || '（未答）') + '［' + (r.from || '未知') + '］').join('\n');
+          statsBox.title = [line1, line2, line3, recent ? '\n最近作答：\n' + recent : ''].join('\n');
+        } catch (e) {
+          statsBox.textContent = '统计读取失败：' + e.message;
+        }
+      };
+      renderStats();
+
+      const btnRefreshStats = box.querySelector('.btn-refreshstats');
+      if (btnRefreshStats) btnRefreshStats.onclick = () => renderStats();
+
+      const btnClearStats = box.querySelector('.btn-clearstats');
+      if (btnClearStats) {
+        btnClearStats.onclick = () => {
+          try { if (ZHS.Stats) ZHS.Stats.reset(); } catch (e) { /* 清空失败不影响使用 */ }
+          renderStats();
+          ZHS.Log.info('学习记录已清空');
         };
       }
 
@@ -7962,6 +8019,13 @@ ${question}${optionText}
       const options = q.options || [];
       const type = q.type || ZHS.Questions.TYPE.UNKNOWN;
 
+      // M8 统计埋点：统一出口包装，成功/跳过/失败都记一笔。
+      // 用可选调用 —— 统计模块未加载、或统计内部抛错，都绝不能影响答题主流程。
+      const done = (r) => {
+        try { if (ZHS.Stats) ZHS.Stats.record(question, r); } catch (e) { /* 统计失败不影响答题 */ }
+        return r;
+      };
+
       // 0. 命中缓存
       const key = cacheKey(question, options);
       const cached = cacheGet(key);
@@ -8020,7 +8084,7 @@ ${question}${optionText}
               ZHS.panel.alert('未配置答题通道，已跳过多题未作答。请在设置页配置大模型密钥并点「保存」，或关闭「自动答题」', 'warn', 10000);
             }
           }
-          return null;
+          return done(null);
         }
         const idx = Math.floor(Math.random() * options.length);
         const letter = String.fromCharCode(65 + idx);
@@ -8032,11 +8096,11 @@ ${question}${optionText}
       if (!result) {
         this.stats.fail++;
         ZHS.Log.warn('本题无法求解：' + question.slice(0, 40));
-        return null;
+        return done(null);
       }
 
       cacheSet(key, result);
-      return result;
+      return done(result);
     },
 
     /** 批量求解（顺序，避免打爆接口） */
@@ -8847,6 +8911,153 @@ ${question}${optionText}
   };
 
   ZHS.Answerer = Answerer;
+})();
+
+/* ===== 14-stats.js ===== */
+/**
+ * 统计层：答题记录 + 学习时长（M8）
+ *
+ * 目标：让面板能回答两个用户真正会问的问题——
+ *   ① 「今天答了几道题？答案都是哪来的（题库 / 模型）？」
+ *   ② 「今天学了多久？习惯分进度到哪了？」
+ *
+ * 设计取舍：
+ *  - 只存**明细最近 N 条 + 按天聚合**，不无限增长，避免 localStorage 被撑爆
+ *    （油猴脚本跑几个月不清理是很常见的，膨胀会拖慢整站）。
+ *  - 所有写入都吞异常：统计是锦上添花，**绝不能因为统计失败影响答题主流程**。
+ */
+(function () {
+  'use strict';
+  const ZHS = window.ZHS;
+  if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免定时器/监听器叠加
+  if (ZHS.__mod14_stats) return;
+  ZHS.__mod14_stats = true;
+
+  const KEY = 'zhs_helper_stats';
+  const DAY_MS = 86400000;
+  // 明细上限：超过就丢最早的。200 条足够回看近期作答，又不至于撑爆存储。
+  const MAX_RECORDS = 200;
+  // 平台规则：每天学满 30 分钟得 1 分习惯分（README 4.4 节实测结论）
+  const HABIT_MINUTE = 30 * 60 * 1000;
+
+  function dayKey(ts) {
+    const d = new Date(ts || Date.now());
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return d.getFullYear() + '-' + m + '-' + day;
+  }
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      const d = raw ? JSON.parse(raw) : null;
+      return (d && typeof d === 'object') ? d : {};
+    } catch (e) {
+      return {};   // 存储损坏/被禁用时当作空数据，绝不让统计拖垮主流程
+    }
+  }
+
+  function save(d) {
+    try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) { /* 配额满/隐私模式：静默放弃 */ }
+  }
+
+  const Stats = {
+    _data: null,
+
+    _ensure() {
+      if (!this._data) {
+        this._data = load();
+        if (!this._data.days) this._data.days = {};
+        if (!Array.isArray(this._data.records)) this._data.records = [];
+      }
+      return this._data;
+    },
+
+    _day(ts) {
+      const d = this._ensure();
+      const k = dayKey(ts);
+      if (!d.days[k]) d.days[k] = { answered: 0, bank: 0, llm: 0, skipped: 0, studyMs: 0 };
+      return d.days[k];
+    },
+
+    /**
+     * 记录一次作答。
+     * @param {string} title  题干（只存前 60 字，长题干没意义且占空间）
+     * @param {object} result solve() 的返回：{answer, from, confidence}
+     */
+    record(title, result) {
+      try {
+        const d = this._ensure();
+        const day = this._day(Date.now());
+        const from = (result && result.from) || '';
+
+        if (result && result.answer) {
+          day.answered++;
+          if (from.indexOf('bank') === 0) day.bank++;
+          else if (from === 'llm') day.llm++;
+        } else {
+          day.skipped++;
+        }
+
+        d.records.push({
+          t: Date.now(),
+          q: String(title || '').slice(0, 60),
+          a: (result && result.answer) || '',
+          from: from,
+        });
+        if (d.records.length > MAX_RECORDS) d.records.splice(0, d.records.length - MAX_RECORDS);
+
+        save(d);
+      } catch (e) { /* 统计失败不影响答题 */ }
+    },
+
+    /** 累加学习时长（毫秒） */
+    addStudyTime(ms) {
+      try {
+        const n = Number(ms) || 0;
+        if (n <= 0) return;
+        this._day(Date.now()).studyMs += n;
+        save(this._ensure());
+      } catch (e) { /* 同上 */ }
+    },
+
+    /** 今日概要 */
+    summary() {
+      try {
+        const d = this._ensure();
+        const today = d.days[dayKey(Date.now())] || { answered: 0, bank: 0, llm: 0, skipped: 0, studyMs: 0 };
+        let totalAnswered = 0;
+        let activeDays = 0;
+        for (const k of Object.keys(d.days)) {
+          const v = d.days[k];
+          totalAnswered += (v.answered || 0);
+          if ((v.answered || 0) > 0 || (v.studyMs || 0) > 0) activeDays++;
+        }
+        return {
+          today,
+          todayHabitDone: Math.floor((today.studyMs || 0) / HABIT_MINUTE),
+          todayHabitRemainMs: HABIT_MINUTE - ((today.studyMs || 0) % HABIT_MINUTE),
+          totalAnswered,
+          activeDays,
+          recent: (d.records || []).slice(-10).reverse(),
+        };
+      } catch (e) {
+        return { today: { answered: 0, bank: 0, llm: 0, skipped: 0, studyMs: 0 }, todayHabitDone: 0, todayHabitRemainMs: HABIT_MINUTE, totalAnswered: 0, activeDays: 0, recent: [] };
+      }
+    },
+
+    /** 清空统计（面板「清空记录」用） */
+    reset() {
+      this._data = { days: {}, records: [] };
+      save(this._data);
+    },
+
+    /** 供测试与调试：不持久化地直接读取 */
+    _dayKey: dayKey,
+  };
+
+  ZHS.Stats = Stats;
 })();
 
 })();

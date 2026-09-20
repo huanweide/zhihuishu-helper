@@ -2319,7 +2319,58 @@ const _solverDiag = (async () => {
   ok('题库未配置时给出可操作提示（含示例地址）', /8060/.test(h.hint || ''), JSON.stringify(h));
 })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag]).then(() => {
+// ==================================================
+// === 34. 学习统计（M8：答题记录 + 学习时长 + 习惯分） ===
+//
+// 同样守两条框架约定：① 必须 async IIFE（裸 block 用 await 会整文件语法报错）；
+// ② 必须登记进末尾 Promise.all（否则断言在汇总之后才跑完，失败被静默吞掉 = 假绿）。
+// ==================================================
+console.log('\n=== 34. 学习统计（M8） ===');
+const _statsM8 = (async () => {
+  const { win } = makeEnv('<html><body></body></html>');
+  const ZHS = win.ZHS;
+  const S = ZHS && ZHS.Stats;
+
+  ok('统计模块已挂载', !!S);
+
+  // 旧代码没有 Stats：用空摘要 stub 兜住，让每条干净 FAIL 而不是 TypeError 崩溃吞掉后一半
+  const empty = {
+    today: { answered: 0, bank: 0, llm: 0, skipped: 0, studyMs: 0 },
+    todayHabitDone: 0, todayHabitRemainMs: 1800000,
+    totalAnswered: 0, activeDays: 0, recent: [],
+  };
+  const record = (t, r) => { if (S && S.record) S.record(t, r); };
+  const addTime = (ms) => { if (S && S.addStudyTime) S.addStudyTime(ms); };
+  const sum = () => ((S && S.summary) ? S.summary() : empty);
+
+  if (S && S.reset) S.reset();
+
+  record('题目甲', { answer: 'A', from: 'bank:icodef' });
+  record('题目乙', { answer: 'B', from: 'llm' });
+  record('题目丙', null);
+
+  const s1 = sum();
+  eq('今日答题数（成功 2 题）', s1.today.answered, 2);
+  eq('题库来源计数', s1.today.bank, 1);
+  eq('模型来源计数', s1.today.llm, 1);
+  eq('未答（跳过）计数', s1.today.skipped, 1);
+
+  addTime(45 * 60 * 1000);   // 累计 45 分钟
+  const s2 = sum();
+  eq('学习时长按毫秒累计', s2.today.studyMs, 45 * 60 * 1000);
+  eq('习惯分：满 30 分钟得 1 分', s2.todayHabitDone, 1);
+
+  ok('最近记录保留明细且最新在前',
+    !!(s2.recent && s2.recent.length && s2.recent[0] && s2.recent[0].q === '题目丙'),
+    JSON.stringify((s2.recent || []).slice(0, 2)));
+
+  // 明细上限：灌 250 条后应被截断到 200，避免 localStorage 被撑爆
+  for (let i = 0; i < 250; i++) record('批量题' + i, { answer: 'A', from: 'llm' });
+  const stored = (S && S._data && S._data.records) ? S._data.records.length : 0;
+  ok('明细被限制在 200 条以内（防存储膨胀）', stored > 0 && stored <= 200, '实际 ' + stored);
+})();
+
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8]).then(() => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');

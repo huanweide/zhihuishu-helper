@@ -285,6 +285,15 @@
       if (this._busy) return;      // 防重入
       this._busy = true;
       try {
+        // M8 学习时长统计：只在本轮主循环真正在跑、且视频处于播放态时累加。
+        // 暂停 / 等待加载 / 弹题阻塞都不计入——习惯分计的是「实际学习时长」，
+        // 把空转时间算进去会让面板显示的进度虚高，反而误导用户。
+        // 同样用可选调用：统计模块缺失或抛错都不得影响主循环。
+        if (ZHS.Stats && ZHS.state && ZHS.state.running) {
+          const v = ZHS.Player && ZHS.Player.video && ZHS.Player.video();
+          if (v && !v.paused && !v.ended) ZHS.Stats.addStudyTime(LOOP_INTERVAL);
+        }
+
         // 停止条件优先于一切业务（达标立即停，不再看视频）
         this._checkStopCondition();
         if (!ZHS.state.running) return;   // _stopByCondition 已停止
