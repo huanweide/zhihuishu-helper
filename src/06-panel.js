@@ -791,6 +791,13 @@
       </div>
       <div class="hint s-keymsg"></div>
 
+      <div class="sec-title">通道健康检测</div>
+      <div class="hint">一次点检两条答题通道是否正常，异常时直接给出原因和处理建议</div>
+      <div class="row"><label></label>
+        <span><button class="mini-btn btn-health">立即检测</button></span>
+      </div>
+      <div class="hint s-health"></div>
+
       <div class="sec-title">自动停止（达标自动结束并弹总结）</div>
       <div class="row"><label>停止条件</label>
         <select class="sel-stop sel-inp inp">
@@ -956,6 +963,40 @@
             btnTest.textContent = '连接异常';
             btnTest.className = 'mini-btn btn-lmtest bad';
             ZHS.Log.warn('模型连通性测试出错：' + e.message);
+          }
+        };
+      }
+
+      // 通道健康检测（M8）：一次点检题库 + 模型两条通道
+      const btnHealth = box.querySelector('.btn-health');
+      if (btnHealth) {
+        btnHealth.onclick = async () => {
+          const out = box.querySelector('.s-health');
+          btnHealth.textContent = '检测中…';
+          btnHealth.className = 'mini-btn btn-health';
+          try {
+            const [bank, llm] = await Promise.all([
+              ZHS.Bank.health(),
+              ZHS.LLM.test(),
+            ]);
+            const line = (n, r) => n + '：' + (r.ok ? '正常' : '异常') + '｜' + r.msg
+              + (r.hint ? ' → ' + r.hint : '');
+            const l1 = line('题库', bank);
+            const l2 = line('模型', llm);
+            // 完整信息挂 title：面板区域窄，单行放不下两条诊断，鼠标悬停可看全
+            if (out) {
+              out.textContent = l1 + '　·　' + l2;
+              out.title = l1 + '\n' + l2;
+            }
+            const allOk = !!(bank.ok && llm.ok);
+            btnHealth.textContent = allOk ? '全部正常' : '存在异常';
+            btnHealth.className = 'mini-btn btn-health ' + (allOk ? 'ok' : 'bad');
+            ZHS.Log[(bank.ok && llm.ok) ? 'info' : 'warn']('通道健康检测：' + l1 + ' / ' + l2);
+          } catch (e) {
+            btnHealth.textContent = '检测出错';
+            btnHealth.className = 'mini-btn btn-health bad';
+            if (out) out.textContent = '检测过程出错：' + e.message;
+            ZHS.Log.warn('通道健康检测出错：' + e.message);
           }
         };
       }

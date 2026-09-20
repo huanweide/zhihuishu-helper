@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.27
+// @version      0.6.28
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.27";
+window.__ZHS_BUILD__.version = "0.6.28";
 
 /* ===== 00-config.js ===== */
 /**
@@ -3559,6 +3559,13 @@ window.__ZHS_BUILD__.version = "0.6.27";
       </div>
       <div class="hint s-keymsg"></div>
 
+      <div class="sec-title">通道健康检测</div>
+      <div class="hint">一次点检两条答题通道是否正常，异常时直接给出原因和处理建议</div>
+      <div class="row"><label></label>
+        <span><button class="mini-btn btn-health">立即检测</button></span>
+      </div>
+      <div class="hint s-health"></div>
+
       <div class="sec-title">自动停止（达标自动结束并弹总结）</div>
       <div class="row"><label>停止条件</label>
         <select class="sel-stop sel-inp inp">
@@ -3724,6 +3731,40 @@ window.__ZHS_BUILD__.version = "0.6.27";
             btnTest.textContent = '连接异常';
             btnTest.className = 'mini-btn btn-lmtest bad';
             ZHS.Log.warn('模型连通性测试出错：' + e.message);
+          }
+        };
+      }
+
+      // 通道健康检测（M8）：一次点检题库 + 模型两条通道
+      const btnHealth = box.querySelector('.btn-health');
+      if (btnHealth) {
+        btnHealth.onclick = async () => {
+          const out = box.querySelector('.s-health');
+          btnHealth.textContent = '检测中…';
+          btnHealth.className = 'mini-btn btn-health';
+          try {
+            const [bank, llm] = await Promise.all([
+              ZHS.Bank.health(),
+              ZHS.LLM.test(),
+            ]);
+            const line = (n, r) => n + '：' + (r.ok ? '正常' : '异常') + '｜' + r.msg
+              + (r.hint ? ' → ' + r.hint : '');
+            const l1 = line('题库', bank);
+            const l2 = line('模型', llm);
+            // 完整信息挂 title：面板区域窄，单行放不下两条诊断，鼠标悬停可看全
+            if (out) {
+              out.textContent = l1 + '　·　' + l2;
+              out.title = l1 + '\n' + l2;
+            }
+            const allOk = !!(bank.ok && llm.ok);
+            btnHealth.textContent = allOk ? '全部正常' : '存在异常';
+            btnHealth.className = 'mini-btn btn-health ' + (allOk ? 'ok' : 'bad');
+            ZHS.Log[(bank.ok && llm.ok) ? 'info' : 'warn']('通道健康检测：' + l1 + ' / ' + l2);
+          } catch (e) {
+            btnHealth.textContent = '检测出错';
+            btnHealth.className = 'mini-btn btn-health bad';
+            if (out) out.textContent = '检测过程出错：' + e.message;
+            ZHS.Log.warn('通道健康检测出错：' + e.message);
           }
         };
       }
@@ -7626,12 +7667,31 @@ window.__ZHS_BUILD__.version = "0.6.27";
       return { answer, from, raw: answers };
     },
 
-    /** 健康检查 */
+    /** 健康检查（布尔版，兼容旧语义） */
     async ping() {
       const cfg = ZHS.config;
       const url = String(cfg.bankUrl || '').replace(/\/$/, '') + '/';
       const res = await request({ url, method: 'GET', timeout: 5000 });
       return res.ok;
+    },
+
+    /**
+     * 健康检查（结构化版，供面板「通道健康检测」展示）。
+     *
+     * 与 ping() 的区别：ping 只回一个 true/false，用户看到「异常」也不知道为什么；
+     * health() 复用 diagnose 返回成因 + 解决建议，与 LLM 通道的 test() 对齐。
+     */
+    async health() {
+      const cfg = ZHS.config;
+      const raw = String(cfg.bankUrl || '').trim();
+      if (!raw) {
+        return { ok: false, msg: '题库未配置地址', hint: '请在设置里填写形如 http://127.0.0.1:8060 的题库地址。', code: 'NO_URL' };
+      }
+      const url = raw.replace(/\/$/, '') + '/';
+      const res = await request({ url, method: 'GET', timeout: 5000 });
+      if (res.ok) return { ok: true, msg: '题库服务可达', hint: '', code: 'OK' };
+      const d = diagnose('题库', res, url);
+      return { ok: false, msg: d.msg, hint: d.hint, code: d.code };
     },
   };
 
@@ -7850,6 +7910,28 @@ ${question}${optionText}
   const NO_CHANNEL_ALERT_COOLDOWN_MS = 60000;
   let noChannelAlertAt = 0;
 
+  /**
+   * 通道异常日志（带节流 + 透传解决方案）。
+   *
+   * 【2026-09-20 修复 · round-24 漏网】上一轮在网络层和 LLM 层都挂上了 `e.hint`
+   * （可操作的解决建议），但这里 catch 时只取了 `e.message` —— **hint 在求解层断裂**：
+   * 面板「测试连接」那条路能看到建议，而用户真正刷题时的答题路径却看不到。
+   * 只验证其中一条路是假判据，故本轮补上透传。
+   *
+   * 节流原因：作业页一次可能连跑 20 题，同一个故障刷 20 遍会把面板挤空，
+   * 后一条顶掉前一条，用户反而一条也看不清。同类故障 30 秒最多报一次。
+   */
+  const _errAt = Object.create(null);
+  function logChannelFail(kind, e) {
+    const err = e || {};
+    const key = kind + '|' + (err.code || '') + '|' + (err.message || '');
+    const now = Date.now();
+    if (_errAt[key] && now - _errAt[key] < 30000) return;
+    _errAt[key] = now;
+    const hint = err.hint ? '｜建议：' + err.hint : '';
+    ZHS.Log.warn(kind + '：' + (err.message || '未知错误') + hint);
+  }
+
   function cacheKey(question, options) {
     return ZHS.Util.normText(question) + '|' + (options || []).join('|').slice(0, 200);
   }
@@ -7901,7 +7983,9 @@ ${question}${optionText}
             this.stats.bank++;
           }
         } catch (e) {
-          ZHS.Log.debug('题库查询异常：' + e.message);
+          // 过去是 debug 级：题库挂了用户完全不知情，只看到「题没答上」。
+          // 提级到 warn 并走统一失败日志（含节流 + 解决方案透传）。
+          logChannelFail('题库查询异常', e);
         }
       }
 
@@ -7914,7 +7998,9 @@ ${question}${optionText}
             this.stats.llm++;
           }
         } catch (e) {
-          ZHS.Log.warn('LLM 求解失败：' + e.message);
+          // ★ 关键：这里过去只打 e.message，把网络层/LLM 层挂的 e.hint 丢掉了，
+          // 用户在真实答题路径上依旧只看到「请求失败」四个字。
+          logChannelFail('LLM 求解失败', e);
         }
       }
 
