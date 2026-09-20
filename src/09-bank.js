@@ -373,12 +373,31 @@
       return { answer, from, raw: answers };
     },
 
-    /** 健康检查 */
+    /** 健康检查（布尔版，兼容旧语义） */
     async ping() {
       const cfg = ZHS.config;
       const url = String(cfg.bankUrl || '').replace(/\/$/, '') + '/';
       const res = await request({ url, method: 'GET', timeout: 5000 });
       return res.ok;
+    },
+
+    /**
+     * 健康检查（结构化版，供面板「通道健康检测」展示）。
+     *
+     * 与 ping() 的区别：ping 只回一个 true/false，用户看到「异常」也不知道为什么；
+     * health() 复用 diagnose 返回成因 + 解决建议，与 LLM 通道的 test() 对齐。
+     */
+    async health() {
+      const cfg = ZHS.config;
+      const raw = String(cfg.bankUrl || '').trim();
+      if (!raw) {
+        return { ok: false, msg: '题库未配置地址', hint: '请在设置里填写形如 http://127.0.0.1:8060 的题库地址。', code: 'NO_URL' };
+      }
+      const url = raw.replace(/\/$/, '') + '/';
+      const res = await request({ url, method: 'GET', timeout: 5000 });
+      if (res.ok) return { ok: true, msg: '题库服务可达', hint: '', code: 'OK' };
+      const d = diagnose('题库', res, url);
+      return { ok: false, msg: d.msg, hint: d.hint, code: d.code };
     },
   };
 

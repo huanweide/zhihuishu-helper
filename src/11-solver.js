@@ -20,6 +20,28 @@
   const NO_CHANNEL_ALERT_COOLDOWN_MS = 60000;
   let noChannelAlertAt = 0;
 
+  /**
+   * 通道异常日志（带节流 + 透传解决方案）。
+   *
+   * 【2026-09-20 修复 · round-24 漏网】上一轮在网络层和 LLM 层都挂上了 `e.hint`
+   * （可操作的解决建议），但这里 catch 时只取了 `e.message` —— **hint 在求解层断裂**：
+   * 面板「测试连接」那条路能看到建议，而用户真正刷题时的答题路径却看不到。
+   * 只验证其中一条路是假判据，故本轮补上透传。
+   *
+   * 节流原因：作业页一次可能连跑 20 题，同一个故障刷 20 遍会把面板挤空，
+   * 后一条顶掉前一条，用户反而一条也看不清。同类故障 30 秒最多报一次。
+   */
+  const _errAt = Object.create(null);
+  function logChannelFail(kind, e) {
+    const err = e || {};
+    const key = kind + '|' + (err.code || '') + '|' + (err.message || '');
+    const now = Date.now();
+    if (_errAt[key] && now - _errAt[key] < 30000) return;
+    _errAt[key] = now;
+    const hint = err.hint ? '｜建议：' + err.hint : '';
+    ZHS.Log.warn(kind + '：' + (err.message || '未知错误') + hint);
+  }
+
   function cacheKey(question, options) {
     return ZHS.Util.normText(question) + '|' + (options || []).join('|').slice(0, 200);
   }
@@ -71,7 +93,9 @@
             this.stats.bank++;
           }
         } catch (e) {
-          ZHS.Log.debug('题库查询异常：' + e.message);
+          // 过去是 debug 级：题库挂了用户完全不知情，只看到「题没答上」。
+          // 提级到 warn 并走统一失败日志（含节流 + 解决方案透传）。
+          logChannelFail('题库查询异常', e);
         }
       }
 
@@ -84,7 +108,9 @@
             this.stats.llm++;
           }
         } catch (e) {
-          ZHS.Log.warn('LLM 求解失败：' + e.message);
+          // ★ 关键：这里过去只打 e.message，把网络层/LLM 层挂的 e.hint 丢掉了，
+          // 用户在真实答题路径上依旧只看到「请求失败」四个字。
+          logChannelFail('LLM 求解失败', e);
         }
       }
 

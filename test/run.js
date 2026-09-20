@@ -2241,10 +2241,85 @@ const _abAutoSiblings = (async () => {
   }
 })();
 
-console.log('\n=== 33. 构建产物完整性 ===');
+console.log('\n=== 34. 构建产物完整性 ===');
 // 全部异步测试都要等：此前这里只写了 [_n3, _n4]，其余 4 组的断言
 // 会在汇总打印之后才跑完，失败被静默吞掉（假绿）。
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings]).then(() => {
+// ==================================================
+// === 33. 求解层诊断透传（入口级 · 2026-09-20 补 round-24 漏网） ===
+//
+// 【为什么要补这一组】round-24 修了网络层与 LLM 层的 diagnose/hint，
+// 但只验证了「面板测试连接」这一条路。真实刷题走的是 Solver.solve()，
+// 那里 catch 只取 e.message —— hint 在求解层断裂，用户依旧看不到解决方案。
+// 只验证一条路属于假判据（Oracle Gate 判据 c：入口可达性）。
+//
+// 本组**从真实入口 ZHS.Solver.solve() 发起**，用抛错桩 + 拦截 ZHS.Log.warn，
+// 断言「解决方案」确实抵达用户可见日志。
+//
+// 两个必守的框架约定：
+//  ① 必须是 async IIFE —— 裸 block 里用 await 会被判定为 top-level await 而整文件语法报错；
+//  ② 必须把 Promise 加进末尾 Promise.all —— 否则断言在汇总打印之后才跑完，
+//     失败被静默吞掉（假绿）。这是本项目 2026-09-18 踩过的坑。
+// ==================================================
+console.log('\n=== 33. 求解层诊断透传（入口级） ===');
+const _solverDiag = (async () => {
+  const { win } = makeEnv('<html><body></body></html>');
+  const ZHS = win.ZHS;
+
+  const logs = [];
+  const origWarn = ZHS.Log.warn;
+  // 让 LLM 通道抛出「带解决方案」的错误，复现网络层/LLM 层已挂 hint 的真实错误
+  ZHS.LLM.vote = async () => {
+    const e = new Error('大模型返回了 HTML 页面而不是 JSON 数据');
+    e.code = 'NON_JSON_HTML';
+    e.hint = '请改成形如 https://api.deepseek.com 的接口根地址';
+    throw e;
+  };
+  // 注意：ZHS.config 是只读快照，直接改属性**不会生效** ——
+  // 实测这样写仍会走进题库通道（日志出现「题库查询异常」而非「LLM 求解失败」），
+  // 导致断言测错了对象。必须走 setConfig。
+  ZHS.setConfig({
+    answerMode: 'llm',
+    llmEnabled: true,
+    llmKey: 'dummy-key-for-test',
+    bankEnabled: false,
+    gatedRandom: false,
+  });
+
+  ZHS.Log.warn = (m) => { logs.push(String(m)); };
+  const r1 = await ZHS.Solver.solve({ title: '求解层透传测试题', options: ['甲', '乙'], type: 'single' });
+  ZHS.Log.warn = origWarn;
+
+  // 回归保护（非判别性）：baseline 上也通过，锁的是「不许瞎蒙答案」这条既有行为，
+  // 不提供本次修复的判别证据——判别证据由下面 hint 透传与节流两条提供。
+  ok('两通道全失败时不返回答案（不瞎蒙）', !r1 || !r1.answer, JSON.stringify(r1));
+  // ★ 判别性：旧代码 catch 只取 e.message，hint 丢失 → baseline 实测 FAIL
+  ok('★ 真实答题入口把解决方案 hint 透传到用户可见日志',
+    logs.some((m) => m.includes('建议：') && m.includes('api.deepseek.com')),
+    '实际日志：' + logs.join(' | ').slice(0, 180));
+
+  // 节流：作业页一次跑 20 题，同一故障不该刷 20 条把面板挤空
+  const logs2 = [];
+  ZHS.Log.warn = (m) => { logs2.push(String(m)); };
+  await ZHS.Solver.solve({ title: '求解层透传测试题2', options: ['甲', '乙'], type: 'single' });
+  ZHS.Log.warn = origWarn;
+  // 只统计「LLM 求解失败」这一类 —— 断言必须精确指向被测行为，
+  // 笼统计全部 warn 会把无关模块的日志也算进来，导致误判（顺带掩盖真正要测的东西）。
+  const llmFails = logs2.filter((m) => m.includes('LLM 求解失败'));
+  ok('同类故障被节流（连跑两题不重复刷屏）', llmFails.length === 0,
+    '第二次仍输出 ' + llmFails.length + ' 条；全部日志：' + logs2.join(' | ').slice(0, 160));
+
+  // ---- 通道健康检测（M8）：题库侧结构化结果 ----
+  // 旧代码没有 health()，用 stub 兜住避免 TypeError 崩溃吞掉后续用例；
+  // stub 的 code 取 ''，与期望值 'NO_URL' 不同 → baseline 干净 FAIL。
+  ZHS.setConfig({ bankUrl: '' });
+  const h = (ZHS.Bank && ZHS.Bank.health)
+    ? await ZHS.Bank.health()
+    : { ok: true, msg: '', hint: '', code: '' };
+  eq('题库未配置地址 → health() 归类 NO_URL', h.code, 'NO_URL');
+  ok('题库未配置时给出可操作提示（含示例地址）', /8060/.test(h.hint || ''), JSON.stringify(h));
+})();
+
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag]).then(() => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');
@@ -2376,6 +2451,8 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
     eq('能抠出 <title>', titleSafely(html502), '502 Bad Gateway');
     eq('无 title 时返回空串而非抛错', titleSafely('plain text'), '');
   }
+
+  // ==================================================
 
   // ==================================================
   console.log('\n' + '='.repeat(50));
