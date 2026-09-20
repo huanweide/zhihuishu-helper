@@ -798,6 +798,16 @@
       </div>
       <div class="hint s-health"></div>
 
+      <div class="sec-title">学习记录（M8）</div>
+      <div class="hint">统计本次与今日的答题来源分布，以及习惯分进度（平台规则：每天学满 30 分钟得 1 分）</div>
+      <div class="hint s-stats"></div>
+      <div class="row"><label></label>
+        <span>
+          <button class="mini-btn btn-refreshstats">刷新</button>
+          <button class="mini-btn btn-clearstats">清空记录</button>
+        </span>
+      </div>
+
       <div class="sec-title">自动停止（达标自动结束并弹总结）</div>
       <div class="row"><label>停止条件</label>
         <select class="sel-stop sel-inp inp">
@@ -998,6 +1008,44 @@
             if (out) out.textContent = '检测过程出错：' + e.message;
             ZHS.Log.warn('通道健康检测出错：' + e.message);
           }
+        };
+      }
+
+      // 学习记录（M8）：答题来源分布 + 学习时长 + 习惯分进度
+      const statsBox = box.querySelector('.s-stats');
+      const renderStats = () => {
+        if (!statsBox) return;
+        if (!ZHS.Stats) { statsBox.textContent = '统计模块未加载'; return; }
+        try {
+          const s = ZHS.Stats.summary();
+          const min = Math.floor((s.today.studyMs || 0) / 60000);
+          // 习惯分进度：平台按「每天学满 30 分钟得 1 分」计，这里显示已得与还差多久
+          const remainMin = Math.ceil((s.todayHabitRemainMs || 0) / 60000);
+          const line1 = '今日：答题 ' + s.today.answered + ' 题'
+            + '（题库 ' + s.today.bank + ' / 模型 ' + s.today.llm + ' / 跳过 ' + s.today.skipped + '）';
+          const line2 = '今日学习 ' + min + ' 分钟｜习惯分已得 ' + s.todayHabitDone
+            + ' 分，下一分还差约 ' + remainMin + ' 分钟';
+          const line3 = '累计答题 ' + s.totalAnswered + ' 题，活跃 ' + s.activeDays + ' 天';
+          statsBox.textContent = line1 + '　·　' + line2;
+          // 明细与累计信息挂 title：面板窄，正文只放最关键的两行，悬停可看全部 + 最近作答
+          const recent = (s.recent || []).slice(0, 5)
+            .map((r) => '· ' + r.q + ' → ' + (r.a || '（未答）') + '［' + (r.from || '未知') + '］').join('\n');
+          statsBox.title = [line1, line2, line3, recent ? '\n最近作答：\n' + recent : ''].join('\n');
+        } catch (e) {
+          statsBox.textContent = '统计读取失败：' + e.message;
+        }
+      };
+      renderStats();
+
+      const btnRefreshStats = box.querySelector('.btn-refreshstats');
+      if (btnRefreshStats) btnRefreshStats.onclick = () => renderStats();
+
+      const btnClearStats = box.querySelector('.btn-clearstats');
+      if (btnClearStats) {
+        btnClearStats.onclick = () => {
+          try { if (ZHS.Stats) ZHS.Stats.reset(); } catch (e) { /* 清空失败不影响使用 */ }
+          renderStats();
+          ZHS.Log.info('学习记录已清空');
         };
       }
 

@@ -72,6 +72,13 @@
       const options = q.options || [];
       const type = q.type || ZHS.Questions.TYPE.UNKNOWN;
 
+      // M8 统计埋点：统一出口包装，成功/跳过/失败都记一笔。
+      // 用可选调用 —— 统计模块未加载、或统计内部抛错，都绝不能影响答题主流程。
+      const done = (r) => {
+        try { if (ZHS.Stats) ZHS.Stats.record(question, r); } catch (e) { /* 统计失败不影响答题 */ }
+        return r;
+      };
+
       // 0. 命中缓存
       const key = cacheKey(question, options);
       const cached = cacheGet(key);
@@ -130,7 +137,7 @@
               ZHS.panel.alert('未配置答题通道，已跳过多题未作答。请在设置页配置大模型密钥并点「保存」，或关闭「自动答题」', 'warn', 10000);
             }
           }
-          return null;
+          return done(null);
         }
         const idx = Math.floor(Math.random() * options.length);
         const letter = String.fromCharCode(65 + idx);
@@ -142,11 +149,11 @@
       if (!result) {
         this.stats.fail++;
         ZHS.Log.warn('本题无法求解：' + question.slice(0, 40));
-        return null;
+        return done(null);
       }
 
       cacheSet(key, result);
-      return result;
+      return done(result);
     },
 
     /** 批量求解（顺序，避免打爆接口） */
