@@ -348,3 +348,13 @@ graph TD
 本项目仅供**个人学习与技术研究**，用于理解浏览器自动化、DOM 操作、LLM 应用集成。
 使用者应遵守智慧树平台服务条款及其所在学校规定。因使用本项目产生的任何后果，
 由使用者自行承担。
+
+---
+
+## 作者
+
+由 **ReTri · 樊斯瑞** 维护 · [GitHub 主页](https://github.com/huanweide)
+
+## 赞助支持
+
+如果这个项目帮到了你，欢迎 [点 Star](https://github.com/huanweide/zhihuishu-helper) 支持；也可微信扫码自愿赞助（收款码见 `sponsor/wechat-qr.png`，作者本人带 Tri 水印的码，纯静态图片、不含任何密钥）。
