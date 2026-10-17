@@ -5108,7 +5108,7 @@ window.__ZHS_BUILD__.version = "0.6.29";
  * 原因：自动跳转会被平台识别为异常行为，且用户明确说「配置剔除自动进入」。
  *       「主动出击」是用户明确否掉的方案，不要自作聪明加回来。
  *
- * ============ 页面事实（来自 PROCESS/meetings/round-2/review-worker-20.md）============
+ * ============ 页面事实============
  *   作答页 URL： #/webExamList/dohomework/{...} 或 #/webExamList/doexamination/{...}
  *   列表页 URL： #/webExamList（不含上面两者）
  *   题目块：     .examPaper_subject[data-questionid]
