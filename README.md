@@ -7,6 +7,13 @@
 
 ---
 
+> **📦 便携性速览**
+>
+> - 油猴脚本形态：**零部署**，装 Tampermonkey 后一个 `user.js` 即跑，用户随时开关。
+> - 自动播放 / 断点续播无需任何外部服务；AI 答题可选接本地题库或自备 LLM Key。
+> - 仅限个人学习研究，目标平台 zhihuishu.com / 知到。
+
+
 ## 一、项目目标（三条主线）
 
 | 编号 | 功能 | 说明 | 优先级 |
@@ -358,3 +365,12 @@ graph TD
 ## 赞助支持
 
 如果这个项目帮到了你，欢迎 [点 Star](https://github.com/huanweide/zhihuishu-helper) 支持；也可微信扫码自愿赞助（收款码见 `sponsor/wechat-qr.png`，作者本人带 Tri 水印的码，纯静态图片、不含任何密钥）。
+---
+
+## 🧰 更多开源工具（by ReTri · 樊斯瑞）
+
+- 🎬 字幕 / 视频：[bili-subtitle-universal](https://github.com/huanweide/bili-subtitle-universal) · [live-subtitle](https://github.com/huanweide/live-subtitle) · [zhihuishu-helper](https://github.com/huanweide/zhihuishu-helper) · [video-brief](https://github.com/huanweide/video-brief)
+- 🩺 代码健康全家桶（18 轴零依赖 CLI）：[family-showcase](https://github.com/huanweide/family-showcase)
+- 🔧 命令行利器：[idiot-index](https://github.com/huanweide/idiot-index) · [recall-cli](https://github.com/huanweide/recall-cli) · [forge-safeguard](https://github.com/huanweide/forge-safeguard-20260812)
+- 🖥️ 桌面 / 资讯：[floatsnip](https://github.com/huanweide/floatsnip) · [tech-news-hub](https://github.com/huanweide/tech-news-hub)
+- 📦 全部仓库：<https://github.com/huanweide?tab=repositories>
