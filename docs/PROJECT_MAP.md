@@ -50,7 +50,7 @@ src/                              # 源码（14 模块，按序拼装）
 └── 13-answerer.js     ✅ M5   答题编排：弹题签名防抖 + 分页/批量作答
 
 build.js                     ✅   构建：src/*.js → dist/*.user.js
-test/run.js                  ✅   逻辑单测：160 项断言（jsdom）
+test/run.js                  ✅   逻辑单测：489 项断言（jsdom）
 test/screenshot.js           ✅   截屏测试：51 项断言（真实 Chrome + 11 张截图）
 test/fixture-media.js        ✅   媒体打桩（解决 duration=Infinity）
 test/fixture-player.html     ✅   仿真播放页
@@ -91,28 +91,43 @@ zhs.config({speed: 1.8})
 
 ### 5.1 选择器速查（当前目标页面 studyvideoh5）
 
+> 【round-26 真机校准】studyvideoh5 实测是 **legacy 旧版共享课**，不是 wisdom 版。
+> 下面是真机取证过的口径（与 `src/02-adapter.js` 的 legacy 适配器一致）。
+
 ```js
 // 视频
 const video = document.querySelector('video');
 
-// 章节条目 / 当前项 / 完成标识
-'.child-info.hasvideo'  '.child-info.hasvideo.current'  '.child-check'
+// 章节条目 / 当前项 / 完成标识（legacy）
+'li.clearfix.video'   'li.clearfix.video.current_play'   '.time_icofinish'
+// 注意：.time_ico_half 是每节都有的进度底条，**不是**完成标记
+
+// 课时名 —— 切集要点这个「标题」，不要点 li 本体（点 li 出现过整页跳门户）
+'.catalogue_title'   '#lessonOrder'
 
 // 播放器 UI
 '.playButton'  '.volumeBox'  '.speedBox'  '.definiBox'
 
-// 课中弹题
-'#playTopic-dialog'  →  '.el-pager .number'  '.topic-item'  '.close-btn'
+// 课中弹题（两种形态都要认）
+'#playTopic-dialog'（老式）   '.el-dialog__wrapper .el-dialog'（Element UI，含 AI 小智弹题）
+// AI 小智弹题的答案直接写在 DOM 里：/正确答案[：:]\s*([A-Ha-h]{1,8}|对|错)/
 
 // 作业页
 '.subject_node'  '.question-topic'  '.nodeLab'  '.el-pager .number'
 ```
 
-### 5.2 三个必踩的坑
+### 5.2 三个必踩的坑（round-26 真机校准）
 
-1. **倍速 ≤ 1.8** —— 超过平台可能不记录进度
+1. **倍速 ≤ 1.5** —— 超过平台可能不记录进度（`Player.setSpeed` 的硬上限就是 1.5）
 2. **不能最小化浏览器** —— `requestAnimationFrame` 停摆导致卡死
-3. **进度不同步要回退重播** —— 视频放完但平台记录 < 100% 时，`currentTime` 设到对应点重播
+3. **绝不能 seek / 拖进度条（最高优先级，round-26 修订）**
+   真机实测：任何 `video.currentTime = x` 都会被当成脚本特征，**立刻弹出腾讯 Turing
+   滑块验证码**（`turing.captcha.gtimg.com` 跨域 iframe，脚本解不了），且验证未过期间
+   平台不记录进度。进度补齐改走「**重新点本节标题**，让平台按自己的记录定位」——零 seek。
+
+   > ⚠️ 这里原来的第三条写的是「回退重播 = 把 currentTime 设回记录点」，
+   > 那正是 0.6.31 里被根除的致命逻辑（用户报的「下一集被检测成脚本、跳转不支持」
+   > 就源于它）。**不要再把它加回来。**
 
 ### 5.3 AI 答题双通道
 
@@ -135,7 +150,7 @@ LLM（DeepSeek）→ 生成 3 次 → 投票取众数
 - [x] **M5 AI 答题——LLM 通道 + 投票 + 端到端截屏测试**
 - [ ] M6 面板打磨 + 习惯分
 
-**当前门禁：逻辑单测 160/160 + 截屏测试 51/51 = 211 项全绿**（v0.1.0）
+**当前门禁：逻辑单测 489 通过 / 0 失败**（v0.6.31，jsdom；截屏测试需真机 Chrome，另行跑）
 
 ## 七、下一步（M6）
 

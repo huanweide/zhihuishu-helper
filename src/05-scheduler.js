@@ -555,6 +555,29 @@
           ZHS.Log.debug('连续 ' + this._noVideoTicks + ' 次未检测到视频，按文档/PPT 节点处理');
         }
         if (this._noVideoTicks >= 3) {
+          // 【round-27 导航守卫】真机出现过「整个页面被带走」的情况：切集时偶发
+          // 整页跳到 www.zhihuishu.com 门户首页（此时既没有 video、也没有课程目录）。
+          // 若照旧 gotoNext，findNext 会因目录为空返回 null → 被判成
+          // 「没有下一节 / 全部看完」而**误停** —— 真相是页面跑偏了，不是课看完了。
+          // 所以目录为空时绝不推进，只提示并等待；页面回到学习页后自动继续。
+          let hasCatalog = false;
+          try {
+            hasCatalog = !!(ZHS.Catalog && ZHS.Catalog.items && ZHS.Catalog.items().length);
+          } catch (e) { hasCatalog = false; }
+          if (!hasCatalog) {
+            if (!this._navAwayNotified) {
+              this._navAwayNotified = true;
+              ZHS.Log.warn('连续多次未检测到视频，且页面里找不到课程目录（当前在 '
+                + location.hostname + '）。可能是页面被整页带走了，已暂停推进，等待页面恢复。');
+              if (ZHS.panel) {
+                ZHS.panel.alert('页面似乎跳走了（找不到课程目录），脚本已暂停推进。'
+                  + '请回到课程学习页，脚本会自动继续。', 'warn', 15000);
+              }
+            }
+            this._noVideoTicks = 0;
+            return;
+          }
+          this._navAwayNotified = false;
           if (cfg.autoNext) await this.gotoNext('当前节点无视频');
           this._noVideoTicks = 0;
         }
