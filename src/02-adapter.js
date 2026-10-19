@@ -39,10 +39,21 @@
     fusion: {
       name: 'fusion',
       label: 'AI助教翻转课',
-      item: '.chapter-content-second',
+      // 【2026-10-06 校准】item 原为 .chapter-content-second —— 那只是「当前展开层级的子节点」，
+      // 真站实测 58 节里只命中 4 节，于是目录残缺、findNext 找不到下一节，
+      // 正是用户报的「没办法自动跳」。完整课时列表在 .chapter-item
+      // （Autovisor FUSION_CATALOG 与 ocsjs zhs.ts:426 两个独立信源结论一致）。
+      // active 仍挂在课时内部子节点上（.chapter-item 自身没有 active class），
+      // scoreAdapter 的「active 必须是 item 命中节点本身或其后代」与 clickAndVerify 都按后代匹配。
+      item: '.chapter-item',
       active: '.chapter-content-second.current',
+      activeClass: 'current',
       finish: '.finish-icon',
       title: '.item-name',
+      // 融合课每个课时带一个圆形进度环 .el-progress，aria-valuenow 是真实已学百分比（能读到中间值）。
+      // 原先缺失 → 融合课下 progressOf 永远读不到进度，完成判定只剩 finish 图标一条路。
+      progress: '.el-progress',
+      progressAttr: 'aria-valuenow',
       container: '.chapter-content',
       courseTitle: '.course-name',
       locked: '[class*="lock"]',
@@ -69,6 +80,12 @@
       // 旧版共享课的课时名：OCS getChapterName 用 .catalogue_title，
       // 老页面里还写作 <span id="lessonOrder">。两个都写，命中谁算谁。
       title: '#lessonOrder, .catalogue_title',
+      // 【round-26 真机校准】切课时要点「内部标题」而不是条目本体：
+      // 真机实测把带坐标的鼠标三连派发到 .catalogue_title 上 → 页内换 video 源、
+      // URL 始终停在 studyvideoh5（成功的页内切集）；而点 li 本体（el.click()）
+      // 出现过整页跳到 www.zhihuishu.com 门户首页的情况。
+      // Catalog.click 会优先用这个目标，取不到才退回点条目本体。
+      clickTarget: '.catalogue_title, #lessonOrder',
       progress: '.progress-num',
       container: '.clearfix',
       courseTitle: '.source-name',
@@ -471,7 +488,10 @@
       // 「100% 学习完成」这种进度说明也会命中，下一节的 100% 也会被误判为已完成；
       // 但视频看完时平台侧常常仍停在 99%，以 100 为门槛会直接卡住不跳。
       // 故改为：只认独立文本 /^(\d{1,3})%$/，且阈值取 FINISH_PCT —— 由平台自己的低位值决定，不是拍脑袋。
-      const FINISH_PCT = 98;
+      // 【2026-10-06 修正】阈值改为从 ZHS.Const.FINISH_PCT 取（单一真源），并由 98 下调到 91。
+      // 依据：竞品 fuckZHS 的实测配置 end_thre = 0.91（原话「智慧树把高于一定百分比的进度视为完成，0.91 保险一点」）。
+      // 原 98 的门槛会把「平台已视为完成、但进度环停在 91~97%」的课时判成未完成 → 反复回退重播，纯浪费。
+      const FINISH_PCT = (ZHS.Const && ZHS.Const.FINISH_PCT) || 91;
       const t = U.normText(el.innerText || el.textContent);
       if (/(已完成|已学完|已学习|学完|已看完)/.test(t)) return true;
       if (!ad.progress) {
@@ -684,6 +704,19 @@
       try {
         if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
       } catch (e) { /* 滚动失败不影响点击 */ }
+
+      // 【round-26 真机校准】优先走「内部标题 + 拟真鼠标事件」这条路。
+      // 真机在旧版共享课（legacy）上验证：把带坐标的 mousedown/mouseup/click 三连
+      // 派发到 .catalogue_title → 页内换 video 源、URL 不变（成功的页内切集）；
+      // 而直接点 li 本体出现过整页跳到门户首页的情况（见 legacy.clickTarget 注释）。
+      // 只有显式配了 clickTarget 的适配器才走这条，其余保持「点条目本体」不变。
+      const ad = this.adapter;
+      if (ad && ad.clickTarget) {
+        let inner = null;
+        try { inner = el.querySelector(ad.clickTarget); } catch (e) { inner = null; }
+        if (inner && U.realClick && U.realClick(inner)) return true;
+      }
+
       try {
         el.click();
         return true;

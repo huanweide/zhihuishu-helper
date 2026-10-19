@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.29
+// @version      0.6.31
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.29";
+window.__ZHS_BUILD__.version = "0.6.31";
 
 /* ===== 00-config.js ===== */
 /**
@@ -71,7 +71,7 @@ window.__ZHS_BUILD__.version = "0.6.29";
     autoPlay: true,
     autoNext: true,
     skipFinished: true,  // 自动跳过已完成/未解锁节点
-    speed: 1.5,          // 倍速，硬上限 1.8
+    speed: 1.5,          // 倍速，硬上限 1.5（2026-10-06 下调：更高倍速更易被风控盯上）
     mute: true,          // 静音
     nextDelayMin: 2,     // 切课随机延迟下限（秒），模拟人类
     nextDelayMax: 8,     // 切课随机延迟上限（秒）
@@ -254,7 +254,7 @@ window.__ZHS_BUILD__.version = "0.6.29";
     }
     const next = Object.assign(getConfig(), clean);
     // 倍速硬夹逼
-    next.speed = Math.min(Math.max(Number(next.speed) || 1, 0.5), 1.8);
+    next.speed = Math.min(Math.max(Number(next.speed) || 1, 0.5), 1.5);
     // 布尔归一化 + 章节夹逼：直写 API 也要设防（面板走 floor，API/GM 直写不设防）
     normalizeBools(next);
     next.examChapterFrom = clampInt(next.examChapterFrom, 999);
@@ -307,7 +307,8 @@ window.__ZHS_BUILD__.version = "0.6.29";
     videoEl: null,         // 当前 video 元素
     running: false,        // 主循环是否运行
     answeredCount: 0,      // 已答题数
-    pausedByGuard: false,  // 是否因守卫暂停
+    pausedByGuard: false,  // 是否因守卫暂停（验证码）
+    guardSince: 0,         // 本轮验证码守卫暂停的开始时刻（用于汇报等待了多久）
     startedAt: Date.now(),
   };
 
@@ -440,6 +441,86 @@ window.__ZHS_BUILD__.version = "0.6.29";
       return false;
     },
 
+    /**
+     * 腾讯 Turing 滑块验证码是否「真的弹出来拦人」了（激活态）。
+     *
+     * 【为什么不能裸用选择器 —— 真机踩过的坑】
+     * turing.captcha.gtimg.com 的 iframe 在智慧树视频页是**常驻**的：
+     * 休眠态就是一个 300×150 的占位框，computed style 仍然是 display:block /
+     * visibility:visible / opacity:1。所以
+     *   hasStructurallyVisible('iframe[src*=turing]')
+     * 会**永久命中** → 守卫 1 一直拦截 → 脚本彻底停机。这是把「常驻占位」
+     * 当成「正在拦人」的典型误判。
+     *
+     * 真机实测：只有真正弹出来拦人时，它才会变成「居中、覆盖视口大半的
+     * fixed/absolute 浮层」，并且页面上出现可见文案
+     * 「安全验证 / 拖动下方滑块完成拼图」。所以判据取这两条（或关系）：
+     *   ① iframe 的祖先链里出现覆盖视口（宽 > 50% 且 高 > 40%）的 fixed/absolute 浮层
+     *   ② 页面上出现可见的「拖动下方滑块 / 安全验证」文本（只查叶子节点）
+     */
+    turingActive() {
+      try {
+        const f = document.querySelector('iframe[src*="turing"], iframe[src*="captcha.gtimg.com"]');
+        if (f) {
+          let n = f;
+          for (let i = 0; i < 8 && n; i++) {
+            const cs = getComputedStyle(n);
+            const r = n.getBoundingClientRect();
+            const covers = (r.width > window.innerWidth * 0.5)
+              && (r.height > window.innerHeight * 0.4);
+            // r.width/height 为 0 = 拿不到真实布局（如 jsdom / 元素尚未排版）。
+            // 有布局时用「覆盖视口」这个强判据；没有布局信息时退化为只看定位方式，
+            // 否则测试环境里永远判不出拦截态（真踩过）。
+            const sized = r.width > 0 && r.height > 0;
+            if ((cs.position === 'fixed' || cs.position === 'absolute')
+                && cs.display !== 'none' && (covers || !sized)) return true;
+            n = n.parentElement;
+          }
+        }
+      } catch (e) { /* 跨域/取不到样式一律当作没拦截 */ }
+
+      try {
+        const all = document.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i];
+          if (el.children.length !== 0) continue;        // 只看叶子，避免父容器整段文本误命中
+          if (!Util.isStructurallyVisible(el)) continue; // 不可见（display:none 等）跳过
+          const tx = Util.normText(el.textContent);
+          if (tx && /拖动下方滑块|安全验证|请完成验证/.test(tx)) return true;
+        }
+      } catch (e) { /* 忽略 */ }
+      return false;
+    },
+
+    /**
+     * 拟真点击：派发带坐标的 mousedown → mouseup → click 三连。
+     *
+     * 为什么不用 el.click()：真机实测（round-26）在智慧树目录上，
+     * 裸 click() 出现过整页跳到 www.zhihuishu.com 门户首页的情况；
+     * 而把带坐标的鼠标三连派发到小节标题 .catalogue_title 上，
+     * 稳定表现为「页内换 video 源、URL 始终不变」。
+     * 三连更接近人类操作序列，也更容易被 Vue 的监听器正确接收。
+     */
+    realClick(el) {
+      if (!el) return false;
+      try {
+        if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch (e) { /* 滚动失败不影响点击 */ }
+      try {
+        const r = el.getBoundingClientRect();
+        const o = {
+          bubbles: true, cancelable: true, view: window,
+          clientX: r.x + r.width / 2, clientY: r.y + r.height / 2,
+        };
+        el.dispatchEvent(new MouseEvent('mousedown', o));
+        el.dispatchEvent(new MouseEvent('mouseup', o));
+        el.dispatchEvent(new MouseEvent('click', o));
+        return true;
+      } catch (e) {
+        try { el.click(); return true; } catch (e2) { return false; }
+      }
+    },
+
     /** 等待元素出现 */
     async waitFor(selector, timeoutMs = 20000, interval = 300) {
       const deadline = Date.now() + timeoutMs;
@@ -544,6 +625,20 @@ window.__ZHS_BUILD__.version = "0.6.29";
   ZHS.Const = ZHS.Const || {};
   ZHS.Const.QUESTION_SELECTORS =
     '#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog';
+
+  /**
+   * 平台「视为已完成」的进度阈值（单一真源）。
+   *
+   * 为什么是 91：竞品 fuckZHS 的实测配置 end_thre = 0.91，其原话注释是
+   * 「智慧树把高于一定百分比的进度视为完成，0.91 保险一点」。
+   * 智慧树的进度记录常停在 91~99% 就不再上报，门槛定高了会把「已完成」判成「未完成」。
+   *
+   * 历史问题：本项目原先 02-adapter.js 写 98、05-scheduler.js 写 95、06b-course-hub.js 写 98，
+   * 三处各自为政；只要有一处更严，就会出现「目录说完成了、调度器说没完成」的打架，
+   * 表现为课时被反复回退重播。现在统一从这里取，
+   * 各处用 `(ZHS.Const && ZHS.Const.FINISH_PCT) || 91` 兜底（防模块加载顺序异常）。
+   */
+  ZHS.Const.FINISH_PCT = 91;
 })();
 
 /* ===== 02-adapter.js ===== */
@@ -588,10 +683,21 @@ window.__ZHS_BUILD__.version = "0.6.29";
     fusion: {
       name: 'fusion',
       label: 'AI助教翻转课',
-      item: '.chapter-content-second',
+      // 【2026-10-06 校准】item 原为 .chapter-content-second —— 那只是「当前展开层级的子节点」，
+      // 真站实测 58 节里只命中 4 节，于是目录残缺、findNext 找不到下一节，
+      // 正是用户报的「没办法自动跳」。完整课时列表在 .chapter-item
+      // （Autovisor FUSION_CATALOG 与 ocsjs zhs.ts:426 两个独立信源结论一致）。
+      // active 仍挂在课时内部子节点上（.chapter-item 自身没有 active class），
+      // scoreAdapter 的「active 必须是 item 命中节点本身或其后代」与 clickAndVerify 都按后代匹配。
+      item: '.chapter-item',
       active: '.chapter-content-second.current',
+      activeClass: 'current',
       finish: '.finish-icon',
       title: '.item-name',
+      // 融合课每个课时带一个圆形进度环 .el-progress，aria-valuenow 是真实已学百分比（能读到中间值）。
+      // 原先缺失 → 融合课下 progressOf 永远读不到进度，完成判定只剩 finish 图标一条路。
+      progress: '.el-progress',
+      progressAttr: 'aria-valuenow',
       container: '.chapter-content',
       courseTitle: '.course-name',
       locked: '[class*="lock"]',
@@ -618,6 +724,12 @@ window.__ZHS_BUILD__.version = "0.6.29";
       // 旧版共享课的课时名：OCS getChapterName 用 .catalogue_title，
       // 老页面里还写作 <span id="lessonOrder">。两个都写，命中谁算谁。
       title: '#lessonOrder, .catalogue_title',
+      // 【round-26 真机校准】切课时要点「内部标题」而不是条目本体：
+      // 真机实测把带坐标的鼠标三连派发到 .catalogue_title 上 → 页内换 video 源、
+      // URL 始终停在 studyvideoh5（成功的页内切集）；而点 li 本体（el.click()）
+      // 出现过整页跳到 www.zhihuishu.com 门户首页的情况。
+      // Catalog.click 会优先用这个目标，取不到才退回点条目本体。
+      clickTarget: '.catalogue_title, #lessonOrder',
       progress: '.progress-num',
       container: '.clearfix',
       courseTitle: '.source-name',
@@ -1020,7 +1132,10 @@ window.__ZHS_BUILD__.version = "0.6.29";
       // 「100% 学习完成」这种进度说明也会命中，下一节的 100% 也会被误判为已完成；
       // 但视频看完时平台侧常常仍停在 99%，以 100 为门槛会直接卡住不跳。
       // 故改为：只认独立文本 /^(\d{1,3})%$/，且阈值取 FINISH_PCT —— 由平台自己的低位值决定，不是拍脑袋。
-      const FINISH_PCT = 98;
+      // 【2026-10-06 修正】阈值改为从 ZHS.Const.FINISH_PCT 取（单一真源），并由 98 下调到 91。
+      // 依据：竞品 fuckZHS 的实测配置 end_thre = 0.91（原话「智慧树把高于一定百分比的进度视为完成，0.91 保险一点」）。
+      // 原 98 的门槛会把「平台已视为完成、但进度环停在 91~97%」的课时判成未完成 → 反复回退重播，纯浪费。
+      const FINISH_PCT = (ZHS.Const && ZHS.Const.FINISH_PCT) || 91;
       const t = U.normText(el.innerText || el.textContent);
       if (/(已完成|已学完|已学习|学完|已看完)/.test(t)) return true;
       if (!ad.progress) {
@@ -1233,6 +1348,19 @@ window.__ZHS_BUILD__.version = "0.6.29";
       try {
         if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
       } catch (e) { /* 滚动失败不影响点击 */ }
+
+      // 【round-26 真机校准】优先走「内部标题 + 拟真鼠标事件」这条路。
+      // 真机在旧版共享课（legacy）上验证：把带坐标的 mousedown/mouseup/click 三连
+      // 派发到 .catalogue_title → 页内换 video 源、URL 不变（成功的页内切集）；
+      // 而直接点 li 本体出现过整页跳到门户首页的情况（见 legacy.clickTarget 注释）。
+      // 只有显式配了 clickTarget 的适配器才走这条，其余保持「点条目本体」不变。
+      const ad = this.adapter;
+      if (ad && ad.clickTarget) {
+        let inner = null;
+        try { inner = el.querySelector(ad.clickTarget); } catch (e) { inner = null; }
+        if (inner && U.realClick && U.realClick(inner)) return true;
+      }
+
       try {
         el.click();
         return true;
@@ -1519,11 +1647,14 @@ window.__ZHS_BUILD__.version = "0.6.29";
   const END_RATIO = 0.995;
   // 播放卡死阈值：120 秒 currentTime 不推进就判定卡住
   const STALL_MS = 120000;
+  // 进度对账容差：播放器超前平台记录超过这个秒数就拉回（Autovisor learn_lesson 同值）
+  const SYNC_LEAD_SECONDS = 15;
 
   const Player = {
     _lastTime: -1,
     _lastActiveAt: Date.now(),
     _retryCount: 0,
+    _syncedKey: null,        // 已对过账的课时标识（避免同一节内反复 seek）
 
     /** 取当前 video 元素（缓存 + 校验是否还在文档里；顶层找不到再查同域 iframe） */
     video() {
@@ -1566,10 +1697,10 @@ window.__ZHS_BUILD__.version = "0.6.29";
       } catch (e) { /* 忽略 */ }
     },
 
-    /** 设置倍速（硬上限 1.8） */
+    /** 设置倍速（硬上限 1.5 —— 与 00-config.js 的配置钳位保持同一数值） */
     setSpeed(v, speed) {
       if (!v) return;
-      const s = Math.min(Math.max(Number(speed) || 1, 0.5), 1.8);
+      const s = Math.min(Math.max(Number(speed) || 1, 0.5), 1.5);
       try {
         if (Math.abs(v.playbackRate - s) > 0.01) v.playbackRate = s;
         // 同步 UI，避免平台检测播放器倍速与界面不一致
@@ -1620,6 +1751,54 @@ window.__ZHS_BUILD__.version = "0.6.29";
       return false;
     },
 
+    /**
+     * 播放器进度对账（2026-10-06 新增，参考 Autovisor learn_lesson 的「进度对齐」）
+     *
+     * 为什么需要：平台按「已学百分比」异步上报。播放器如果跑在平台记录的前面太多，
+     * 中途一旦断线、弹验证、弹题，超出记录的那一段就等于白播——平台不认。
+     * 极端情形是人机验证没通过时进度直接作废归零，此时播放器还傻跑在前面。
+     *
+     * 对账策略（照抄 Autovisor 的克制做法，**不是**持续对账）：
+     *   · 同一节课只对一次账，避免反复干预造成卡顿/花屏；
+     *     （round-26：这里曾经真的 seek 拉回播放位置，真机证明 seek 会触发
+     *       腾讯滑块验证码，现已去掉，见函数内注释）
+     *   · 平台进度读不到（0%）时不干预——刚打开一节时进度天然是 0，
+     *     一拉回就会变成「重播开头 20 秒」的死循环；这种情况交给调度器的
+     *     0% 停滞守卫（ZERO_PROGRESS_GIVEUP_MS）去停手交人；
+     *   · 验证/弹题结束后由调度器调 resetSync() 清标记，恢复时重新对一次账。
+     *
+     * @returns {boolean} 是否真的拉回过
+     */
+    syncToCatalog(v, lessonKey) {
+      if (!v || !lessonKey || this._syncedKey === lessonKey) return false;
+      if (!Number.isFinite(v.duration) || v.duration <= 0) return false;
+      const cur = ZHS.Catalog && ZHS.Catalog.current ? ZHS.Catalog.current() : null;
+      if (!cur) return false;
+      const pct = ZHS.Catalog.progressOf(cur);
+      this._syncedKey = lessonKey;   // 无论是否拉回，本节不再重复对账
+      if (!(pct > 0)) return false;
+      const expected = Math.floor(v.duration * pct / 100);
+      if (v.currentTime > expected + SYNC_LEAD_SECONDS) {
+        // 【2026-10-19 round-26 修订】这里原先是 `v.currentTime = expected`（seek 拉回）。
+        //
+        // 真机结论：智慧树把「异常 seek / 拖进度条」当作脚本特征 —— 一 seek 就弹
+        // 腾讯 Turing 滑块验证码（turing.captcha.gtimg.com 跨域 iframe，脚本解不了）。
+        // 这正是用户反馈的「有的下一集被检测成脚本、跳转不支持」的根因。
+        //
+        // 所以这里改为只告警、绝不干预播放位置；真正的进度补齐走
+        // 「播完后重新加载本节」这条无 seek 路径（见 retryFromPlatformProgress）。
+        ZHS.Log.warn('播放器进度超前平台记录（播放器 ' + Math.round(v.currentTime)
+          + 's / 平台 ' + pct + '% ≈ ' + expected + 's）。按真机结论不 seek'
+          + '（seek 会触发滑块验证码），进度补齐交由播完后的「重新加载本节」处理。');
+      }
+      return false;
+    },
+
+    /** 清空对账标记：验证/弹题结束后需要重新对一次账 */
+    resetSync() {
+      this._syncedKey = null;
+    },
+
     _markActive(v) {
       if (v && v.currentTime > this._lastTime + 0.25) {
         this._lastTime = v.currentTime;
@@ -1627,7 +1806,14 @@ window.__ZHS_BUILD__.version = "0.6.29";
       }
     },
 
-    /** 跳转到指定秒数并播放 */
+    /**
+     * 跳转到指定秒数并播放。
+     *
+     * ⚠️【round-26 铁律】这是全脚本**唯一**会产生 seek 的入口，**仅供用户手动操作**
+     * （例如面板上的「跳到某处」）。自动化链路 —— 进度对账、回退重播、断点续播 ——
+     * 一律不得调用：真机证明任何 seek 都会触发腾讯 Turing 滑块验证码，
+     * 而验证码一旦弹出，脚本解不了、进度还会作废。改动前请先看本文件上方的说明。
+     */
     async seekTo(v, seconds) {
       if (!v || !Number.isFinite(seconds)) return false;
       try {
@@ -1642,7 +1828,18 @@ window.__ZHS_BUILD__.version = "0.6.29";
 
     /**
      * 进度不同步处理：视频放完但平台记录 <100%
-     * 回退到平台记录点重播，最多重试 2 次
+     *
+     * 【2026-10-19 round-26 重写：彻底去掉 seek】
+     *
+     * 旧实现：把 video.currentTime 拉回平台记录点重播。
+     * 真机结论：智慧树把「异常 seek / 拖进度条」当作脚本特征 —— 一 seek 就弹出
+     * 腾讯 Turing 滑块验证码（turing.captcha.gtimg.com 跨域 iframe，脚本解不了）。
+     * 这正是用户反馈的「有的下一集被检测成脚本、跳转不支持」的根因。
+     *
+     * 新实现走人类的做法：**重新点一次本节标题**。真机实测（2.25 节）：点未完成
+     * 小节的标题后，平台会按它自己记录的进度把视频定位到断点加载（474/622）——
+     * 全程不产生任何 seek 事件，却一样达到「从平台记录点续播补齐」的效果。
+     * 最多重试 2 次，仍不同步就交回上层跳下一节（不卡死）。
      */
     async retryFromPlatformProgress(v, platformPercent) {
       if (this._retryCount >= 2) {
@@ -1650,28 +1847,21 @@ window.__ZHS_BUILD__.version = "0.6.29";
         this._retryCount = 0;
         return false;
       }
-      if (!this.hasValidDuration(v)) return false;
-      const target = (platformPercent / 100) * v.duration;
-      // 【2026-09-18 修正】原来写成 Math.max(0, target - 5)：
-      // 当平台记录为 0% 时 back 会变成 0，等于整节从头重播 → 用户被死死卡在这一节，
-      // 表现出来就是「永远跳不到下一集」。现在三道闸：
-      //   1. 目标点本身 <= 0（平台压根没记录）→ 回退没有意义，直接放弃，交回上层跳下一节
-      //   2. 回退 5 秒，但不得早于全片末尾 5 秒之前（避免一退退回开头）
-      //   3. 结果必须落在有效区间内
-      if (!(target > 0)) {
-        ZHS.Log.warn('平台记录为 ' + platformPercent + '%，回退点无效，放弃重播直接跳下一节');
+      // 0% 不在这里硬撑：多半是安全验证没过（此时进度一律作废，重播也没用），
+      // 交给调度器的「0% 停滞守卫」去停手交人。
+      if (!(platformPercent > 0) || platformPercent >= 100) return false;
+
+      const Catalog = ZHS.Catalog;
+      const cur = Catalog && Catalog.current ? Catalog.current() : null;
+      if (!cur || !Catalog.click) {
+        ZHS.Log.warn('定位不到当前课时，无法按平台进度重播，放弃本课时');
         return false;
       }
-      const tailFloor = Math.max(0, v.duration - 5);
-      const back = Math.min(Math.max(0, target - 5), tailFloor);
-      if (!Number.isFinite(back) || back < 0 || back > v.duration) return false;
-      ZHS.Log.warn(
-        '视频已结束但平台仅记录 ' + platformPercent + '%，回退到 ' +
-        Math.round(back) + 's 重试（第 ' + (this._retryCount + 1) + ' 次）'
-      );
-      await this.seekTo(v, back);
+      ZHS.Log.warn('视频已结束但平台仅记录 ' + platformPercent
+        + '%，重新加载本节按平台进度续播（第 ' + (this._retryCount + 1) + ' 次，不 seek）');
+      try { Catalog.click(cur); } catch (e) { /* 点击失败下一轮还会再判 */ }
       this._retryCount++;
-      await U.sleep(1000);
+      await U.sleep(3000);   // 等平台重新加载并把视频定位到它的记录点
       return true;
     },
 
@@ -1907,7 +2097,9 @@ window.__ZHS_BUILD__.version = "0.6.29";
 
     /**
      * 恢复流程：
-     * 1. 读记录 → 2. 定位课时 → 3. 等待 video → 4. seek 到记录点
+     * 1. 读记录 → 2. 定位课时（点标题切过去）→ 3. 等待 video → 4. 直接播放
+     *    （round-26：第 4 步原先是 seek 到记录点；真机证明 seek 会触发滑块验证码，
+     *     现改为交给平台自身定位，脚本全程不 seek）
      * 返回是否执行了恢复
      */
     async restore(courseId) {
@@ -1949,20 +2141,24 @@ window.__ZHS_BUILD__.version = "0.6.29";
       // 等元数据加载
       await this._waitMetadata(video, 20000);
 
-      const rewind = Number(ZHS.config.resumeRewind) || 2;
-      const targetTime = Math.max(0, rec.time - rewind);
-
-      // duration 变了（换了清晰度/新版视频），按比例换算
-      let finalTime = targetTime;
-      if (rec.duration && Number.isFinite(video.duration) && video.duration > 0
-          && Math.abs(video.duration - rec.duration) > 5) {
-        finalTime = (rec.time / rec.duration) * video.duration;
-        ZHS.Log.info('视频时长变化，按比例换算恢复点：' + Math.round(finalTime) + 's');
-      }
-
-      await ZHS.Player.seekTo(video, finalTime);
+      // 【2026-10-19 round-26 修订】这里原先是 `ZHS.Player.seekTo(video, finalTime)`。
+      //
+      // 真机结论：智慧树把「异常 seek / 拖进度条」当作脚本特征 —— 一 seek 就弹
+      // 腾讯 Turing 滑块验证码（跨域 iframe，脚本解不了），正是用户说的
+      // 「跳转不支持 / 被检测成脚本」的根因。
+      //
+      // 而「把视频定位到断点」这件事**平台自己就会做**：真机实测点未完成小节的
+      // 标题后，视频直接停在平台记录的断点上（2.25 节 → 停在 474/622）。
+      // 所以脚本只负责「点过去 + 播放」，位置交给平台，全程零 seek。
+      ZHS.Log.info('已切到「' + rec.lessonKey + '」，断点位置由平台自身记录恢复'
+        + '（脚本不 seek —— seek 会触发滑块验证码）');
+      try {
+        if (video.paused) {
+          const p = video.play();
+          if (p && p.catch) p.catch(() => {});
+        }
+      } catch (e) { /* 播放失败不影响主流程，调度器下一轮会保活 */ }
       this._restored = true;
-      ZHS.Log.info('已恢复到 ' + Math.round(finalTime) + 's 继续播放');
       return true;
     },
 
@@ -2020,6 +2216,10 @@ window.__ZHS_BUILD__.version = "0.6.29";
     || '#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog';
   // 其他阻塞弹窗
   const BLOCK_SELECTORS = '.ss2077-custom-dialog';
+  // 融合课（AI 助教翻转课）的 AI 随堂练习弹窗：没有关闭/跳过按钮，
+  // 必须选一个选项再点提交才会消失，否则视频一直停在原地。
+  // 依据：Autovisor modules/fusion_adapter.py:33 的 AI_CLASS_EXERCISE_DIALOG。
+  const AI_EXERCISE_SELECTORS = '.ai-class-exercise-dialog';
 
   const LOOP_INTERVAL = 2000;   // 主循环间隔
   const END_SETTLE_MS = 8000;   // 结束后等平台打勾+上报进度的时间（拉长：对勾/进度常异步延迟，过短会读不到完成态→误判重播）
@@ -2029,11 +2229,15 @@ window.__ZHS_BUILD__.version = "0.6.29";
   const NAV_COOLDOWN_MS = 15000;
   // 平台异步上报等待：读到 0% 时先复查一次再决定切（避免丢学时）
   const PROGRESS_RECHECK_MS = 10000;
+  // 平台「视为已完成」的进度阈值（与目录判定同源，见 src/01-util.js 的 ZHS.Const.FINISH_PCT）
+  const FINISH_PCT = (ZHS.Const && ZHS.Const.FINISH_PCT) || 91;
+  // 视频已放完、平台进度却一直读到 0% 时最多等这么久；超过就停手交人，绝不静默跳过整节
+  const ZERO_PROGRESS_GIVEUP_MS = 3 * 60 * 1000;
 
   // ===== 守卫预算上限 =====
-  // 三条守卫此前都是「无上限 await」，任何一个卡住都会把 2 秒一轮的主循环吊死。
-  // 统一设上限：宁可放行走下一轮重试，也不能永久阻塞。
-  const VERIFY_WAIT_MAX_MS = 2 * 60 * 1000;      // 验证码：给人足够时间操作，但不能无限期暂停视频
+  // 弹题/阻塞弹窗这两条守卫仍在 await 上设上限：任何一处永久 await 都会把 2 秒一轮的主循环吊死。
+  // 验证码守卫已改为「不 await、直接 return」（见 _tickInner 守卫 1），不再需要超时常量，
+  // 也就彻底消除了「超时放行」这条错误路径。
   const QUESTION_WAIT_MAX_MS = 3000;             // 弹题自动关闭失败后：短等放行，别吊住主循环
   const DIALOG_BUDGET_MS = 25 * 1000;          // 单轮弹题作答预算
   const BLOCK_GUARD_MAX_TICKS = 15;            // 阻塞弹窗连续点不掉的轮数上限
@@ -2095,6 +2299,8 @@ window.__ZHS_BUILD__.version = "0.6.29";
         this._navFailCount = 0;
         this._navFailTotal = 0;             // round-15【C2】：本轮累计切课失败
         this._completedThisRun = 0;         // 停止条件：本次运行完成节数
+        this._zeroSince = 0;                // 「平台进度一直 0%」的等待起点（全新一轮重新计时）
+        this._zeroNotifiedAt = 0;           // 「进度 0%」提示的节流时间戳
       }
       // round-15【A1】：自愈名额只在「全新一轮启动」时重置（含用户手动点「启动」）。
       // 原先 _transientReloads 全仓库只增不减，用满 3 次后即便用户手动重启也救不回来，
@@ -2299,25 +2505,46 @@ window.__ZHS_BUILD__.version = "0.6.29";
       const cfg = ZHS.config;
       const video = ZHS.Player.video();
 
-      // ===== 守卫 1：验证码 → 停手等用户 =====
-      if (cfg.guardOverlays && U.hasStructurallyVisible(VERIFY_SELECTORS)) {
+      // ===== 守卫 1：验证码 → 彻底停手，等人，绝不放行 =====
+      //
+      // 【2026-10-06 修订 · 风控合规】旧实现「等待 N 秒超时后放行主循环」是错的。
+      //
+      // 平台规则（Autovisor issue #92 原文）：进播放页立刻弹人机验证，且
+      // **一旦网站没有收到验证模块返回的成功结果，之后的所有学习进度不会被记录，
+      // 而是直接作废**。所以「放行」不会让脚本跑得更快，只会让它在白跑的同时
+      // 继续做跳课等自动化动作——观感就是「用了跟没用一样」，还可能被记为异常。
+      //
+      // 新实现：不 await（不再有「等多久」这个问题），检测到就暂停视频 + 提示，
+      // 然后直接 return。主循环 2 秒一轮，每轮都会再来看一眼，直到验证消失。
+      // 这样既不会把主循环吊死（旧实现的顾虑），也绝不会在验证没过时往前走。
+      // 验证没过期间：不跳课、不播放、不计学习时长、不做任何自动化动作。
+      // 【round-26 补漏】VERIFY_SELECTORS 只覆盖了网易易盾（yidun）与老版 tcaptcha，
+      // **漏了智慧树现在实际在用的腾讯 Turing 滑块**（turing.captcha.gtimg.com）。
+      //
+      // 但绝不能把 iframe 选择器直接塞进 VERIFY_SELECTORS：真机实测那个 iframe
+      // 在视频页是**常驻的休眠占位**（300×150，computed 仍是 display:block / visible），
+      // 裸加会让本守卫永久命中 → 脚本一动不动地停机。所以这里用专门的
+      // 「激活态」判据（覆盖视口的浮层祖先 / 可见验证文案），详见 Util.turingActive。
+      if (cfg.guardOverlays && (U.hasStructurallyVisible(VERIFY_SELECTORS) || U.turingActive())) {
         if (video && !video.paused) video.pause();
+        if (ZHS.Player) ZHS.Player.resetSync();   // 验证结束后要重新对一次账
         if (!ZHS.state.pausedByGuard) {
           ZHS.state.pausedByGuard = true;
-          ZHS.Log.warn('检测到安全验证，请手动完成后脚本自动继续');
-          if (ZHS.panel) ZHS.panel.alert('检测到安全验证，请手动完成', 'warn');
+          ZHS.state.guardSince = Date.now();
+          ZHS.Log.warn('检测到安全验证：已暂停所有自动动作。未通过验证前，平台不会记录进度，脚本不会跳课也不会续播。请手动完成验证。');
+          if (ZHS.panel) {
+            ZHS.panel.alert('检测到安全验证，请手动完成。未完成前脚本不会跳课、也不会继续播放（此期间的进度平台不会记录）', 'warn', 15000);
+          }
         }
-        // 必须设上限。原来是无参 await，如果用户一直不处理（或关不掉），
-        // 这个 await 会把 2 秒一轮的主循环永久吊死——表面看就是「脚本卡住了」。
-        // 上限给得足够宽（10 分钟，够人做完验证码），超时后放行让下个 tick 重新判断。
-        const cleared = await U.waitUntilHidden(VERIFY_SELECTORS, VERIFY_WAIT_MAX_MS);
-        if (!cleared) {
-          ZHS.Log.warn('安全验证等待超过 ' + (VERIFY_WAIT_MAX_MS / 1000) + ' 秒仍未消失，先放行主循环');
-          if (ZHS.panel) ZHS.panel.alert('安全验证仍在，脚本已放行（不会卡住），处理完后会自动继续', 'warn', 10000);
-        }
-        ZHS.state.pausedByGuard = false;
-        ZHS.Log.info('验证已处理，继续运行');
         return;
+      }
+      // 验证已消失 → 复位标记并告知用户等待了多久
+      if (ZHS.state.pausedByGuard) {
+        ZHS.state.pausedByGuard = false;
+        const waitedSec = ZHS.state.guardSince ? Math.round((Date.now() - ZHS.state.guardSince) / 1000) : 0;
+        ZHS.state.guardSince = 0;
+        ZHS.Log.info('安全验证已通过，继续自动学习' + (waitedSec ? '（等待 ' + waitedSec + ' 秒）' : ''));
+        if (ZHS.panel) ZHS.panel.alert('安全验证已通过，继续自动学习', 'info', 6000);
       }
 
       // ===== 守卫 2：弹题 → 暂停并交给答题模块 =====
@@ -2333,6 +2560,38 @@ window.__ZHS_BUILD__.version = "0.6.29";
       if (cfg.guardOverlays && ZHS.Questions.Dialog.present()
           && U.hasStructurallyVisible(QUESTION_SELECTORS)) {
         if (video && !video.paused) video.pause();
+        if (ZHS.Player) ZHS.Player.resetSync();   // 弹题结束后要重新对一次账
+
+        // ===== 守卫 2.0（round-26 新增）：答案就写在页面里 → 读出来直接关 + 续播 =====
+        //
+        // 真机实测：AI 助教小智出的「弹题测验」把「正确答案：A」**直接渲染在 DOM 里**
+        // （弹窗里还写明「不影响作业考试成绩」）。这类题根本不必查题库、也不必调 LLM，
+        // 读出来就是答案；而且它**不做选择也能关闭**（实测点选项后选中态不变）。
+        //
+        // 所以旧的「平台不允许关闭未作答弹题、必须答上才关」这条铁律，遇到它会把
+        // 脚本卡成「关不掉 → 转人工空等」的死循环。这里提前截胡：读出答案 → 关闭 → 续播。
+        // 放在最前面还带来一个好处：即使「自动答题」开关关着，这类题也能秒过。
+        let domAns = null;
+        try {
+          domAns = (ZHS.Questions && ZHS.Questions.Dialog && ZHS.Questions.Dialog.answerFromDom)
+            ? ZHS.Questions.Dialog.answerFromDom() : null;
+        } catch (e) { domAns = null; }
+        if (domAns) {
+          ZHS.Log.info('弹题答案已内嵌在页面（正确答案：' + domAns + '），直接关闭并续播，不走题库/LLM');
+          try { ZHS.Questions.Dialog.close(); } catch (e) { /* 关不掉下一轮再来 */ }
+          await U.sleep(500);
+          if (video && video.paused && !video.ended) {
+            try {
+              video.muted = true;               // 静音兜底：部分浏览器拒绝非用户手势的 play()
+              const p = video.play();
+              if (p && p.catch) p.catch(() => {});
+              ZHS.Log.info('弹题已关闭，已恢复播放');
+            } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
+          }
+          if (ZHS.Player) ZHS.Player.resetSync();
+          return;
+        }
+
         if (ZHS.config.autoAnswer && cfg.answerDialog && ZHS.Answerer) {
           if (ZHS.Answerer._pendingHuman) {
             // 待人工期：本题没答上/关不掉，用户正在手动作答。安静等待，
@@ -2402,12 +2661,75 @@ window.__ZHS_BUILD__.version = "0.6.29";
       this._dialogHumanNotified = false;
 
       // ===== 守卫 3：其他阻塞弹窗 → 尝试关闭 =====
+      // 关闭按钮有三处来源：Element-UI 的 .close、业务按钮 .btn，
+      // 以及「学前必读」弹窗标题右侧的图标按钮（Autovisor utils.optimize_page 用的就是它）。
       if (cfg.guardOverlays && U.hasStructurallyVisible(BLOCK_SELECTORS)) {
-        const btn = document.querySelector('.ss2077-custom-dialog .close, .ss2077-custom-dialog .btn');
+        const btn = document.querySelector('.ss2077-custom-dialog .close, .ss2077-custom-dialog .btn, .ss2077-custom-title > img.icon');
         if (btn) {
           btn.click();
           ZHS.Log.debug('已关闭阻塞弹窗');
         }
+        return;
+      }
+
+      // ===== 守卫 3.5（round-26 新增）：浏览器兼容性「温馨提示」弹窗 =====
+      //
+      // 真机实测：切到新小节时可能弹出 Element UI 的「温馨提示」
+      // （.el-dialog__wrapper.dialog-tips，内容大意是「建议使用 Chrome/火狐观看」）。
+      // 它**不会暂停视频**（视频在弹窗后面照常播），但会盖住画面、也挡住点击。
+      //
+      // 三个坑（真机逐一验证）：
+      //   · 关闭要点「我知道了」/ 右上 X；
+      //   · 「不再提示」只是打个「以后别弹」的标记，**不会关掉当前这一个**；
+      //   · 顶栏那个「返回学堂」是**常驻链接**，点了会整页跳到 www.zhihuishu.com
+      //     门户首页（真机踩过一次），绝对不能碰。
+      if (cfg.guardOverlays) {
+        const tipsWrap = document.querySelector('.el-dialog__wrapper.dialog-tips');
+        if (tipsWrap) {
+          let shown = true;
+          try { shown = getComputedStyle(tipsWrap).display !== 'none'; } catch (e) { shown = true; }
+          if (shown) {
+            let closed = false;
+            const know = U.findByText(tipsWrap, 'button, .el-button, a, [class*="btn"]',
+              ['我知道了', '知道了']);
+            if (know) {
+              try { know.click(); closed = true; } catch (e) { /* 忽略 */ }
+            }
+            if (!closed) {
+              const x = tipsWrap.querySelector('.el-dialog__close, [class*="close"]');
+              if (x) { try { x.click(); closed = true; } catch (e) { /* 忽略 */ } }
+            }
+            if (closed) ZHS.Log.info('已关闭「温馨提示」弹窗（我知道了 / X）');
+          }
+        }
+      }
+
+      // ===== 守卫 4：融合课 AI 随堂练习弹窗 → 选任意选项并提交 =====
+      // 融合课（AI 助教翻转课）播到 AI 时间点时，平台会暂停视频并弹出这个弹窗。
+      // 它没有关闭/跳过按钮，只能选一个选项再点提交才会消失；不处理就是
+      // 「播到一半停住、也不跳下一节」。选择器与流程照搬 Autovisor
+      // modules/fusion_adapter.py 的 skip_ai_exercise
+      // （选第一个 .option → 等 600ms → 点 footer 按钮 → 等 1000ms → 恢复播放）。
+      if (cfg.guardOverlays && U.hasStructurallyVisible(AI_EXERCISE_SELECTORS)) {
+        const opt = document.querySelector('.ai-class-exercise-dialog .option');
+        if (!opt) {
+          ZHS.Log.debug('AI 随堂练习弹窗里没找到选项按钮，等下一轮');
+          return;
+        }
+        opt.click();
+        ZHS.Log.info('检测到 AI 随堂练习弹窗，已选中第一个选项');
+        await U.sleep(600);
+        const submit = document.querySelector('.ai-class-exercise-dialog .el-dialog__footer button.el-button');
+        if (submit) submit.click();
+        await U.sleep(1000);
+        if (video) {
+          try {
+            video.muted = true;               // 静音兜底：部分浏览器对非用户手势的 play() 会拒绝
+            const p = video.play();
+            if (p && p.catch) p.catch(() => {});
+          } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
+        }
+        ZHS.Log.info('AI 随堂练习已提交，视频继续');
         return;
       }
 
@@ -2427,6 +2749,8 @@ window.__ZHS_BUILD__.version = "0.6.29";
       this._noVideoTicks = 0;
       // ===== 正常保活 =====
       ZHS.Player.checkStall(video);
+      // 进度对账：播放器不得跑在平台记录前面太多（原理见 03-player.js syncToCatalog）
+      ZHS.Player.syncToCatalog(video, ZHS.state.lessonKey);
 
       if (cfg.autoPlay) {
         ZHS.Player.setSpeed(video, cfg.speed);
@@ -2448,12 +2772,15 @@ window.__ZHS_BUILD__.version = "0.6.29";
     },
 
     /**
-     * 课时结束处理：以「右侧栏完成标记」为金标准决定下一节
+     * 课时结束处理：以「平台记录」为唯一金标准决定下一节
      *
-     * 设计铁律（用户核心诉求）：平台在章节列表打的完成标记（对勾）才是真实「看没看完」的信号。
-     * 视频放完、且平台已记录完成 → 立即跳下一节；绝不默认回退重播。
-     * 只有「进度明显偏低（<90%）且右侧栏仍无完成标记」才重播兜底（最多 2 次，由 Player 内部计数），
-     * 其余情况一律跳下一节，彻底消除「看完重看一遍」的体验。
+     * 设计铁律（用户核心诉求）：只有平台自己的记录（右侧栏对勾 / 进度环百分比）才算「看完了」。
+     * 「视频播放器放到结尾」不是完成信号，只是一个触发器 —— 它只负责把平台记录重新读一遍。
+     *
+     * 【2026-10-06 修订】本条铁律此前只做了一半：读到进度 0% 时脚本会「按视频已放完处理」
+     * 直接跳下一节。但平台规则是人机验证未通过时进度一律作废（会一直读到 0%），
+     * 于是脚本一声不响地把整节跳过去 —— 这正是用户说的「用了跟没用一样」。
+     * 现在 0% 一律不跳：先等平台上报，等不到就提示，超时就停手交人。
      */
     async onLessonEnd(video) {
       if (this._navigating) return;
@@ -2471,7 +2798,7 @@ window.__ZHS_BUILD__.version = "0.6.29";
         let cur = locateCur();
         while (Date.now() < settleDeadline) {
           cur = locateCur();
-          if (cur && (ZHS.Catalog.isFinished(cur) || ZHS.Catalog.progressOf(cur) >= 95)) break;
+          if (cur && (ZHS.Catalog.isFinished(cur) || ZHS.Catalog.progressOf(cur) >= FINISH_PCT)) break;
           await U.sleep(300);
         }
 
@@ -2485,25 +2812,59 @@ window.__ZHS_BUILD__.version = "0.6.29";
 
         const progress = cur ? ZHS.Catalog.progressOf(cur) : 0;
 
-        // 2. 平台进度接近完成（>=95%）→ 视作已完成，跳
-        if (progress >= 95) {
+        // 2. 平台进度达到完成阈值 → 视作已完成，跳
+        if (progress >= FINISH_PCT) {
           ZHS.Log.info('本课时平台记录 ' + progress + '%，判定已完成，切换下一节');
           ZHS.Player.resetRetry();
           await this.gotoNext('本课时已完成');
           return;
         }
 
-        // 3. 读不到进度（<=0）→ 信任视频已放完，直接跳（绝不重播）
+        // 3. 平台进度读不到（<=0）→ 【2026-10-06 修订】绝不再「按视频已放完处理」直接跳。
+        //
+        // 旧实现一声不响地跳下一节，是本脚本最伤用户的一条逻辑：
+        // 平台规则（Autovisor issue #92）—— 人机验证未通过时，之后的学习进度全部作废。
+        // 此时进度会一直是 0%，旧实现于是飞快地把整节跳过去，
+        // 用户既没学到、平台也没记到，观感就是「跳得挺欢、课一节没算上」。
+        // 新实现：先给平台一次异步上报的机会；仍为 0 就不跳、只提醒；
+        // 超过 ZERO_PROGRESS_GIVEUP_MS 就停手交人。宁可停住让人看见，也不静默白看。
         if (progress <= 0) {
-          ZHS.Log.warn('平台进度未确认（读到 ' + progress + '%），按视频已放完处理，切换下一节');
-          ZHS.Player.resetRetry();
-          await this.gotoNext('视频播放完毕');
+          const now = Date.now();
+          if (!this._zeroSince) this._zeroSince = now;
+          const waited = now - this._zeroSince;
+
+          if (waited < PROGRESS_RECHECK_MS) {
+            ZHS.Log.info('视频已放完，平台尚未上报进度（已等 ' + Math.round(waited / 1000) + ' 秒），再等一轮');
+            return;
+          }
+          if (waited < ZERO_PROGRESS_GIVEUP_MS) {
+            // 主循环 2 秒一轮，提示必须节流，否则刷屏
+            if (now - (this._zeroNotifiedAt || 0) > 30000) {
+              this._zeroNotifiedAt = now;
+              ZHS.Log.warn('视频已放完，但平台进度仍为 0%。常见原因：安全验证未完成（此期间的进度平台不会记录）。已停止切换课时，继续等待。');
+              if (ZHS.panel) {
+                ZHS.panel.alert('视频已放完，但平台没记录进度（0%）。多半是安全验证没过——请看看页面上有没有验证弹窗。脚本不会跳过这一节，避免白看。', 'warn', 15000);
+              }
+            }
+            return;
+          }
+          // 超过放弃阈值：停手 + 明确告知，绝不静默跳过
+          this._zeroSince = 0;
+          this._zeroNotifiedAt = 0;
+          ZHS.Log.error('平台进度持续为 0% 超过 ' + Math.round(ZERO_PROGRESS_GIVEUP_MS / 1000) + ' 秒，已停止自动跳转，请人工确认该课时。');
+          if (ZHS.panel) {
+            ZHS.panel.alert('平台进度一直是 0%，脚本已停手（不再跳课）。请手动检查：页面上是否有安全验证？这一节是否真的播完了？处理完可点「启动」重来。', 'error', 20000);
+          }
+          this.stop('zero-progress');
           return;
         }
+        // 读到有效进度 → 复位 0% 计时与提示节流
+        this._zeroSince = 0;
+        this._zeroNotifiedAt = 0;
 
-        // 4. 仅当进度明显偏低（1~89%）且右侧栏无完成标记时，才重播兜底（最多 2 次）
+        // 4. 仅当进度明显偏低（1 ~ FINISH_PCT-1）且右侧栏无完成标记时，才重播兜底（最多 2 次）
         //    这是平台进度确实没同步才需要的补救；其余一律跳，避免「重看一遍」。
-        if (progress < 90) {
+        if (progress < FINISH_PCT) {
           const retried = await ZHS.Player.retryFromPlatformProgress(video, progress);
           if (retried) {
             ZHS.Log.warn('进度仅 ' + progress + '% 且未完成记录，回退重播补齐（平台进度未同步）');
@@ -3508,7 +3869,7 @@ window.__ZHS_BUILD__.version = "0.6.29";
       <div class="row"><label>跳过已完成</label><button class="sw" data-cfg="skipFinished"></button></div>
       <div class="row"><label>静音</label><button class="sw" data-cfg="mute"></button></div>
       <div class="row"><label>断点续播</label><button class="sw" data-cfg="resume"></button></div>
-      <div class="row"><label>倍速</label><input type="range" min="1" max="1.8" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
+      <div class="row"><label>倍速</label><input type="range" min="1" max="1.5" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
 
       <div class="row"><label>自动跳课</label><button class="sw" data-cfg="autoCourseHop"></button></div>
       <div class="hint">本课学完自动去课程中心找下一门</div>
@@ -4592,9 +4953,10 @@ window.__ZHS_BUILD__.version = "0.6.29";
       }
     } catch (e) { /* 忽略 */ }
 
-    // 完成阈值与目录 isFinished（FINISH_PCT=98）对齐：
-    // 否则 98~99% 卡住的课程在中心页仍判「未完成」→ 被反复重新进入，形成「中心页↔该课」死循环（round-7 H3）
-    const finished = (percent !== null && percent >= 98)
+    // 完成阈值与目录 isFinished 同源（ZHS.Const.FINISH_PCT；2026-10-06 由 98 下调到 91）：
+    // 否则卡在 91~97% 的课程在中心页仍判「未完成」→ 被反复重新进入，形成「中心页↔该课」死循环（round-7 H3）
+    const FINISH_PCT = (ZHS.Const && ZHS.Const.FINISH_PCT) || 91;
+    const finished = (percent !== null && percent >= FINISH_PCT)
       || text.includes('已完成') || text.includes('已学完');
 
     return { el, name, percent, finished };
@@ -6511,6 +6873,39 @@ window.__ZHS_BUILD__.version = "0.6.29";
       const list = Array.from(document.querySelectorAll(DIALOG_SELECTORS))
         .filter((el) => visibleForDialog(el));
       return list.some((el) => questionScore(el) > 0);
+    },
+
+    /**
+     * 直接从弹题 DOM 里读平台给出的正确答案（AI 助教小智「弹题测验」专用）。
+     *
+     * 真机依据（round-26 实测）：AI 助教小智出的巩固弹题，会把答案以纯文本
+     * 「正确答案：A」的形式**直接渲染在弹窗里**（同一弹窗还写明「不影响作业
+     * 考试成绩」）。这类题既不需要查题库、也不需要调 LLM —— 读出来直接用，
+     * 零延迟、零成本、零失败率。
+     *
+     * 它还有个关键性质：**不做选择也能关闭**。实测点选项 A 后其 class 仍是
+     * topic-item（选中态根本不会变），所以调度器旧的「平台不允许关闭未作答弹题、
+     * 必须答上才关」这条铁律，会把它卡成「关不掉 → 转人工空等」的死循环。
+     * 有了本方法读出答案，就可以放心直接关闭并续播。
+     *
+     * @returns {string|null} 答案文本（如 'A' / 'AB' / '对'）；页面没给答案返回
+     *   null，调用方应回退到题库/LLM 链路。
+     */
+    answerFromDom() {
+      const r = this.root();
+      if (!r) return null;
+      let scope = r;
+      try {
+        // 答案文本可能挂在 .el-dialog__wrapper 上，而不在 .el-dialog 内部 → 扩大到整个弹窗
+        const w = r.closest ? r.closest('.el-dialog__wrapper') : null;
+        if (w) scope = w;
+      } catch (e) { /* 取不到就保持 scope = r */ }
+      let txt = '';
+      try { txt = U.normText(scope.textContent || ''); } catch (e) { txt = ''; }
+      if (!txt) return null;
+      const m = txt.match(/正确答案\s*[：:]\s*([A-Ha-h]{1,8}|对|错|正确|错误)/);
+      if (!m) return null;
+      return m[1];
     },
 
     /**

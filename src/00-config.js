@@ -28,7 +28,7 @@
     autoPlay: true,
     autoNext: true,
     skipFinished: true,  // 自动跳过已完成/未解锁节点
-    speed: 1.5,          // 倍速，硬上限 1.8
+    speed: 1.5,          // 倍速，硬上限 1.5（2026-10-06 下调：更高倍速更易被风控盯上）
     mute: true,          // 静音
     nextDelayMin: 2,     // 切课随机延迟下限（秒），模拟人类
     nextDelayMax: 8,     // 切课随机延迟上限（秒）
@@ -211,7 +211,7 @@
     }
     const next = Object.assign(getConfig(), clean);
     // 倍速硬夹逼
-    next.speed = Math.min(Math.max(Number(next.speed) || 1, 0.5), 1.8);
+    next.speed = Math.min(Math.max(Number(next.speed) || 1, 0.5), 1.5);
     // 布尔归一化 + 章节夹逼：直写 API 也要设防（面板走 floor，API/GM 直写不设防）
     normalizeBools(next);
     next.examChapterFrom = clampInt(next.examChapterFrom, 999);
@@ -264,7 +264,8 @@
     videoEl: null,         // 当前 video 元素
     running: false,        // 主循环是否运行
     answeredCount: 0,      // 已答题数
-    pausedByGuard: false,  // 是否因守卫暂停
+    pausedByGuard: false,  // 是否因守卫暂停（验证码）
+    guardSince: 0,         // 本轮验证码守卫暂停的开始时刻（用于汇报等待了多久）
     startedAt: Date.now(),
   };
 

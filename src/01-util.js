@@ -97,6 +97,86 @@
       return false;
     },
 
+    /**
+     * 腾讯 Turing 滑块验证码是否「真的弹出来拦人」了（激活态）。
+     *
+     * 【为什么不能裸用选择器 —— 真机踩过的坑】
+     * turing.captcha.gtimg.com 的 iframe 在智慧树视频页是**常驻**的：
+     * 休眠态就是一个 300×150 的占位框，computed style 仍然是 display:block /
+     * visibility:visible / opacity:1。所以
+     *   hasStructurallyVisible('iframe[src*=turing]')
+     * 会**永久命中** → 守卫 1 一直拦截 → 脚本彻底停机。这是把「常驻占位」
+     * 当成「正在拦人」的典型误判。
+     *
+     * 真机实测：只有真正弹出来拦人时，它才会变成「居中、覆盖视口大半的
+     * fixed/absolute 浮层」，并且页面上出现可见文案
+     * 「安全验证 / 拖动下方滑块完成拼图」。所以判据取这两条（或关系）：
+     *   ① iframe 的祖先链里出现覆盖视口（宽 > 50% 且 高 > 40%）的 fixed/absolute 浮层
+     *   ② 页面上出现可见的「拖动下方滑块 / 安全验证」文本（只查叶子节点）
+     */
+    turingActive() {
+      try {
+        const f = document.querySelector('iframe[src*="turing"], iframe[src*="captcha.gtimg.com"]');
+        if (f) {
+          let n = f;
+          for (let i = 0; i < 8 && n; i++) {
+            const cs = getComputedStyle(n);
+            const r = n.getBoundingClientRect();
+            const covers = (r.width > window.innerWidth * 0.5)
+              && (r.height > window.innerHeight * 0.4);
+            // r.width/height 为 0 = 拿不到真实布局（如 jsdom / 元素尚未排版）。
+            // 有布局时用「覆盖视口」这个强判据；没有布局信息时退化为只看定位方式，
+            // 否则测试环境里永远判不出拦截态（真踩过）。
+            const sized = r.width > 0 && r.height > 0;
+            if ((cs.position === 'fixed' || cs.position === 'absolute')
+                && cs.display !== 'none' && (covers || !sized)) return true;
+            n = n.parentElement;
+          }
+        }
+      } catch (e) { /* 跨域/取不到样式一律当作没拦截 */ }
+
+      try {
+        const all = document.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i];
+          if (el.children.length !== 0) continue;        // 只看叶子，避免父容器整段文本误命中
+          if (!Util.isStructurallyVisible(el)) continue; // 不可见（display:none 等）跳过
+          const tx = Util.normText(el.textContent);
+          if (tx && /拖动下方滑块|安全验证|请完成验证/.test(tx)) return true;
+        }
+      } catch (e) { /* 忽略 */ }
+      return false;
+    },
+
+    /**
+     * 拟真点击：派发带坐标的 mousedown → mouseup → click 三连。
+     *
+     * 为什么不用 el.click()：真机实测（round-26）在智慧树目录上，
+     * 裸 click() 出现过整页跳到 www.zhihuishu.com 门户首页的情况；
+     * 而把带坐标的鼠标三连派发到小节标题 .catalogue_title 上，
+     * 稳定表现为「页内换 video 源、URL 始终不变」。
+     * 三连更接近人类操作序列，也更容易被 Vue 的监听器正确接收。
+     */
+    realClick(el) {
+      if (!el) return false;
+      try {
+        if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch (e) { /* 滚动失败不影响点击 */ }
+      try {
+        const r = el.getBoundingClientRect();
+        const o = {
+          bubbles: true, cancelable: true, view: window,
+          clientX: r.x + r.width / 2, clientY: r.y + r.height / 2,
+        };
+        el.dispatchEvent(new MouseEvent('mousedown', o));
+        el.dispatchEvent(new MouseEvent('mouseup', o));
+        el.dispatchEvent(new MouseEvent('click', o));
+        return true;
+      } catch (e) {
+        try { el.click(); return true; } catch (e2) { return false; }
+      }
+    },
+
     /** 等待元素出现 */
     async waitFor(selector, timeoutMs = 20000, interval = 300) {
       const deadline = Date.now() + timeoutMs;
@@ -201,4 +281,18 @@
   ZHS.Const = ZHS.Const || {};
   ZHS.Const.QUESTION_SELECTORS =
     '#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog';
+
+  /**
+   * 平台「视为已完成」的进度阈值（单一真源）。
+   *
+   * 为什么是 91：竞品 fuckZHS 的实测配置 end_thre = 0.91，其原话注释是
+   * 「智慧树把高于一定百分比的进度视为完成，0.91 保险一点」。
+   * 智慧树的进度记录常停在 91~99% 就不再上报，门槛定高了会把「已完成」判成「未完成」。
+   *
+   * 历史问题：本项目原先 02-adapter.js 写 98、05-scheduler.js 写 95、06b-course-hub.js 写 98，
+   * 三处各自为政；只要有一处更严，就会出现「目录说完成了、调度器说没完成」的打架，
+   * 表现为课时被反复回退重播。现在统一从这里取，
+   * 各处用 `(ZHS.Const && ZHS.Const.FINISH_PCT) || 91` 兜底（防模块加载顺序异常）。
+   */
+  ZHS.Const.FINISH_PCT = 91;
 })();

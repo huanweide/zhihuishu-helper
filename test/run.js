@@ -91,7 +91,7 @@ console.log('\n=== 1. 配置层 ===');
   eq('默认完成节数阈值', Z.config.stopLessons, 10);
 
   Z.setConfig({ speed: 5 });
-  eq('倍速 5 被夹到 1.8', Z.config.speed, 1.8);
+  eq('倍速 5 被夹到 1.5', Z.config.speed, 1.5);
   Z.setConfig({ speed: 0.1 });
   eq('倍速 0.1 被夹到 0.5', Z.config.speed, 0.5);
   Z.setConfig({ speed: 1.5, debug: false });
@@ -946,7 +946,7 @@ const _fakeFin = (async () => {
   eq('用户主动停后定时器仍为 null', S2b._timer, null);
 })();
 
-console.log('\n=== 31. 视频放完且平台进度读不到 → 直接切下一集（修复重播 bug） ===');
+console.log('\n=== 31. 视频放完但平台进度读不到 → 不切、等待、超时停手（2026-10-06 风控修订） ===');
 // 必须是 async IIFE：这里用了 await，写在裸 block 里会被 Node 判定为
 // top-level await，与顶部的 require() 冲突 → 整个测试文件起不来。
 const _noreplay = (async () => {
@@ -978,9 +978,190 @@ const _noreplay = (async () => {
 
   await S.onLessonEnd(video);
 
-  ok('平台进度 0% 也切换了课时', cat.itemTitle(cat.current()) === '第二节',
+  // 【2026-10-06 行为反转】进度读不到时不再「按视频已放完处理」直接跳，
+  // 而是等平台上报，超时就停手交人。断言随之反过来：
+  // 原来这里断言「跳到了第二节」，那正是「用了跟没用一样」的根源
+  // （人机验证未通过 → 进度永远 0% → 整节被静默跳过）。
+  ok('进度 0% 时不切换课时', cat.itemTitle(cat.current()) === '第一节',
     cat.itemTitle(cat.current()));
-  ok('完成计数 +1', S._completedThisRun === 1, String(S._completedThisRun));
+  ok('完成计数不增加', !S._completedThisRun, String(S._completedThisRun));
+  ok('已开始记录 0% 等待起点', S._zeroSince > 0, String(S._zeroSince));
+
+  // 等够放弃阈值仍读不到 → 停手（既不跳过整节，也不无限空转）
+  S._zeroSince = Date.now() - (4 * 60 * 1000);
+  await S.onLessonEnd(video);
+  ok('超时后停手而不是跳过', S._halted === true, String(S._halted));
+  eq('停手原因为 zero-progress', S._haltReason, 'zero-progress');
+  ok('停手后仍未切换课时', cat.itemTitle(cat.current()) === '第一节',
+    cat.itemTitle(cat.current()));
+})();
+
+console.log('\n=== 32. 播放器进度对账：超前只告警、绝不 seek（round-26 修订） ===');
+const _sync = (async () => {
+  // 【2026-10-19 round-26 语义反转】
+  // 旧行为：平台记 50%（≈300s）而播放器跑到 400s 时，直接 `video.currentTime = 300`
+  //        把播放位置拉回平台记录点，避免「超出记录的那段白播」。
+  // 新行为：**绝不 seek**。真机结论——智慧树把「异常 seek / 拖进度条」当脚本特征，
+  //         一 seek 就弹腾讯 Turing 滑块验证码（跨域 iframe，脚本解不了），
+  //         这正是用户反馈「有的下一集被检测成脚本、跳转不支持」的根因。
+  //         现在只打告警，播放位置保持不动；进度补齐改由「播完后重新加载本节」处理
+  //         （见 retryFromPlatformProgress，同样是零 seek）。
+  //
+  // 用 legacy（旧版共享课）的真实结构，确保命中 legacy 适配器的 .progress-num；
+  // 用 wisdom 的 .chapter-tree-74/.child-info 会掉进通用兜底扫描器，兜底不认这个进度类名。
+  const html = `<html><body>
+<div class="clearfix">
+  <div class="clearfix video current_play"><span id="lessonOrder">第一节</span><span class="progress-num">50%</span></div>
+  <div class="clearfix video"><span id="lessonOrder">第二节</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=sync1');
+  const P = win.ZHS.Player;
+  const cat = win.ZHS.Catalog;
+  const video = win.document.querySelector('video');
+  // jsdom 的 duration 只有 getter，直接赋值会被静默丢弃 → 必须 defineProperty
+  Object.defineProperty(video, 'duration', { value: 600, configurable: true });
+  video.currentTime = 400;
+
+  eq('当前条目平台进度读到 50%', cat.progressOf(cat.current()), 50);
+
+  // 真实运行时课时标识由 07-main.js 写入；为空时源码会直接跳过对账（避免拿 null 当 key）
+  win.ZHS.state.lessonKey = '第一节';
+  const key = win.ZHS.state.lessonKey;
+  ok('超前时不返回「已拉回」（新契约）', P.syncToCatalog(video, key) === false, 'false');
+  eq('超前也绝不 seek：播放位置仍是 400s', Math.round(video.currentTime), 400);
+
+  // 同一节只对一次账（保持原有节流语义）
+  video.currentTime = 500;
+  ok('同一节不重复对账', P.syncToCatalog(video, key) === false, 'false');
+  eq('同一节不改动播放位置', Math.round(video.currentTime), 500);
+
+  // 验证/弹题结束后 resetSync() 会重新评估一次，但同样不 seek
+  P.resetSync();
+  video.currentTime = 450;
+  ok('resetSync 后重评仍不 seek', P.syncToCatalog(video, key) === false, 'false');
+  eq('resetSync 后播放位置保持 450s', Math.round(video.currentTime), 450);
+})();
+
+console.log('\n=== 33. 平台进度读不到时不对账（防止「重播开头」死循环） ===');
+const _syncNoPct = (async () => {
+  const html = `<html><body>
+<div class="clearfix">
+  <div class="clearfix video current_play"><span id="lessonOrder">第一节</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=sync2');
+  const P = win.ZHS.Player;
+  const video = win.document.querySelector('video');
+  Object.defineProperty(video, 'duration', { value: 600, configurable: true });
+  video.currentTime = 400;
+
+  win.ZHS.state.lessonKey = '第一节';
+  eq('平台进度读不到', win.ZHS.Catalog.progressOf(win.ZHS.Catalog.current()), 0);
+  ok('读不到进度时不拉回', P.syncToCatalog(video, win.ZHS.state.lessonKey) === false, 'false');
+  eq('播放器位置保持不动', Math.round(video.currentTime), 400);
+})();
+
+console.log('\n=== 34. 安全验证期间：暂停视频、不计学习时长、不切课 ===');
+const _verifyHold = (async () => {
+  const html = `<html><body>
+<div class="yidun_popup"><div class="yidun_jigsaw"></div></div>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo current"><span class="child-name">第一节</span></div>
+  <div class="child-info hasvideo"><span class="child-name">第二节</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=verifyhold');
+  const S = win.ZHS.Scheduler;
+  const cat = win.ZHS.Catalog;
+  const video = win.document.querySelector('video');
+  video.duration = 300;
+  video.currentTime = 100;
+  video.paused = false;              // 假装正在播
+  win.ZHS.state.running = true;
+
+  let studyMs = 0;
+  win.ZHS.Stats.addStudyTime = function (ms) { studyMs += ms; };
+
+  await S.tick();
+
+  ok('检测到验证即暂停视频', video.paused === true, String(video.paused));
+  eq('验证期间不计学习时长', studyMs, 0);
+  ok('验证期间未切换课时', cat.itemTitle(cat.current()) === '第一节',
+    cat.itemTitle(cat.current()));
+  ok('已置守卫暂停标记', win.ZHS.state.pausedByGuard === true,
+    String(win.ZHS.state.pausedByGuard));
+
+  // 验证消失 → 复位标记（并且此时才重新对账）
+  win.document.querySelector('.yidun_popup').remove();
+  await S.tick();
+  ok('验证消失后复位标记', win.ZHS.state.pausedByGuard === false,
+    String(win.ZHS.state.pausedByGuard));
+})();
+
+console.log('\n=== 35. 融合课目录校准：.chapter-item 全采 + 进度环读数 ===');
+const _fusionCatalog = (async () => {
+  // 真站实测：.chapter-content-second 只命中「当前展开层级的子节点」（58 节里只有 4 节），
+  // 完整课时列表在 .chapter-item。这里用 6 节模拟，验证不再漏采。
+  const items = [1, 2, 3, 4, 5, 6].map((i) =>
+    `<div class="chapter-item"><span class="item-name">第${i}节</span>`
+    + `<div class="el-progress" role="progressbar" aria-valuenow="${i * 10}"></div></div>`).join('');
+  const html = `<html><body>
+<div class="chapter-content">
+  ${items}
+  <div class="chapter-content-second current"><span class="item-name">第2节</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://fusioncourseh5.zhihuishu.com/stuStudy');
+  const cat = win.ZHS.Catalog;
+  eq('融合课目录采到全部 6 节（旧写法只有 1 节）', cat.items().length, 6);
+  eq('能读到第 4 节的进度环', cat.progressOf(cat.items()[3]), 40);
+})();
+
+console.log('\n=== 36. 融合课 AI 随堂练习弹窗：选一个选项并提交，然后恢复播放 ===');
+const _aiExercise = (async () => {
+  const html = `<html><body>
+<div class="chapter-content">
+  <div class="chapter-item"><span class="item-name">第一节</span></div>
+  <div class="chapter-item"><span class="item-name">第二节</span></div>
+</div>
+<div class="ai-class-exercise-dialog">
+  <div class="option">选项 A</div>
+  <div class="option">选项 B</div>
+  <div class="el-dialog__footer"><button class="el-button">提交</button></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://fusioncourseh5.zhihuishu.com/stuStudy');
+  const S = win.ZHS.Scheduler;
+  const doc = win.document;
+  const video = doc.querySelector('video');
+  win.ZHS.state.running = true;
+  // 只验证这一轮 tick 没有触发跳课
+  // （lessonKey 会被 boot 的异步绑定改写，不能当「有没有切课」的判据）
+  let navCalls = 0;
+  const origGoto = S.gotoNext.bind(S);
+  S.gotoNext = function () { navCalls++; return origGoto.apply(null, arguments); };
+
+  let optClicks = 0;
+  let submitClicks = 0;
+  let playCalls = 0;
+  doc.querySelectorAll('.ai-class-exercise-dialog .option')[0]
+    .addEventListener('click', () => { optClicks++; });
+  doc.querySelector('.ai-class-exercise-dialog .el-dialog__footer button.el-button')
+    .addEventListener('click', () => { submitClicks++; });
+  video.play = function () { playCalls++; return Promise.resolve(); };
+
+  await S.tick();
+
+  eq('点了第一个选项', optClicks, 1);
+  eq('点了提交按钮', submitClicks, 1);
+  eq('提交后恢复播放', playCalls, 1);
+  eq('AI 弹窗处理期间没有跳课', navCalls, 0);
 })();
 
 console.log('\n=== 31b. 瞬时故障停机的受限自愈（round-14） ===');
@@ -2506,6 +2687,99 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
   // ==================================================
 
   // ==================================================
+  // ============ round-26：真机结论回归（腾讯滑块 / DOM 内嵌答案 / 零 seek） ============
+  console.log('\n=== 60. 腾讯 Turing 滑块：常驻休眠占位不得误报 ===');
+  {
+    // 视频页里 turing 的 iframe 是常驻的：休眠态就是 300×150 的占位框，
+    // computed style 仍是 display:block / visible。若把它当拦截，守卫 1 会永久命中、
+    // 脚本彻底停机 —— 这是真机踩过的坑，必须固化成回归。
+    const html = `<html><body>
+      <div><iframe src="https://turing.captcha.gtimg.com/1/template/drag_ele.html"></iframe></div>
+      <video></video>
+    </body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=t1');
+    eq('常驻休眠 iframe → 不判为拦截', win.ZHS.Util.turingActive(), false);
+  }
+
+  console.log('\n=== 61. 腾讯 Turing 滑块：真弹出来拦人要报 ===');
+  {
+    const html = `<html><body>
+      <div style="position:fixed;left:0;top:0;width:100%;height:100%">
+        <iframe src="https://turing.captcha.gtimg.com/1/template/drag_ele.html"></iframe>
+      </div>
+      <video></video>
+    </body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=t2');
+    eq('iframe 被 fixed 浮层包住 → 判为拦截', win.ZHS.Util.turingActive(), true);
+  }
+  {
+    const html = `<html><body>
+      <div><span>请拖动下方滑块完成拼图</span></div>
+      <video></video>
+    </body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=t3');
+    eq('可见「拖动下方滑块」文案 → 判为拦截', win.ZHS.Util.turingActive(), true);
+  }
+
+  console.log('\n=== 62. AI 助教小智弹题：答案内嵌在 DOM，直接读出来 ===');
+  {
+    const html = `<html><body>
+      <div class="el-dialog__wrapper">
+        <div class="el-dialog">
+          <div class="el-dialog__title">AI助教小智给你出题啦</div>
+          <div class="el-dialog__body">
+            <label class="el-radio">A.(-4,0,-5,-9)</label>
+            <label class="el-radio">B.(4,5,0,9)</label>
+            <p>正确答案：A</p>
+          </div>
+        </div>
+      </div>
+      <video></video>
+    </body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=t4');
+    ok('弹题容器能被识别', win.ZHS.Questions.Dialog.present() === true, 'true');
+    eq('从 DOM 直接读出正确答案', win.ZHS.Questions.Dialog.answerFromDom(), 'A');
+  }
+  {
+    // 普通弹题（页面没给答案）必须返回 null，好让调用方回退到题库/LLM 链路
+    const html = `<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__title">单选题</div>
+        <div class="el-dialog__body">
+          <label class="el-radio">A</label><label class="el-radio">B</label>
+        </div>
+      </div></div>
+      <video></video>
+    </body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=t5');
+    eq('页面没给答案 → 返回 null（回退题库/LLM）', win.ZHS.Questions.Dialog.answerFromDom(), null);
+  }
+
+  console.log('\n=== 63. 进度不同步补播：重新加载本节，绝不 seek ===');
+  const _retryNoSeek = (async () => {
+    const html = `<html><body>
+      <div class="clearfix">
+        <div class="clearfix video current_play"><span id="lessonOrder">第一节</span><span class="progress-num">50%</span></div>
+        <div class="clearfix video"><span id="lessonOrder">第二节</span></div>
+      </div>
+      <video></video>
+    </body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=t6');
+    const P = win.ZHS.Player;
+    const video = win.document.querySelector('video');
+    Object.defineProperty(video, 'duration', { value: 600, configurable: true });
+    video.currentTime = 400;
+
+    // 平台只记 50% → 触发补播。旧实现会 seek 到 300s（触发滑块验证码）；
+    // 新实现改成「重新点本节标题让平台按自己的记录定位」，全程零 seek。
+    const r = await P.retryFromPlatformProgress(video, 50);
+    ok('补播已触发（返回 true）', r === true, String(r));
+    eq('补播不 seek：播放位置仍是 400s', Math.round(video.currentTime), 400);
+    eq('补播计数已累加', P._retryCount, 1);
+    ok('0% 不硬撑（交给 0% 停滞守卫）',
+      (await P.retryFromPlatformProgress(video, 0)) === false, 'false');
+  })();
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {

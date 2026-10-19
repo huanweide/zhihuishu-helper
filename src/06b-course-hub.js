@@ -339,9 +339,10 @@
       }
     } catch (e) { /* 忽略 */ }
 
-    // 完成阈值与目录 isFinished（FINISH_PCT=98）对齐：
-    // 否则 98~99% 卡住的课程在中心页仍判「未完成」→ 被反复重新进入，形成「中心页↔该课」死循环（round-7 H3）
-    const finished = (percent !== null && percent >= 98)
+    // 完成阈值与目录 isFinished 同源（ZHS.Const.FINISH_PCT；2026-10-06 由 98 下调到 91）：
+    // 否则卡在 91~97% 的课程在中心页仍判「未完成」→ 被反复重新进入，形成「中心页↔该课」死循环（round-7 H3）
+    const FINISH_PCT = (ZHS.Const && ZHS.Const.FINISH_PCT) || 91;
+    const finished = (percent !== null && percent >= FINISH_PCT)
       || text.includes('已完成') || text.includes('已学完');
 
     return { el, name, percent, finished };

@@ -14,11 +14,14 @@
   const END_RATIO = 0.995;
   // 播放卡死阈值：120 秒 currentTime 不推进就判定卡住
   const STALL_MS = 120000;
+  // 进度对账容差：播放器超前平台记录超过这个秒数就拉回（Autovisor learn_lesson 同值）
+  const SYNC_LEAD_SECONDS = 15;
 
   const Player = {
     _lastTime: -1,
     _lastActiveAt: Date.now(),
     _retryCount: 0,
+    _syncedKey: null,        // 已对过账的课时标识（避免同一节内反复 seek）
 
     /** 取当前 video 元素（缓存 + 校验是否还在文档里；顶层找不到再查同域 iframe） */
     video() {
@@ -61,10 +64,10 @@
       } catch (e) { /* 忽略 */ }
     },
 
-    /** 设置倍速（硬上限 1.8） */
+    /** 设置倍速（硬上限 1.5 —— 与 00-config.js 的配置钳位保持同一数值） */
     setSpeed(v, speed) {
       if (!v) return;
-      const s = Math.min(Math.max(Number(speed) || 1, 0.5), 1.8);
+      const s = Math.min(Math.max(Number(speed) || 1, 0.5), 1.5);
       try {
         if (Math.abs(v.playbackRate - s) > 0.01) v.playbackRate = s;
         // 同步 UI，避免平台检测播放器倍速与界面不一致
@@ -115,6 +118,54 @@
       return false;
     },
 
+    /**
+     * 播放器进度对账（2026-10-06 新增，参考 Autovisor learn_lesson 的「进度对齐」）
+     *
+     * 为什么需要：平台按「已学百分比」异步上报。播放器如果跑在平台记录的前面太多，
+     * 中途一旦断线、弹验证、弹题，超出记录的那一段就等于白播——平台不认。
+     * 极端情形是人机验证没通过时进度直接作废归零，此时播放器还傻跑在前面。
+     *
+     * 对账策略（照抄 Autovisor 的克制做法，**不是**持续对账）：
+     *   · 同一节课只对一次账，避免反复干预造成卡顿/花屏；
+     *     （round-26：这里曾经真的 seek 拉回播放位置，真机证明 seek 会触发
+     *       腾讯滑块验证码，现已去掉，见函数内注释）
+     *   · 平台进度读不到（0%）时不干预——刚打开一节时进度天然是 0，
+     *     一拉回就会变成「重播开头 20 秒」的死循环；这种情况交给调度器的
+     *     0% 停滞守卫（ZERO_PROGRESS_GIVEUP_MS）去停手交人；
+     *   · 验证/弹题结束后由调度器调 resetSync() 清标记，恢复时重新对一次账。
+     *
+     * @returns {boolean} 是否真的拉回过
+     */
+    syncToCatalog(v, lessonKey) {
+      if (!v || !lessonKey || this._syncedKey === lessonKey) return false;
+      if (!Number.isFinite(v.duration) || v.duration <= 0) return false;
+      const cur = ZHS.Catalog && ZHS.Catalog.current ? ZHS.Catalog.current() : null;
+      if (!cur) return false;
+      const pct = ZHS.Catalog.progressOf(cur);
+      this._syncedKey = lessonKey;   // 无论是否拉回，本节不再重复对账
+      if (!(pct > 0)) return false;
+      const expected = Math.floor(v.duration * pct / 100);
+      if (v.currentTime > expected + SYNC_LEAD_SECONDS) {
+        // 【2026-10-19 round-26 修订】这里原先是 `v.currentTime = expected`（seek 拉回）。
+        //
+        // 真机结论：智慧树把「异常 seek / 拖进度条」当作脚本特征 —— 一 seek 就弹
+        // 腾讯 Turing 滑块验证码（turing.captcha.gtimg.com 跨域 iframe，脚本解不了）。
+        // 这正是用户反馈的「有的下一集被检测成脚本、跳转不支持」的根因。
+        //
+        // 所以这里改为只告警、绝不干预播放位置；真正的进度补齐走
+        // 「播完后重新加载本节」这条无 seek 路径（见 retryFromPlatformProgress）。
+        ZHS.Log.warn('播放器进度超前平台记录（播放器 ' + Math.round(v.currentTime)
+          + 's / 平台 ' + pct + '% ≈ ' + expected + 's）。按真机结论不 seek'
+          + '（seek 会触发滑块验证码），进度补齐交由播完后的「重新加载本节」处理。');
+      }
+      return false;
+    },
+
+    /** 清空对账标记：验证/弹题结束后需要重新对一次账 */
+    resetSync() {
+      this._syncedKey = null;
+    },
+
     _markActive(v) {
       if (v && v.currentTime > this._lastTime + 0.25) {
         this._lastTime = v.currentTime;
@@ -122,7 +173,14 @@
       }
     },
 
-    /** 跳转到指定秒数并播放 */
+    /**
+     * 跳转到指定秒数并播放。
+     *
+     * ⚠️【round-26 铁律】这是全脚本**唯一**会产生 seek 的入口，**仅供用户手动操作**
+     * （例如面板上的「跳到某处」）。自动化链路 —— 进度对账、回退重播、断点续播 ——
+     * 一律不得调用：真机证明任何 seek 都会触发腾讯 Turing 滑块验证码，
+     * 而验证码一旦弹出，脚本解不了、进度还会作废。改动前请先看本文件上方的说明。
+     */
     async seekTo(v, seconds) {
       if (!v || !Number.isFinite(seconds)) return false;
       try {
@@ -137,7 +195,18 @@
 
     /**
      * 进度不同步处理：视频放完但平台记录 <100%
-     * 回退到平台记录点重播，最多重试 2 次
+     *
+     * 【2026-10-19 round-26 重写：彻底去掉 seek】
+     *
+     * 旧实现：把 video.currentTime 拉回平台记录点重播。
+     * 真机结论：智慧树把「异常 seek / 拖进度条」当作脚本特征 —— 一 seek 就弹出
+     * 腾讯 Turing 滑块验证码（turing.captcha.gtimg.com 跨域 iframe，脚本解不了）。
+     * 这正是用户反馈的「有的下一集被检测成脚本、跳转不支持」的根因。
+     *
+     * 新实现走人类的做法：**重新点一次本节标题**。真机实测（2.25 节）：点未完成
+     * 小节的标题后，平台会按它自己记录的进度把视频定位到断点加载（474/622）——
+     * 全程不产生任何 seek 事件，却一样达到「从平台记录点续播补齐」的效果。
+     * 最多重试 2 次，仍不同步就交回上层跳下一节（不卡死）。
      */
     async retryFromPlatformProgress(v, platformPercent) {
       if (this._retryCount >= 2) {
@@ -145,28 +214,21 @@
         this._retryCount = 0;
         return false;
       }
-      if (!this.hasValidDuration(v)) return false;
-      const target = (platformPercent / 100) * v.duration;
-      // 【2026-09-18 修正】原来写成 Math.max(0, target - 5)：
-      // 当平台记录为 0% 时 back 会变成 0，等于整节从头重播 → 用户被死死卡在这一节，
-      // 表现出来就是「永远跳不到下一集」。现在三道闸：
-      //   1. 目标点本身 <= 0（平台压根没记录）→ 回退没有意义，直接放弃，交回上层跳下一节
-      //   2. 回退 5 秒，但不得早于全片末尾 5 秒之前（避免一退退回开头）
-      //   3. 结果必须落在有效区间内
-      if (!(target > 0)) {
-        ZHS.Log.warn('平台记录为 ' + platformPercent + '%，回退点无效，放弃重播直接跳下一节');
+      // 0% 不在这里硬撑：多半是安全验证没过（此时进度一律作废，重播也没用），
+      // 交给调度器的「0% 停滞守卫」去停手交人。
+      if (!(platformPercent > 0) || platformPercent >= 100) return false;
+
+      const Catalog = ZHS.Catalog;
+      const cur = Catalog && Catalog.current ? Catalog.current() : null;
+      if (!cur || !Catalog.click) {
+        ZHS.Log.warn('定位不到当前课时，无法按平台进度重播，放弃本课时');
         return false;
       }
-      const tailFloor = Math.max(0, v.duration - 5);
-      const back = Math.min(Math.max(0, target - 5), tailFloor);
-      if (!Number.isFinite(back) || back < 0 || back > v.duration) return false;
-      ZHS.Log.warn(
-        '视频已结束但平台仅记录 ' + platformPercent + '%，回退到 ' +
-        Math.round(back) + 's 重试（第 ' + (this._retryCount + 1) + ' 次）'
-      );
-      await this.seekTo(v, back);
+      ZHS.Log.warn('视频已结束但平台仅记录 ' + platformPercent
+        + '%，重新加载本节按平台进度续播（第 ' + (this._retryCount + 1) + ' 次，不 seek）');
+      try { Catalog.click(cur); } catch (e) { /* 点击失败下一轮还会再判 */ }
       this._retryCount++;
-      await U.sleep(1000);
+      await U.sleep(3000);   // 等平台重新加载并把视频定位到它的记录点
       return true;
     },
 

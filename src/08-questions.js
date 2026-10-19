@@ -396,6 +396,39 @@
     },
 
     /**
+     * 直接从弹题 DOM 里读平台给出的正确答案（AI 助教小智「弹题测验」专用）。
+     *
+     * 真机依据（round-26 实测）：AI 助教小智出的巩固弹题，会把答案以纯文本
+     * 「正确答案：A」的形式**直接渲染在弹窗里**（同一弹窗还写明「不影响作业
+     * 考试成绩」）。这类题既不需要查题库、也不需要调 LLM —— 读出来直接用，
+     * 零延迟、零成本、零失败率。
+     *
+     * 它还有个关键性质：**不做选择也能关闭**。实测点选项 A 后其 class 仍是
+     * topic-item（选中态根本不会变），所以调度器旧的「平台不允许关闭未作答弹题、
+     * 必须答上才关」这条铁律，会把它卡成「关不掉 → 转人工空等」的死循环。
+     * 有了本方法读出答案，就可以放心直接关闭并续播。
+     *
+     * @returns {string|null} 答案文本（如 'A' / 'AB' / '对'）；页面没给答案返回
+     *   null，调用方应回退到题库/LLM 链路。
+     */
+    answerFromDom() {
+      const r = this.root();
+      if (!r) return null;
+      let scope = r;
+      try {
+        // 答案文本可能挂在 .el-dialog__wrapper 上，而不在 .el-dialog 内部 → 扩大到整个弹窗
+        const w = r.closest ? r.closest('.el-dialog__wrapper') : null;
+        if (w) scope = w;
+      } catch (e) { /* 取不到就保持 scope = r */ }
+      let txt = '';
+      try { txt = U.normText(scope.textContent || ''); } catch (e) { txt = ''; }
+      if (!txt) return null;
+      const m = txt.match(/正确答案\s*[：:]\s*([A-Ha-h]{1,8}|对|错|正确|错误)/);
+      if (!m) return null;
+      return m[1];
+    },
+
+    /**
      * 采集所有分页的题目
      * 返回 [{ title, options[], type, pageIndex, elements }]
      */

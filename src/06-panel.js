@@ -731,7 +731,7 @@
       <div class="row"><label>跳过已完成</label><button class="sw" data-cfg="skipFinished"></button></div>
       <div class="row"><label>静音</label><button class="sw" data-cfg="mute"></button></div>
       <div class="row"><label>断点续播</label><button class="sw" data-cfg="resume"></button></div>
-      <div class="row"><label>倍速</label><input type="range" min="1" max="1.8" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
+      <div class="row"><label>倍速</label><input type="range" min="1" max="1.5" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
 
       <div class="row"><label>自动跳课</label><button class="sw" data-cfg="autoCourseHop"></button></div>
       <div class="hint">本课学完自动去课程中心找下一门</div>

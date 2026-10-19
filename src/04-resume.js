@@ -223,7 +223,9 @@
 
     /**
      * 恢复流程：
-     * 1. 读记录 → 2. 定位课时 → 3. 等待 video → 4. seek 到记录点
+     * 1. 读记录 → 2. 定位课时（点标题切过去）→ 3. 等待 video → 4. 直接播放
+     *    （round-26：第 4 步原先是 seek 到记录点；真机证明 seek 会触发滑块验证码，
+     *     现改为交给平台自身定位，脚本全程不 seek）
      * 返回是否执行了恢复
      */
     async restore(courseId) {
@@ -265,20 +267,24 @@
       // 等元数据加载
       await this._waitMetadata(video, 20000);
 
-      const rewind = Number(ZHS.config.resumeRewind) || 2;
-      const targetTime = Math.max(0, rec.time - rewind);
-
-      // duration 变了（换了清晰度/新版视频），按比例换算
-      let finalTime = targetTime;
-      if (rec.duration && Number.isFinite(video.duration) && video.duration > 0
-          && Math.abs(video.duration - rec.duration) > 5) {
-        finalTime = (rec.time / rec.duration) * video.duration;
-        ZHS.Log.info('视频时长变化，按比例换算恢复点：' + Math.round(finalTime) + 's');
-      }
-
-      await ZHS.Player.seekTo(video, finalTime);
+      // 【2026-10-19 round-26 修订】这里原先是 `ZHS.Player.seekTo(video, finalTime)`。
+      //
+      // 真机结论：智慧树把「异常 seek / 拖进度条」当作脚本特征 —— 一 seek 就弹
+      // 腾讯 Turing 滑块验证码（跨域 iframe，脚本解不了），正是用户说的
+      // 「跳转不支持 / 被检测成脚本」的根因。
+      //
+      // 而「把视频定位到断点」这件事**平台自己就会做**：真机实测点未完成小节的
+      // 标题后，视频直接停在平台记录的断点上（2.25 节 → 停在 474/622）。
+      // 所以脚本只负责「点过去 + 播放」，位置交给平台，全程零 seek。
+      ZHS.Log.info('已切到「' + rec.lessonKey + '」，断点位置由平台自身记录恢复'
+        + '（脚本不 seek —— seek 会触发滑块验证码）');
+      try {
+        if (video.paused) {
+          const p = video.play();
+          if (p && p.catch) p.catch(() => {});
+        }
+      } catch (e) { /* 播放失败不影响主流程，调度器下一轮会保活 */ }
       this._restored = true;
-      ZHS.Log.info('已恢复到 ' + Math.round(finalTime) + 's 继续播放');
       return true;
     },
 
