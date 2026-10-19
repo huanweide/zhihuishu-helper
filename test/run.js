@@ -2832,6 +2832,41 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
     eq('多选答案读出 AB', win.ZHS.Questions.Dialog.answerFromDom(), 'AB');
   }
 
+  console.log('\n=== 67. 守卫0：记住回家路 / 被整页带走后自己回去（round-29） ===');
+  {
+    // 真机根因：关掉 AI 弹题的「关闭」会**稳定**整页跳到 www.zhihuishu.com 门户，
+    // 此时既没有 video 也没有课程目录，若照常推进会被判成「全部看完」而误停。
+    // 守卫 0 的做法：在学习页记住地址；目录读不到时自己走回去。
+
+    // ① 在学习页：必须记住回家的路
+    const html = `<html><body>
+      <div class="clearfix">
+        <div class="clearfix video current_play"><span id="lessonOrder">第一节</span><span class="progress-num">50%</span></div>
+      </div>
+      <video></video>
+    </body></html>`;
+    const home = 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=nav0';
+    const { win } = makeEnv(html, home);
+    const S = win.ZHS.Scheduler;
+    S._tickInner().catch(() => {});   // 守卫0 在第一个 await 之前已同步跑完，可直接断言
+    eq('在学习页时记住回家的路', S._courseUrl, home);
+    eq('在学习页不累计离开计数', S._awayTicks, 0);
+  }
+  {
+    // ② 被整页带走（门户首页没有课程目录）：连续 3 轮后才回跳，
+    //    留 2 轮给页面渲染，避免刚加载目录还没出来就被误判成「跳走」
+    const html2 = `<html><body><video></video></body></html>`;
+    const { win } = makeEnv(html2, 'https://www.zhihuishu.com/');
+    const S = win.ZHS.Scheduler;
+    S._courseUrl = 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=home';
+    S._tickInner().catch(() => {});
+    eq('第1轮：离开计数=1（先观察，不动）', S._awayTicks, 1);
+    S._tickInner().catch(() => {});
+    eq('第2轮：离开计数=2（仍不回跳）', S._awayTicks, 2);
+    S._tickInner().catch(() => {});
+    eq('第3轮：触发回跳，计数归零', S._awayTicks, 0);
+  }
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {
