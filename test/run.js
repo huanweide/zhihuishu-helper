@@ -2780,6 +2780,58 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
       (await P.retryFromPlatformProgress(video, 0)) === false, 'false');
   })();
 
+  console.log('\n=== 64. legacy 切集：点击必须落在标题 .catalogue_title 上 ===');
+  {
+    // 真机校准：点 li 本体出现过整页跳到门户首页；点内部标题才是稳定的页内切换。
+    // 所以 Catalog.click 必须把点击派发到标题（再自然冒泡到条目）。
+    const html = `<html><body><div class="clearfix">
+      <div class="clearfix video current_play"><span class="catalogue_title" id="lessonOrder">第一节</span></div>
+      <div class="clearfix video"><span class="catalogue_title">第二节</span></div>
+    </div><video></video></body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=t7');
+    const cat = win.ZHS.Catalog;
+    const first = cat.items()[0];
+    const title = first.querySelector('.catalogue_title');
+    let titleClicks = 0;
+    let liClicks = 0;
+    title.addEventListener('click', () => { titleClicks += 1; });
+    first.addEventListener('click', () => { liClicks += 1; });
+    cat.click(first);
+    eq('点击派发到标题上', titleClicks, 1);
+    eq('事件冒泡到条目（真实点击链完整）', liClicks, 1);
+  }
+
+  console.log('\n=== 65. realClick 派发拟真三连（带坐标） ===');
+  {
+    const { win } = makeEnv('<html><body><button id="b">x</button></body></html>',
+      'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=t8');
+    const b = win.document.getElementById('b');
+    const seen = [];
+    ['mousedown', 'mouseup', 'click'].forEach((t) => {
+      b.addEventListener(t, (e) => seen.push(t + ':' + typeof e.clientX));
+    });
+    win.ZHS.Util.realClick(b);
+    eq('三连齐全（不是裸 click）', seen.length, 3);
+    eq('顺序 mousedown→mouseup→click 且带数字坐标',
+      seen.join(','), 'mousedown:number,mouseup:number,click:number');
+  }
+
+  console.log('\n=== 66. 多选题答案内嵌：也能从 DOM 读出 ===');
+  {
+    const html = `<html><body>
+      <div class="el-dialog__wrapper"><div class="el-dialog">
+        <div class="el-dialog__title">多选题</div>
+        <div class="el-dialog__body">
+          <label class="el-radio">A</label><label class="el-radio">B</label>
+          <p>正确答案：AB</p>
+        </div>
+      </div></div>
+      <video></video>
+    </body></html>`;
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=t9');
+    eq('多选答案读出 AB', win.ZHS.Questions.Dialog.answerFromDom(), 'AB');
+  }
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {
