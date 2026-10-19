@@ -68,6 +68,15 @@
     // 漏答还能回来手工作答，蒙错答却改不回来——宁可漏，不可错。
     gatedRandom: false,
 
+    // 离线启发式兜底（round-30 新增）：题库/LLM 都没给出答案时，
+    // 用纯本地的语言学 + 出题套路推断一个（零网络、零 Key、零题库）。
+    //
+    // 为什么默认【开】：平台行为是「弹题随机弹出、且必须答完才能关闭」，
+    // 「不答」的代价不是漏一题，而是**弹窗关不掉、挂机当场中断**。
+    // 启发式不保证对，但质量高于随机、且能把「必卡死」变成「大概率继续」。
+    // 它有 Key 时不会出场（排在题库/LLM 之后），不会拉低已有答题质量。
+    heuristicFallback: true,
+
     // 通用
     debug: true,         // 控制台详细日志
     panelVisible: true,  // 悬浮面板
@@ -111,6 +120,7 @@
     'autoExam', 'examSubmit', 'autoCourseHop', 'autoCoursePick',
     'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
     'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
+    'heuristicFallback',
     'debug', 'panelVisible', 'guardOverlays',
   ];
 

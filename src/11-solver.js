@@ -57,7 +57,7 @@
   }
 
   const Solver = {
-    stats: { bank: 0, llm: 0, cache: 0, random: 0, skipped: 0, fail: 0 },
+    stats: { bank: 0, llm: 0, cache: 0, heuristic: 0, random: 0, skipped: 0, fail: 0 },
 
     /** 清空缓存 */
     clearCache() { CACHE.clear(); },
@@ -121,7 +121,30 @@
         }
       }
 
-      // 3. 无可用通道时：
+      // 3. 通道 C：离线启发式（round-30 新增）
+      //
+      // 为什么必须补这一层，又为什么必须排在题库/LLM **之后**：
+      //   用户确认的平台行为是「弹题随机弹出、必须答完才能关闭」——
+      //   于是「答不上」的代价不是漏一题，而是**弹窗关不掉、挂机就此中断**。
+      //   而题库要自建服务、LLM 要 API Key，两者都缺席是绝大多数用户的常态，
+      //   旧实现在这时直接跳过 → 一题未答 → 卡死在这一节。
+      //   启发式零外部依赖，至少能把「必卡死」变成「大概率答上并继续」。
+      //   但它只是统计推断，质量低于题库/LLM，故只在它们都没结果时才出场，
+      //   避免拉低已经配好通道的用户本来的答题质量。
+      if (!result && options.length && ZHS.Heuristic && cfg.heuristicFallback !== false) {
+        try {
+          const h = ZHS.Heuristic.solve({ title: question, options, type });
+          if (h && h.answer) {
+            result = { answer: h.answer, from: 'heuristic', confidence: 'low' };
+            this.stats.heuristic++;
+            ZHS.Log.info('离线启发式给出答案 ' + h.answer + '（' + (h.reason || '') + '）');
+          }
+        } catch (e) {
+          logChannelFail('启发式求解异常', e);
+        }
+      }
+
+      // 4. 所有通道都没有时：
       //    默认【不蒙】——瞎选答案会污染成绩且部分课程不允许回退重做，
       //    宁可漏答（可事后补答）也不主动制造错答。
       //    用户显式开启 gatedRandom 才允许兜底蒙一个（保证流程不卡住）。

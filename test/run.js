@@ -2867,6 +2867,68 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
     eq('第3轮：触发回跳，计数归零', S._awayTicks, 0);
   }
 
+  console.log('\n=== 68. 离线启发式兜底：无 Key 无题库也要能答（round-30） ===');
+  {
+    // 用户需求根因：「弹题随机弹出、必须答完才能关闭」。
+    // 题库要自建服务、LLM 要 Key —— 两者都缺席是常态，旧实现在这时直接跳过
+    // → 一题未答 → 平台拒绝关闭 → 挂机当场中断。启发式就是为此补的那一层。
+    const { win } = makeEnv('<html><body></body></html>',
+      'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=h1');
+    const H = win.ZHS.Heuristic;
+    ok('启发式模块已挂载', !!H);
+
+    // ① 判断题：教材陈述默认判对
+    const j1 = H.solve({ title: '依法治国的本质是人民当家作主', options: ['正确', '错误'],
+      type: 'judgement' });
+    eq('判断题默认判「正确」', (j1 && j1.answer) || '', 'A');
+
+    // ② 判断题 + 绝对化词 → 反转为错（教材里「都必须」这种话通常是错项）
+    const j2 = H.solve({ title: '所有的违法行为都必须追究刑事责任', options: ['正确', '错误'],
+      type: 'judgement' });
+    eq('题干含绝对化词 → 判「错误」', (j2 && j2.answer) || '', 'B');
+
+    // ③ 关键词重合：与题干最贴合的胜出（网课弹题多为课件原文改写）
+    const s3 = H.solve({
+      title: '习近平法治思想的核心要义集中体现为十一个坚持',
+      options: ['十一个坚持', '全面依法治国', '党的领导', '以人民为中心'],
+      type: 'single',
+    });
+    eq('选与题干重合最高的选项', (s3 && s3.answer) || '', 'A');
+
+    // ④ 否定式题干（问「哪个不对」）→ 必须反过来选最离群的
+    const s4 = H.solve({
+      title: '下列关于我国国家机构的说法，不正确的是',
+      options: ['国家机构很重要', '国家机构行使国家权力', '国家機構设在火星'],
+      type: 'single',
+    });
+    ok('否定式题干仍能给出答案', !!s4, String(s4 && s4.answer));
+    ok('否定式题干选的不是最重合项', !s4 || s4.answer !== 'A', String(s4 && s4.answer));
+
+    // ⑤ 收尾式正确项「以上都对」：多选题的经典送分项，命中必选
+    const s5 = H.solve({
+      title: '下列属于我国公民基本权利的有',
+      options: ['平等权', '政治权利', '人身自由', '以上都对'],
+      type: 'multiple',
+    });
+    eq('命中「以上都对」直接选它', (s5 && s5.answer) || '', 'D');
+
+    // ⑥ 推断不出来必须认输返回 null —— 宁可不答也不冒充高分答案
+    const s6 = H.solve({
+      title: '今天的天气真好',
+      options: ['选项甲', '选项乙', '选项丙', '选项丁'],
+      type: 'single',
+    });
+    eq('毫无信号时认输返回 null', s6, null);
+
+    // ⑦ 被别的选项全文包含的「片面答案」必须排除
+    const s7 = H.solve({
+      title: '关于诚信的正确说法是',
+      options: ['诚信是美德', '诚信既是法律要求也是道德要求', '守信很重要'],
+      type: 'single',
+    });
+    ok('包含排雷：不片面选被包含的短项', !s7 || s7.answer !== 'A', String(s7 && s7.answer));
+  }
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {
