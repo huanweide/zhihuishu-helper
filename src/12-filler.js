@@ -10,63 +10,94 @@
   ZHS.__mod12_filler = true;
   const U = ZHS.Util;
 
-  /** 判断选项元素是否处于选中态 */
-  function isChecked(el) {
-    if (!el) return false;
-    // 1. 元素自身带 is-checked / checked 类
-    if (el.classList && (el.classList.contains('is-checked') || el.classList.contains('checked') || el.classList.contains('active'))) {
-      return true;
-    }
-    // 2. 内部 input
-    const input = el.querySelector && el.querySelector('input');
-    if (input && input.checked) return true;
-    // 3. 祖先有 is-checked
-    const p = el.closest && el.closest('.is-checked, .checked');
-    if (p) return true;
+  const SEL_CLASSES = ['is-checked', 'checked', 'active', 'selected', 'choosed', 'chosen', 'current', 'highlight', 'picked'];
+
+  function hasSelClass(el) {
+    try {
+      if (!el.classList) return false;
+      for (const c of el.classList) { if (SEL_CLASSES.indexOf(String(c).toLowerCase()) >= 0) return true; }
+    } catch (e) { /* 忽略 */ }
     return false;
   }
 
-  /** 点击一个选项（多重兜底，且避免重复点击导致取消） */
+  /** 严格选中判定（仅用于「已选中则跳过点击」的防取消守卫，避免被样式类误判） */
+  function isClearlyChecked(el) {
+    if (!el) return false;
+    try {
+      if (el.getAttribute && el.getAttribute('aria-checked') === 'true') return true;
+      const input = el.querySelector ? el.querySelector('input') : (el.matches && el.matches('input') ? el : null);
+      if (input && input.checked) return true;
+      if (el.classList && (el.classList.contains('is-checked') || el.classList.contains('checked'))) return true;
+    } catch (e) { /* 忽略 */ }
+    return false;
+  }
+
+  /** 宽口径选中判定（用于点击后自检：选中态可能表现为 aria/类名/子 input/子节点标记） */
+  function isChecked(el) {
+    if (!el) return false;
+    try {
+      if (isClearlyChecked(el)) return true;
+      if (el.getAttribute) {
+        if (el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-pressed') === 'true') return true;
+      }
+      if (hasSelClass(el)) return true;
+      const p = el.closest && el.closest('.is-checked,.checked,.active,.selected,.choosed,.chosen,.current,.highlight');
+      if (p) return true;
+      if (el.querySelector) {
+        const marked = el.querySelector('.is-checked,.checked,.active,.selected,.choosed,.chosen,.current,.highlight,[aria-checked="true"]');
+        if (marked) return true;
+      }
+    } catch (e) { /* 忽略 */ }
+    return false;
+  }
+
+  /**
+   * 点击一个选项并确认选中（round-37：大幅强化，修「选项点击后仍未选中」）。
+   * 对 AI助教/按钮式/div 式选项：逐个候选子目标 × 多种点击方式尝试，每步后自检 isChecked，
+   * 一旦选中即收手；最后再上 input.checked 强制兜底。已明确选中的则跳过（防取消）。
+   */
   async function clickOption(el) {
     if (!el) return false;
-    if (isChecked(el)) {
+    if (isClearlyChecked(el)) {
       ZHS.Log.debug('选项已选中，跳过点击（防取消）');
       return true;
     }
-
-    // 优先点未选中的内层（ocsjs 的成熟做法）
-    const inner = el.querySelector('.el-radio__input:not(.is-checked), .el-checkbox__input:not(.is-checked)');
-    const target = inner || el;
-
-    try {
-      target.click();
-    } catch (e) {
-      ZHS.Log.debug('点击异常，改用事件派发：' + e.message);
-      try {
-        target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      } catch (e2) { /* 忽略 */ }
-    }
-
-    await U.sleep(200);
-    if (isChecked(el)) return true;
-
-    // 兜底 1：点内层可见元素
-    const innerVisible = el.querySelector('.el-radio__inner, .el-checkbox__inner, .radio, .checkbox');
-    if (innerVisible) {
-      try { innerVisible.click(); } catch (e) { /* 忽略 */ }
-      await U.sleep(200);
+    const sleep = (ms) => U.sleep(ms);
+    const fireOne = async (t) => {
+      if (!t) return false;
+      try { if (U.realClickHuman) U.realClickHuman(t); else t.click(); } catch (e) { /* 忽略 */ }
+      await sleep(160);
       if (isChecked(el)) return true;
+      try { t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch (e) { /* 忽略 */ }
+      await sleep(120);
+      return isChecked(el);
+    };
+
+    // 候选点击目标：从「最可能带处理器」到宽兜底
+    const cands = [];
+    const add = (s) => { try { const c = el.querySelector(s); if (c && cands.indexOf(c) < 0) cands.push(c); } catch (e) {} };
+    add('.el-radio__input:not(.is-checked)');
+    add('.el-checkbox__input:not(.is-checked)');
+    add('.el-radio__inner'); add('.el-checkbox__inner');
+    add('[class*="radio"]'); add('[class*="check"]'); add('[class*="circle"]'); add('[class*="icon"]');
+    add('label'); add('input'); add('span'); add('a'); add('i');
+    cands.push(el);   // 最后点本体
+
+    for (const t of cands) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await fireOne(t)) return true;
     }
 
-    // 兜底 2：直接改 input.checked + 派发事件
-    const input = el.querySelector('input');
+    // 强制兜底：直接置 input.checked + 派发事件
+    const input = el.querySelector ? el.querySelector('input') : (el.matches && el.matches('input') ? el : null);
     if (input) {
       try {
         input.checked = true;
         input.dispatchEvent(new Event('change', { bubbles: true }));
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        await U.sleep(100);
-        if (input.checked) return true;
+        try { if (input.click) input.click(); } catch (e) { /* 忽略 */ }
+        await sleep(150);
+        if (input.checked || isChecked(el)) return true;
       } catch (e) { /* 忽略 */ }
     }
 

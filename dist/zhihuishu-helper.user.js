@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.42
+// @version      0.6.43
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.42";
+window.__ZHS_BUILD__.version = "0.6.43";
 
 /* ===== 00-config.js ===== */
 /**
@@ -9679,63 +9679,94 @@ ${question}${optionText}
   ZHS.__mod12_filler = true;
   const U = ZHS.Util;
 
-  /** 判断选项元素是否处于选中态 */
-  function isChecked(el) {
-    if (!el) return false;
-    // 1. 元素自身带 is-checked / checked 类
-    if (el.classList && (el.classList.contains('is-checked') || el.classList.contains('checked') || el.classList.contains('active'))) {
-      return true;
-    }
-    // 2. 内部 input
-    const input = el.querySelector && el.querySelector('input');
-    if (input && input.checked) return true;
-    // 3. 祖先有 is-checked
-    const p = el.closest && el.closest('.is-checked, .checked');
-    if (p) return true;
+  const SEL_CLASSES = ['is-checked', 'checked', 'active', 'selected', 'choosed', 'chosen', 'current', 'highlight', 'picked'];
+
+  function hasSelClass(el) {
+    try {
+      if (!el.classList) return false;
+      for (const c of el.classList) { if (SEL_CLASSES.indexOf(String(c).toLowerCase()) >= 0) return true; }
+    } catch (e) { /* 忽略 */ }
     return false;
   }
 
-  /** 点击一个选项（多重兜底，且避免重复点击导致取消） */
+  /** 严格选中判定（仅用于「已选中则跳过点击」的防取消守卫，避免被样式类误判） */
+  function isClearlyChecked(el) {
+    if (!el) return false;
+    try {
+      if (el.getAttribute && el.getAttribute('aria-checked') === 'true') return true;
+      const input = el.querySelector ? el.querySelector('input') : (el.matches && el.matches('input') ? el : null);
+      if (input && input.checked) return true;
+      if (el.classList && (el.classList.contains('is-checked') || el.classList.contains('checked'))) return true;
+    } catch (e) { /* 忽略 */ }
+    return false;
+  }
+
+  /** 宽口径选中判定（用于点击后自检：选中态可能表现为 aria/类名/子 input/子节点标记） */
+  function isChecked(el) {
+    if (!el) return false;
+    try {
+      if (isClearlyChecked(el)) return true;
+      if (el.getAttribute) {
+        if (el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-pressed') === 'true') return true;
+      }
+      if (hasSelClass(el)) return true;
+      const p = el.closest && el.closest('.is-checked,.checked,.active,.selected,.choosed,.chosen,.current,.highlight');
+      if (p) return true;
+      if (el.querySelector) {
+        const marked = el.querySelector('.is-checked,.checked,.active,.selected,.choosed,.chosen,.current,.highlight,[aria-checked="true"]');
+        if (marked) return true;
+      }
+    } catch (e) { /* 忽略 */ }
+    return false;
+  }
+
+  /**
+   * 点击一个选项并确认选中（round-37：大幅强化，修「选项点击后仍未选中」）。
+   * 对 AI助教/按钮式/div 式选项：逐个候选子目标 × 多种点击方式尝试，每步后自检 isChecked，
+   * 一旦选中即收手；最后再上 input.checked 强制兜底。已明确选中的则跳过（防取消）。
+   */
   async function clickOption(el) {
     if (!el) return false;
-    if (isChecked(el)) {
+    if (isClearlyChecked(el)) {
       ZHS.Log.debug('选项已选中，跳过点击（防取消）');
       return true;
     }
-
-    // 优先点未选中的内层（ocsjs 的成熟做法）
-    const inner = el.querySelector('.el-radio__input:not(.is-checked), .el-checkbox__input:not(.is-checked)');
-    const target = inner || el;
-
-    try {
-      target.click();
-    } catch (e) {
-      ZHS.Log.debug('点击异常，改用事件派发：' + e.message);
-      try {
-        target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      } catch (e2) { /* 忽略 */ }
-    }
-
-    await U.sleep(200);
-    if (isChecked(el)) return true;
-
-    // 兜底 1：点内层可见元素
-    const innerVisible = el.querySelector('.el-radio__inner, .el-checkbox__inner, .radio, .checkbox');
-    if (innerVisible) {
-      try { innerVisible.click(); } catch (e) { /* 忽略 */ }
-      await U.sleep(200);
+    const sleep = (ms) => U.sleep(ms);
+    const fireOne = async (t) => {
+      if (!t) return false;
+      try { if (U.realClickHuman) U.realClickHuman(t); else t.click(); } catch (e) { /* 忽略 */ }
+      await sleep(160);
       if (isChecked(el)) return true;
+      try { t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch (e) { /* 忽略 */ }
+      await sleep(120);
+      return isChecked(el);
+    };
+
+    // 候选点击目标：从「最可能带处理器」到宽兜底
+    const cands = [];
+    const add = (s) => { try { const c = el.querySelector(s); if (c && cands.indexOf(c) < 0) cands.push(c); } catch (e) {} };
+    add('.el-radio__input:not(.is-checked)');
+    add('.el-checkbox__input:not(.is-checked)');
+    add('.el-radio__inner'); add('.el-checkbox__inner');
+    add('[class*="radio"]'); add('[class*="check"]'); add('[class*="circle"]'); add('[class*="icon"]');
+    add('label'); add('input'); add('span'); add('a'); add('i');
+    cands.push(el);   // 最后点本体
+
+    for (const t of cands) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await fireOne(t)) return true;
     }
 
-    // 兜底 2：直接改 input.checked + 派发事件
-    const input = el.querySelector('input');
+    // 强制兜底：直接置 input.checked + 派发事件
+    const input = el.querySelector ? el.querySelector('input') : (el.matches && el.matches('input') ? el : null);
     if (input) {
       try {
         input.checked = true;
         input.dispatchEvent(new Event('change', { bubbles: true }));
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        await U.sleep(100);
-        if (input.checked) return true;
+        try { if (input.click) input.click(); } catch (e) { /* 忽略 */ }
+        await sleep(150);
+        if (input.checked || isChecked(el)) return true;
       } catch (e) { /* 忽略 */ }
     }
 
@@ -9865,6 +9896,7 @@ ${question}${optionText}
     _failCount: 0,          // 同一弹题连续处理失败次数
     _cooldownUntil: 0,      // 退避截止时间戳
     _pendingHuman: false,   // 本题未答上/关不掉 → 等人工，期间不再自动关闭和反复告警
+    _lastSolvedIdxs: [],    // round-37：本题求解出的答案选项索引，未选中时供 _ensureAnsweredThenClose 优先重试
 
     /**
      * 弹题处理（课中）
@@ -10033,31 +10065,10 @@ ${question}${optionText}
       // 然后脚本陷入「关不掉 → 退避 → 再关」的死循环骚扰。
       // 没答上时正确做法：保留弹窗交给用户手动作答，脚本安静等待。
       if (!anyAnswered) {
-        // 区分「无通道（无法自检）」与「有通道但选项点击未生效」：
-        // 无通道 / 点击后环境无法自检选中态 → 按"默认视为已作答"尝试关闭弹窗，
-        // 平台拒绝未作答会回弹；此时【不转人工卡死】，恢复播放并继续，
-        // 下一轮主循环仍会重试关闭（节流告警），符合用户「不要停住」要求。
-        // 只有「明确有通道、点击也执行了、但选项就是选不中」才转人工。
-        if (this._noChannelThisRound || this._noSelfCheck) {
-          // round-10 A3：记录本题为「无法自检/无通道」，下一轮节流跳过重复重作答
-          this._noSelfCheckSig = sig || '';
-          this._noSelfCheckUntil = Date.now() + 30000;
-          const ok = await this.closeDialogAndResume({ noChannel: true });
-          if (ok) {
-            this._answeredSig = sig || '';
-            if (this._skippedSigs) this._skippedSigs.delete(sig || '');
-          } else {
-            // 平台禁止关闭未作答弹窗：不暂停、不卡死，恢复播放并继续，稍后重试
-            this._resumePlay();
-            this._throttledSkipWarn(sig);
-          }
-        } else {
-          this._pendingHuman = true;
-          ZHS.Log.warn('本题有通道但选项点击未生效，平台不允许关闭未作答弹窗，已交由人工处理');
-          if (ZHS.panel) {
-            ZHS.panel.alert('这题有通道但没选上：请手动选择答案，弹窗会保留等你作答（作答后可正常关闭）', 'warn', 10000);
-          }
-        }
+        // round-37：严格遵守「没答完不能关闭」。不再一来自检不过就硬关（硬关只会被平台
+        // 拒绝 → 关不掉死循环）。改为：逐个尝试选项（优先已求解答案），每步代码等待 +
+        // isChecked 自检，**确认选中后才等待+关闭**；逐个都选不中则转人工保留弹窗。
+        await this._ensureAnsweredThenClose(root, sig, this._lastSolvedIdxs || []);
         return;
       }
       // round-9 A2：多页弹题若只有部分页答上，不标记完整完成，避免剩余页被永久跳过。
@@ -10196,61 +10207,125 @@ ${question}${optionText}
           + '」/ 选项 ' + optTexts.length + ' 个），跳过真作答，直接随机猜');
       }
 
-      // ===== 第二段：兜底随机猜（最多 2 轮，对应用户说的「猜两次」） =====
-      // 选择器取材：优先复用第一段已独立读出的选项元素（optEls）——
-      // 它对「按钮式 / div 式 A/B 题」也有效（readOptions 的宽口径通道已覆盖）；
-      // 只有 optEls 为空（第一段连选项都没读出来）时，才退回下面这组窄选择器兜底。
-      //
-      // 为什么不再用裸的 `li, label`：弹窗页脚/按钮条本身也是 li/label，
-      // `slice(0,2)` 会把它们当选项点掉，既没答上题、还可能误触按钮
-      //（用户抱怨的「只是乱点」很大一部分来自这里）。
+      // ===== 第二段：无通道兜底 —— 逐个试选项，确认选中/作答后才关（round-37） =====
+      // 用户诉求（原话）：「如果没有密钥答不出来，则随机选择 ABCD 答案都来一次，然后等待一会再关闭；
+      // 没答完不能采取关闭」。所以这里：随机把选项逐个点一次（每步代码等待），用 isChecked 自检
+      // 真实选中态；只有确认选中后才等待+关闭；逐个都选不上时遵守「没答完不关」，转人工，
+      // 绝不硬关（硬关只会被平台拒绝 → 关不掉死循环骚扰）。
       const optSel = '.el-radio, .el-checkbox, [role="radio"], [role="option"],'
         + ' .option-item, .choice-item, .answer-option, .option-btn, .option, .choice';
       const allOpts = optEls.length >= 2 ? optEls : Array.from(root.querySelectorAll(optSel));
       let opts = allOpts.filter((el) => {
         const t = (el.textContent || '').replace(/\s+/g, '').toLowerCase();
-        return /^([ab][.、:：]?|是|否|对|错|正确|错误|√|×)/.test(t);
+        return /^([abcd][.、:：]?|是|否|对|错|正确|错误|√|×)/.test(t);
       });
+      if (!opts.length) opts = allOpts.slice(0, 4);   // 退一步：取前若干选项元素
       if (!opts.length) {
-        // 退一步：直接取弹窗内前两个选项元素（不强制 A/B 文本前缀）
-        opts = allOpts.slice(0, 2);
-      }
-      if (!opts.length) {
-        // 连选项元素都找不到 → 直接放弃，提示用户手动选
         if (this._giveUpSigs) this._giveUpSigs.add(sig);
         this._pendingHuman = true;
-        if (ZHS.panel) ZHS.panel.alert('检测到选对才能关的简单 A/B 题，但自动找不到选项，请手动选 A 或 B', 'warn', 10000);
-        ZHS.Log.warn('非标准 A/B 答题找不到选项元素，放弃自动处理，提示用户手动选');
+        if (ZHS.panel) ZHS.panel.alert('检测到要作答才能关的题，但自动找不到选项，请手动选一个', 'warn', 10000);
+        ZHS.Log.warn('A/B 兜底找不到选项元素，放弃自动处理，提示用户手动选');
         return;
       }
 
-      const first = opts.length > 1 ? (Math.random() < 0.5 ? 0 : 1) : 0;
-      const order = opts.length > 1 ? [first, 1 - first] : [0];   // 最多试 2 个（先随机，再换另一个）
-      for (let round = 0; round < order.length; round++) {
-        const pick = opts[order[round]];
-        ZHS.Log.info('A/B 弹窗兜底猜第 ' + (round + 1) + ' 次（选项 ' + (order[round] + 1) + '）');
-        // 优先走 Filler.clickOption（内部有内层点击 + input.checked 兜底 + 重试）
+      // 随机打乱，逐个试（"ABCD 都来一次"）
+      const orderIdx = opts.map((_, i) => i);
+      for (let i = orderIdx.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const tmp = orderIdx[i]; orderIdx[i] = orderIdx[j]; orderIdx[j] = tmp; }
+      let selected = false; let selectedIdx = -1;
+      for (let r = 0; r < orderIdx.length; r++) {
+        const oi = orderIdx[r];
+        const pick = opts[oi];
+        ZHS.Log.info('无通道兜底：试第 ' + (r + 1) + '/' + orderIdx.length + ' 个选项');
+        try { await ZHS.Filler.clickOption(pick); }
+        catch (e) { try { pick.click(); } catch (e2) { /* 忽略 */ } }
+        await U.sleep(700);   // 每步代码等待，等平台反应
+        if (ZHS.Filler.isChecked(pick)) { selected = true; selectedIdx = oi; ZHS.Log.info('选项 ' + (oi + 1) + ' 已确认选中'); break; }
+      }
+
+      if (!selected) {
+        // 逐个试完仍检测不到选中态（可能是需真实点击的控件 / 环境无法自检）——
+        // 严格遵守「没答完不能关」：不硬关，转人工，避免关不掉的死循环。
+        if (this._giveUpSigs) this._giveUpSigs.add(sig);
+        this._pendingHuman = true;
+        if (ZHS.panel) ZHS.panel.alert('这题要选中才能关，但自动点选没生效（可能是需真实点击的控件），请手动选一个', 'warn', 12000);
+        ZHS.Log.warn('无通道兜底逐个试选项均未确认选中，遵守「没答完不关」，转人工');
+        this._resumePlay();
+        return;
+      }
+
+      // 已确认选中 → 等待一会让平台登记作答，再关
+      await U.sleep(1200);
+      ZHS.Log.info('无通道兜底已选中选项 ' + (selectedIdx + 1) + '，等待后关闭弹窗');
+      const ok = await this.closeDialogAndResume({ noChannel: true });
+      if (ok) { this._answeredSig = sig || ''; ZHS.Log.info('无通道兜底选中后成功关闭，恢复播放'); return; }
+
+      // 选中了却关不掉 → 转人工
+      if (this._giveUpSigs) this._giveUpSigs.add(sig);
+      this._pendingHuman = true;
+      if (ZHS.panel) ZHS.panel.alert('已选中答案但弹窗仍关不掉，请手动点关闭', 'warn', 10000);
+      ZHS.Log.warn('无通道兜底已选中但关闭失败，转人工');
+      this._resumePlay();
+    },
+
+    /**
+     * round-37：确保「至少一个选项被真实选中」后才关闭（严格遵守「没答完不能关闭」）。
+     * 逐个尝试选项（优先已求解答案 prefer），每步代码等待 + isChecked 自检；
+     * 确认选中 → 等待一会让平台登记 → 关闭；逐个都选不中 → 转人工保留弹窗，绝不硬关。
+     * @returns {Promise<boolean>} 是否已选中并成功关闭
+     */
+    async _ensureAnsweredThenClose(root, sig, prefer) {
+      const Q = ZHS.Questions.Dialog;
+      let els = [];
+      try {
+        const ro = Q.readOptions && Q.readOptions(root);
+        if (ro && ro.elements && ro.elements.length >= 2) els = ro.elements.slice();
+      } catch (e) { /* 忽略 */ }
+      if (els.length < 2) {
+        try { const q = Q.readCurrent(root); if (q && q.elementList && q.elementList.length) els = q.elementList.slice(); } catch (e) { /* 忽略 */ }
+      }
+      if (els.length < 2) {
         try {
-          await ZHS.Filler.clickOption(pick);
-        } catch (e) {
-          try { pick.click(); } catch (e2) { /* 点击异常不影响后续关闭尝试 */ }
-        }
-        await U.sleep(600);
-        // eslint-disable-next-line no-await-in-loop
-        const ok = await this.closeDialogAndResume({ noChannel: true });
-        if (ok) {
-          this._answeredSig = sig || '';
-          ZHS.Log.info('A/B 弹窗兜底猜第 ' + (round + 1) + ' 次成功关闭，恢复播放');
-          return;
+          els = Array.from(root.querySelectorAll('.el-radio, .el-checkbox, [role="radio"], [role="option"], .option, .choice, .option-item, .choice-item'));
+        } catch (e) { /* 忽略 */ }
+      }
+      if (els.length < 2) {
+        this._pendingHuman = true;
+        if (ZHS.panel) ZHS.panel.alert('这题要作答才能关，但自动找不到选项，请手动选一个', 'warn', 10000);
+        ZHS.Log.warn('_ensureAnsweredThenClose 找不到选项元素，转人工');
+        return false;
+      }
+
+      // 排序：优先已求解答案索引，其余随机打乱（"ABCD 都来一次"）
+      const all = els.map((_, i) => i);
+      const pref = (prefer || []).filter((i) => i >= 0 && i < els.length);
+      const rest = all.filter((i) => pref.indexOf(i) < 0);
+      for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = rest[i]; rest[i] = rest[j]; rest[j] = t; }
+      const seq = pref.concat(rest);
+
+      for (const i of seq) {
+        const el = els[i];
+        if (!el) continue;
+        ZHS.Log.info('确保作答：尝试选项 ' + (i + 1) + '/' + els.length);
+        try { await ZHS.Filler.clickOption(el); }
+        catch (e) { try { el.click(); } catch (e2) { /* 忽略 */ } }
+        await U.sleep(700);
+        if (ZHS.Filler.isChecked(el)) {
+          ZHS.Log.info('选项 ' + (i + 1) + ' 已确认选中，等待平台登记后关闭');
+          await U.sleep(1200);
+          const ok = await this.closeDialogAndResume({ noChannel: true });
+          if (ok) { this._answeredSig = sig || ''; return true; }
+          this._pendingHuman = true;
+          if (ZHS.panel) ZHS.panel.alert('已选中答案但弹窗仍关不掉，请手动点关闭', 'warn', 10000);
+          return false;
         }
       }
 
-      // 两轮都没关掉（需选对才能关）→ 放弃本题，提示用户手动选 A 或 B
-      if (this._giveUpSigs) this._giveUpSigs.add(sig);
+      // 逐个都选不中 → 遵守「没答完不关」，转人工
       this._pendingHuman = true;
-      if (ZHS.panel) ZHS.panel.alert('这是选对才能关的简单 A/B 题，自动没答上，请手动选 A 或 B', 'warn', 10000);
-      ZHS.Log.warn('A/B 弹窗真作答与两次兜底猜均未关闭，放弃自动处理，提示用户手动选');
+      if (ZHS.panel) ZHS.panel.alert('这题要选中才能关，但自动点选没生效（可能是需真实点击的控件），请手动选一个', 'warn', 12000);
+      ZHS.Log.warn('逐个选项均未确认选中，遵守「没答完不关」，转人工');
       this._resumePlay();
+      return false;
     },
 
     /**
@@ -10344,27 +10419,29 @@ ${question}${optionText}
       let answered = false;
       // 弹题的选项按钮在 .topic .radio ul > li，按索引点击
       const idxs = ZHS.Bank.toIndexes(result.answer);
+      this._lastSolvedIdxs = idxs.slice();   // round-37：记下求解答案索引，未选中时供逐个重试
       if (idxs.length) {
         for (const idx of idxs) {
           const flex = q.elementList[idx] ||
             root.querySelector('.topic .radio ul > li:nth-child(' + (idx + 1) + ')');
           if (flex) {
-            // 【P3-2 修复 · 2026-09-19】改走 Filler.clickOption，与 A/B 兜底路径统一。
-            // 原先这里用裸 `flex.click()`：对标准 .topic-item 够用，但对 Element UI 的
-            // `.el-radio`（外层 label 拦住点击、真正生效的是内层 .el-radio__input）常常点不上，
-            // 且若该元素已被选中，裸点击会把它**取消**（无「已选中则跳过」保护）。
-            // clickOption 内含：已选中防取消 → 点内层 __input → input.checked 兜底 → 重试。
+            // 改走 Filler.clickOption（round-37 已强化为多子目标 × 多点击方式 + 选中自检）。
             await ZHS.Filler.clickOption(flex);
             await U.sleep(600);
-            // 自检：点击后确认选项真的处于选中态。查不到选中就当作没答上
-            // （宁可交给人工，也不能让脚本以为答完了去关一个平台不认的弹窗）
+            // 自检：点击后确认选项真的处于选中态。没选中就再点一次整元素兜底
+            if (!ZHS.Filler.isChecked(flex)) {
+              try { flex.click(); } catch (e) { /* 忽略 */ }
+              await U.sleep(500);
+            }
             if (ZHS.Filler.isChecked(flex)) {
               answered = true;
               ZHS.state.answeredCount++;
               ZHS.Log.info('已作答：' + result.answer + '（来源 ' + result.from + '）');
             } else {
+              // round-37：不再自欺「按默认视为已作答」。本题标记为未答上，
+              // 由上层按「没答完不能关闭」逐个重试选项，确认选中后才关。
               this._noSelfCheck = true;
-              ZHS.Log.warn('选项点击后未检测到选中态（环境无法自检），按默认视为已作答处理');
+              ZHS.Log.warn('选项点击后仍未确认选中（本题记未答上，后续按「没答完不关」逐个重试）');
             }
           }
         }
