@@ -340,7 +340,7 @@
       // 真实选中态；只有确认选中后才等待+关闭；逐个都选不上时遵守「没答完不关」，转人工，
       // 绝不硬关（硬关只会被平台拒绝 → 关不掉死循环骚扰）。
       const optSel = '.el-radio, .el-checkbox, [role="radio"], [role="option"],'
-        + ' .option-item, .choice-item, .answer-option, .option-btn, .option, .choice';
+        + ' .option-item, .choice-item, .answer-option, .option-btn, .option, .choice, .item-topic';
       const allOpts = optEls.length >= 2 ? optEls : Array.from(root.querySelectorAll(optSel));
       let opts = allOpts.filter((el) => {
         const t = (el.textContent || '').replace(/\s+/g, '').toLowerCase();
@@ -413,7 +413,7 @@
       }
       if (els.length < 2) {
         try {
-          els = Array.from(root.querySelectorAll('.el-radio, .el-checkbox, [role="radio"], [role="option"], .option, .choice, .option-item, .choice-item'));
+          els = Array.from(root.querySelectorAll('.el-radio, .el-checkbox, [role="radio"], [role="option"], .option, .choice, .option-item, .choice-item, .item-topic'));
         } catch (e) { /* 忽略 */ }
       }
       if (els.length < 2) {

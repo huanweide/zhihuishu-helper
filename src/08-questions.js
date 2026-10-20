@@ -792,7 +792,7 @@
       // 限定在 body 内，避免把页脚按钮也当成选项。
       if (els.length < 2) {
         const WIDE = 'button, .btn, [role="button"], .option, .option-item, .choice,'
-          + ' .choice-item, .answer-option, .topic-item, .el-radio, .el-checkbox, label, li';
+          + ' .choice-item, .answer-option, .topic-item, .item-topic, .el-radio, .el-checkbox, label, li';
         const scope = r.querySelector('div.el-dialog__body') || r;
         const candidates = Array.from(scope.querySelectorAll(WIDE));
 

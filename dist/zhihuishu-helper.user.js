@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.44
+// @version      0.6.45
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.44";
+window.__ZHS_BUILD__.version = "0.6.45";
 
 /* ===== 00-config.js ===== */
 /**
@@ -8120,7 +8120,7 @@ window.__ZHS_BUILD__.version = "0.6.44";
       // 限定在 body 内，避免把页脚按钮也当成选项。
       if (els.length < 2) {
         const WIDE = 'button, .btn, [role="button"], .option, .option-item, .choice,'
-          + ' .choice-item, .answer-option, .topic-item, .el-radio, .el-checkbox, label, li';
+          + ' .choice-item, .answer-option, .topic-item, .item-topic, .el-radio, .el-checkbox, label, li';
         const scope = r.querySelector('div.el-dialog__body') || r;
         const candidates = Array.from(scope.querySelectorAll(WIDE));
 
@@ -9716,6 +9716,20 @@ ${question}${optionText}
         const marked = el.querySelector('.is-checked,.checked,.active,.selected,.choosed,.chosen,.current,.highlight,[aria-checked="true"]');
         if (marked) return true;
       }
+      // round-38【关键修复·调研 grounding】：智慧树课中弹题的「选中态」既不是 class 也不是
+      // input.checked，而是 SVG 图标 <use> 的 href —— 未选中 #iconxuan，选中 #iconxuanzhong
+      // （Natro92 逆向 + ocsjs/greasyfork 实现印证）。旧 isChecked 完全不认这个信号，于是
+      // 「明明点中了也判未选中」→ 继续乱点 → 把已选中的点乱 → 误报选不中。必须单独识别。
+      try {
+        if (el.querySelectorAll) {
+          const icons = el.querySelectorAll('use, [href], [xlink\\:href]');
+          for (const ic of icons) {
+            const h = String((ic.getAttribute && (ic.getAttribute('href') || ic.getAttribute('xlink:href'))) || '');
+            // 只认「选中」语义的图标引用；#iconxuan（未选中）不含 zhong，不会误命中
+            if (h && /xuanzhong|zhongzhong|icon[_-]?(selected|checked|chosen|on)|radio[_-]?(on|checked|selected)/i.test(h)) return true;
+          }
+        }
+      } catch (e) { /* 忽略 */ }
     } catch (e) { /* 忽略 */ }
     return false;
   }
@@ -10305,7 +10319,7 @@ ${question}${optionText}
       // 真实选中态；只有确认选中后才等待+关闭；逐个都选不上时遵守「没答完不关」，转人工，
       // 绝不硬关（硬关只会被平台拒绝 → 关不掉死循环骚扰）。
       const optSel = '.el-radio, .el-checkbox, [role="radio"], [role="option"],'
-        + ' .option-item, .choice-item, .answer-option, .option-btn, .option, .choice';
+        + ' .option-item, .choice-item, .answer-option, .option-btn, .option, .choice, .item-topic';
       const allOpts = optEls.length >= 2 ? optEls : Array.from(root.querySelectorAll(optSel));
       let opts = allOpts.filter((el) => {
         const t = (el.textContent || '').replace(/\s+/g, '').toLowerCase();
@@ -10378,7 +10392,7 @@ ${question}${optionText}
       }
       if (els.length < 2) {
         try {
-          els = Array.from(root.querySelectorAll('.el-radio, .el-checkbox, [role="radio"], [role="option"], .option, .choice, .option-item, .choice-item'));
+          els = Array.from(root.querySelectorAll('.el-radio, .el-checkbox, [role="radio"], [role="option"], .option, .choice, .option-item, .choice-item, .item-topic'));
         } catch (e) { /* 忽略 */ }
       }
       if (els.length < 2) {

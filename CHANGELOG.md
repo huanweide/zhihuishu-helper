@@ -4,6 +4,23 @@
 
 ---
 
+## [0.6.45] - 2026-10-20
+> 第二十四轮补丁（round-38）：**根治「选项点不中」—— 选中态识别错了信号**（深度调研 ocsjs/greasyfork/Natro92 后定位）。
+
+### 背景
+连续多轮加点击方式仍 `选项点击后仍未选中`。深度调研成熟实现后定位真因：**智慧树课中弹题的「选中态」既不是 class 也不是 input.checked，而是 SVG 图标 `<use>` 的 `href`**（未选中 `#iconxuan` → 选中 `#iconxuanzhong`，Natro92 逆向实锤；greasyfork 自动答题脚本用 `.item-topic` + `choose[0].click()` 点一次即中；ocsjs 适配层最全）。
+我的 `isChecked` 只查 class/input/aria，**完全不认 SVG 选中态** → 明明点中了也判"未选中" → 继续乱点一堆子目标/指针/键盘把已选中的点乱 → 误报选不中。**不是点不中，是看不懂"选中了没"。**
+
+### 改动
+1. **`isChecked` 增加 SVG 图标选中识别（12-filler.js）**：扫描选项内 `<use>/[href]/[xlink:href]`，`href` 命中 `#iconxuanzhong|zhongzhong|icon-selected/checked/...|radio-on/checked/selected` 即判选中。`#iconxuan`（未选中）不含 zhong，不会误命中。`isClearlyChecked`（防取消守卫）保持严格、不被 SVG 误触。
+2. **选项选择器补 `.item-topic`**（08-questions readOptions 宽口径 / 13-answerer A/B 兜底 / `_ensureAnsweredThenClose`），与成熟脚本一致地抓对元素。
+3. 新增单测 11.6 锁定 SVG 选中态识别。
+
+### 后续（若仍选不中）
+若诊断显示选项需真实点击(isTrusted)，脚本内合成事件无法伪造 —— 下轮建 CDP `Input.dispatchMouseEvent` 真实点击外部方案（fuckZHS 走的是直接打后端 API 的另一条路）。
+
+---
+
 ## [0.6.44] - 2026-10-20
 > 第二十三轮补丁（round-37b）：**治「选项点不中」再加三种机制 + 诊断转储** —— 为精准修复采集真实 DOM。
 

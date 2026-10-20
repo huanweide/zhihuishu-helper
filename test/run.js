@@ -3248,6 +3248,22 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
       eq('11.5c 无原生按钮时返回 false', await Z.Nav._viaNativeNext(), false);
     }
 
+    // 11.6 智慧树 SVG 图标选中态识别（round-38 关键修复）
+    {
+      const doc = win.document;
+      const SVGNS = 'http://www.w3.org/2000/svg';
+      const item = doc.createElement('div'); item.className = 'item-topic';
+      const svg = doc.createElementNS(SVGNS, 'svg');
+      const use = doc.createElementNS(SVGNS, 'use');
+      use.setAttribute('href', '#iconxuan');
+      svg.appendChild(use); item.appendChild(svg);
+      const span = doc.createElement('span'); span.textContent = 'A. 对'; item.appendChild(span);
+      eq('11.6a #iconxuan 判为未选中', Z.Filler.isChecked(item), false);
+      use.setAttribute('href', '#iconxuanzhong');
+      eq('11.6b #iconxuanzhong 判为已选中', Z.Filler.isChecked(item), true);
+      eq('11.6c isClearlyChecked 对 SVG 选中仍为 false（防取消守卫不被 SVG 误触）', Z.Filler.isClearlyChecked(item), false);
+    }
+
     restore();
   })();
   await _g71;

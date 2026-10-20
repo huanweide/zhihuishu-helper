@@ -47,6 +47,20 @@
         const marked = el.querySelector('.is-checked,.checked,.active,.selected,.choosed,.chosen,.current,.highlight,[aria-checked="true"]');
         if (marked) return true;
       }
+      // round-38【关键修复·调研 grounding】：智慧树课中弹题的「选中态」既不是 class 也不是
+      // input.checked，而是 SVG 图标 <use> 的 href —— 未选中 #iconxuan，选中 #iconxuanzhong
+      // （Natro92 逆向 + ocsjs/greasyfork 实现印证）。旧 isChecked 完全不认这个信号，于是
+      // 「明明点中了也判未选中」→ 继续乱点 → 把已选中的点乱 → 误报选不中。必须单独识别。
+      try {
+        if (el.querySelectorAll) {
+          const icons = el.querySelectorAll('use, [href], [xlink\\:href]');
+          for (const ic of icons) {
+            const h = String((ic.getAttribute && (ic.getAttribute('href') || ic.getAttribute('xlink:href'))) || '');
+            // 只认「选中」语义的图标引用；#iconxuan（未选中）不含 zhong，不会误命中
+            if (h && /xuanzhong|zhongzhong|icon[_-]?(selected|checked|chosen|on)|radio[_-]?(on|checked|selected)/i.test(h)) return true;
+          }
+        }
+      } catch (e) { /* 忽略 */ }
     } catch (e) { /* 忽略 */ }
     return false;
   }
