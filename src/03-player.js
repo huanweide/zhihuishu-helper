@@ -226,7 +226,7 @@
       }
       ZHS.Log.warn('视频已结束但平台仅记录 ' + platformPercent
         + '%，重新加载本节按平台进度续播（第 ' + (this._retryCount + 1) + ' 次，不 seek）');
-      try { Catalog.click(cur); } catch (e) { /* 点击失败下一轮还会再判 */ }
+      try { await ZHS.Nav.jumpTo(cur); } catch (e) { /* 跳转失败下一轮还会再判 */ }
       this._retryCount++;
       await U.sleep(3000);   // 等平台重新加载并把视频定位到它的记录点
       return true;

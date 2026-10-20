@@ -162,7 +162,7 @@
           if (_firstUndone) {
             ZHS.Log.info('进入课程：当前节已学完，自动跳到首节未学：'
               + ZHS.Catalog.itemTitle(_firstUndone));
-            ZHS.Catalog.click(_firstUndone);
+            await ZHS.Nav.jumpTo(_firstUndone);
             await U.sleep(3000);   // 等切换加载（与 resume.restore 同等待遇）
           } else {
             ZHS.Log.info('进入课程：当前节已学完，但目录里没有可跳的未学节，保持现状');

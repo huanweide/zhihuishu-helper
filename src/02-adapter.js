@@ -941,14 +941,21 @@
      * 避免异步渲染漏抓后永久关闭补全，也防止无限抖动。
      */
     ensureCatalogLoaded() {
-      if (this._catalogLoaded) return;
+      // round-35 修正：原来 `_catalogLoaded` 一旦为真就永久跳过，且首轮页面未就绪
+      // （_loadAttempts 第一次就 !grew）会直接锁死 → 虚拟滚动后面的未学节永远补不出来，
+      // 表现就是「跳不到没学过的地方」。现改为：必须「连续两次 no-growth」才视为稳定，
+      // 否则保持解锁下次继续补全；并加安全上限防止死循环。
+      if (this._catalogStable) return;
       this._loadAttempts = (this._loadAttempts || 0) + 1;
-      if (this._loadAttempts > 6) { this._catalogLoaded = true; return; }  // 安全上限，避免死循环
+      if (this._loadAttempts > 14) { this._latchCatalog(); return; }  // 安全上限
+      const beforeTotal = this.items().length;
       const boxes = this._scrollContainers();
+      // 没有可滚动容器 = 没有虚拟滚动可补全（含 jsdom 无布局环境）→ 直接视为加载完成
+      if (boxes.length === 0) { this._latchCatalog(); return; }
       let grew = false;
       for (const box of boxes) {
         let guard = 0;
-        while (guard++ < 60) {
+        while (guard++ < 80) {
           const before = this.items().length;
           // 往复滚动，制造多次 scroll 事件以触发分批异步渲染
           try {
@@ -961,15 +968,47 @@
           else break;  // 不再增长 → 到底或静态，停止本轮
         }
       }
-      if (grew) ZHS.Log.info('虚拟滚动目录已触发懒加载，目录条目已补全');
-      // 本轮仍有增长 → 保持未锁定，下次 findNext/breakdown 会继续补全；
-      // 不再增长 → 标记完成，停止滚动。
-      this._catalogLoaded = !grew;
+      if (this.items().length > beforeTotal) grew = true;
+      if (grew) {
+        this._stableCount = 0;
+        this._catalogStable = false;   // 还有增长 → 下次继续补全
+        this._catalogLoaded = false;
+        ZHS.Log.info('虚拟滚动目录已触发懒加载，目录条目已补全');
+      } else {
+        this._stableCount = (this._stableCount || 0) + 1;
+        if (this._stableCount >= 2) this._latchCatalog();  // 连续两次稳定才锁
+      }
+    },
+
+    /** 标记目录加载完成：_catalogLoaded（旧字段，兼容既有断言/调用）与 _catalogStable（round-35）同步置真 */
+    _latchCatalog() {
+      this._catalogLoaded = true;
+      this._catalogStable = true;
+    },
+
+    /**
+     * round-35：异步版——虚拟滚动多为异步渲染（rAF/setTimeout），同步滚动读不到新节点。
+     * 调度器等异步路径在 findNext 前 await 它，给平台时间把目录全加载出来，
+     * 否则未学节还在 DOM 外就被判「没有下一节」。
+     * @returns {Promise<number>} 加载后的目录条目数
+     */
+    async ensureCatalogLoadedAsync() {
+      this._catalogStable = false;
+      this._stableCount = 0;
+      this._loadAttempts = 0;
+      for (let i = 0; i < 8; i++) {
+        this.ensureCatalogLoaded();
+        if (U && U.sleep) await U.sleep(400); else await new Promise((r) => setTimeout(r, 400));
+        if (this._catalogStable) break;
+      }
+      return this.items().length;
     },
 
     /** 切课 / SPA 重载后清空目录加载缓存，下一门课重新触发懒加载 */
     resetCatalogCache() {
       this._catalogLoaded = false;
+      this._catalogStable = false;
+      this._stableCount = 0;
       this._loadAttempts = 0;
       this._sniffed = false;
     },

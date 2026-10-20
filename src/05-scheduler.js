@@ -885,6 +885,9 @@
       const cat = ZHS.Catalog;
 
       try {
+        // round-35：先异步把虚拟滚动目录全加载出来（等平台分批渲染），
+        // 否则未学节还在 DOM 外就被判「没有下一节」。
+        if (cat.ensureCatalogLoadedAsync) await cat.ensureCatalogLoadedAsync();
         // 先看全目录还剩多少没完成
         const bd = cat.breakdown();
         // skipFinished 关闭时：不主动跳课，按顺序走（已完成也停一下，便于人工核对）
@@ -958,7 +961,9 @@
         // 这正是用户报的「点了下一节也没用」。现在点完必须验收：
         // 轮询等目标条目拿到 active（SPA 异步，可能晚几百毫秒），没拿到就再点一次。
         // round-14【P4】：clickAndVerify 内部已加「当前节必须真的从旧节变成新节」的第二信号校验。
-        const switched = await cat.clickAndVerify(next, { timeout: 3000, tries: 2, fromKey: _prevKey });
+        // round-35：改用 Nav.jumpTo —— 它内部按「SPA 内部 API → URL 深链 → 拟人化点击」顺序尝试，
+        // 绝大多数情况不再依赖会被反作弊判定为脚本的合成点击。
+        const switched = await ZHS.Nav.jumpTo(next, { timeout: 3000, fromKey: _prevKey });
         if (!switched) {
           // round-14【P1】：点击失败 → 课时标识必须回滚，绝不让「记错节」发生
           ZHS.state.lessonKey = _prevKey;

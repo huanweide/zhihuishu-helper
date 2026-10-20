@@ -253,7 +253,7 @@
         ZHS.Log.info('已在目标课时，直接恢复播放位置');
       } else {
         ZHS.Log.info('正在切换到：' + rec.lessonKey);
-        ZHS.Catalog.click(target);
+        await ZHS.Nav.jumpTo(target, { fromKey: rec.lessonKey });
         await U.sleep(3000);   // 等切课加载
       }
 

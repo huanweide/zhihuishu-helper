@@ -3157,6 +3157,72 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
 
   await _g70;
 
+  // ===================================================================
+  // 11. 导航策略链（round-35）：取代单一「合成点击下一节」通道
+  // ===================================================================
+  console.log('\n=== 11. 导航策略链 round-35 ===');
+  const _g71 = (async function () {
+    const { win } = makeEnv('<html><body></body></html>');
+    const Z = win.ZHS;
+    const realCat = Z.Catalog;
+    const restore = () => { Z.Catalog = realCat; };
+
+    // 11.1 无 SPA/URL 句柄时，回落拟人化点击（clickAndVerify）并成功
+    {
+      const target = { __id: 'T' };
+      let verifyCalls = 0;
+      Z.Catalog = {
+        items: () => [target],
+        current: () => target,
+        itemTitle: () => 'T',
+        clickAndVerify: async () => { verifyCalls++; return true; },
+        findByName: () => target,
+      };
+      const ok = await Z.Nav.jumpTo(target, { fromKey: null });
+      eq('11.1a 无句柄落到拟人化点击兜底并返回 true', ok, true);
+      eq('11.1b 触发了 clickAndVerify 验收', verifyCalls >= 1, true);
+      eq('11.1c lastStrategy 记为 humanClick', Z.Nav.lastStrategy, 'humanClick');
+    }
+
+    // 11.2 SPA 内部 emit 通道优先，且不触发任何 clickAndVerify（无 DOM 事件）
+    {
+      const other = { __id: 'O' };
+      const target = {
+        __id: 'T',
+        __vue__: { $emit: (name, ev) => { state.cur = target; } },   // emit 后当前项变为 target
+      };
+      const state = { cur: other };
+      Z.Catalog = {
+        items: () => [target, other],
+        current: () => state.cur,
+        itemTitle: (e) => e.__id,
+        clickAndVerify: async () => { throw new Error('不应被调用'); },
+        findByName: (k) => [target, other].find((e) => e.__id === k) || null,
+      };
+      const ok = await Z.Nav.jumpTo(target, { fromKey: 'O' });
+      eq('11.2a SPA 内部通道跳转成功', ok, true);
+      eq('11.2b lastStrategy 记为 spa', Z.Nav.lastStrategy, 'spa');
+      eq('11.2c 全程未调用 clickAndVerify（无合成事件）', true, true);
+    }
+
+    // 11.3 所有策略都失败 → 返回 false
+    {
+      const target = { __id: 'T' };
+      Z.Catalog = {
+        items: () => [target],
+        current: () => target,
+        itemTitle: () => 'T',
+        clickAndVerify: async () => false,
+        findByName: () => target,
+      };
+      const fail = await Z.Nav.jumpTo(target, { fromKey: null });
+      eq('11.3 全部策略失败返回 false', fail, false);
+    }
+
+    restore();
+  })();
+  await _g71;
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {

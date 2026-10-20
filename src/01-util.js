@@ -177,6 +177,52 @@
       }
     },
 
+    /**
+     * 拟人化点击（round-35）：比 realClick 更接近人类操作序列。
+     *
+     * 仍是合成事件（页面 JS 无法产生 isTrusted=true 的事件），但智慧树反作弊主要
+     * 识别「瞬时、零位移、固定坐标」的机器点击。这里补上：随机起点 → 沿路径多步
+     * mousemove → 悬停 → 带微抖动的坐标点下 → 前后随机微延迟，把指纹从「机器」拉向「人」。
+     * 仅作为 Nav 策略③ 的最后兜底，不进主路径。
+     */
+    realClickHuman(el) {
+      if (!el) return false;
+      try { if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+      const r = el.getBoundingClientRect();
+      if (!r || r.width === 0 || r.height === 0) { return Util.realClick(el); }
+      const cx = r.x + r.width / 2;
+      const cy = r.y + r.height / 2;
+      const jit = () => (Math.random() - 0.5) * 4;          // ±2px 抖动
+      const ev = (type, x, y) => {
+        try {
+          el.dispatchEvent(new MouseEvent(type, {
+            bubbles: true, cancelable: true, view: window,
+            clientX: x, clientY: y, screenX: x, screenY: y,
+          }));
+        } catch (e) { /* 忽略 */ }
+      };
+      const move = (x, y) => {
+        try {
+          document.dispatchEvent(new MouseEvent('mousemove', {
+            bubbles: true, cancelable: true, view: window, clientX: x, clientY: y,
+          }));
+        } catch (e) { /* 忽略 */ }
+      };
+      // 随机起点 → 沿直线插值到元素中心（6 步）
+      let sx = cx + (Math.random() - 0.5) * 120;
+      let sy = cy + (Math.random() - 0.5) * 120;
+      for (let i = 1; i <= 6; i++) {
+        const t = i / 6;
+        move(sx + (cx - sx) * t, sy + (cy - sy) * t);
+      }
+      move(cx, cy);
+      ev('mouseover', cx, cy);
+      ev('mousedown', cx + jit(), cy + jit());
+      ev('mouseup', cx + jit(), cy + jit());
+      ev('click', cx + jit(), cy + jit());
+      return true;
+    },
+
     /** 等待元素出现 */
     async waitFor(selector, timeoutMs = 20000, interval = 300) {
       const deadline = Date.now() + timeoutMs;

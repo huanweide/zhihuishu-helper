@@ -4,6 +4,27 @@
 
 ---
 
+## [0.6.41] - 2026-10-20
+> 第二十轮补丁（round-35）：**导航通道去「脚本化」+ 跳未学习节可达性修复** —— 多样化策略替代单一合成点击、虚拟滚动目录补全不再提前锁死。
+
+### 背景
+用户原话：「下一节选项是不行的，会被检测到是脚本踢出去，不能用下一节这个通道方法跳转……目前还是不能跳转到没有学习的地方」。
+既有跳转通道 `gotoNext → Catalog.click → el.click()/realClick` 全是 `isTrusted=false` 的合成 MouseEvent，智慧树反作弊据此判定脚本并踢人；同时 `findNext` 受虚拟滚动限制，未滚到的未学节常不在 DOM 里，导致「跳不到没学过的地方」。
+
+### 改动
+1. **新增导航策略链 `02e-nav.js`（`ZHS.Nav.jumpTo`）**：按隐蔽度从高到低尝试，任一成功即收——
+   - ① `spa`：直接调 SPA 内部方法（Vue `$emit('click')` / React `props.onClick` / 播放器 `load(id)`），**零 DOM 事件，最隐蔽**；
+   - ② `url`：URL/hash 深链（浏览器原生导航；智慧树多数不支持，失败自动回落）；
+   - ③ `humanClick`：拟人化合成点击（`realClickHuman`：随机起点→路径 mousemove→悬停→微抖动坐标点击→前后随机微延迟），仅作最后兜底。
+   - 验收原则：①/② 无点击策略用「目录当前项是否真的变成目标项」判定（不触发二次点击）；只有③ 才走 `clickAndVerify`。
+2. **修复 `ensureCatalogLoaded` 过早锁死**：原实现首轮页面未就绪即 `!grew` 永久锁死 `_catalogLoaded`，虚拟滚动后面的未学节永远补不出来。现改为「连续两次 no-growth 才稳定锁」，并新增 `ensureCatalogLoadedAsync()`（异步等平台分批渲染）。`gotoNext` 切换前先 `await` 异步加载完整目录。
+3. **接线**：`05-scheduler.gotoNext` / `03-player.retryFromPlatformProgress` / `04-resume.restore` / `07-main` 进入即跳首节未学 四处跳转全部改走 `ZHS.Nav.jumpTo`；`Catalog.click` 保留给 `clickAndVerify` 内部与兜底。
+
+### 测试
+- 新增 11 节用例：SPA 内部通道优先且不调用 clickAndVerify；无句柄时回落拟人化点击兜底；全失败返回 false。
+
+---
+
 ## [0.6.40] - 2026-10-20
 > 第十九轮补丁（round-34）：**「不要被卡住」三层防卡死方案** —— 检测健康自检 + 完成态交叉校验 + 全局防卡死看门狗。
 
