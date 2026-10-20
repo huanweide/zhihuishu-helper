@@ -963,7 +963,7 @@
         // round-14【P4】：clickAndVerify 内部已加「当前节必须真的从旧节变成新节」的第二信号校验。
         // round-35：改用 Nav.jumpTo —— 它内部按「SPA 内部 API → URL 深链 → 拟人化点击」顺序尝试，
         // 绝大多数情况不再依赖会被反作弊判定为脚本的合成点击。
-        const switched = await ZHS.Nav.jumpTo(next, { timeout: 3000, fromKey: _prevKey });
+        const switched = await ZHS.Nav.jumpTo(next, { timeout: 3000, fromKey: _prevKey, allowNativeNext: true });
         if (!switched) {
           // round-14【P1】：点击失败 → 课时标识必须回滚，绝不让「记错节」发生
           ZHS.state.lessonKey = _prevKey;

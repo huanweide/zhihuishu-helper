@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.41
+// @version      0.6.42
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.41";
+window.__ZHS_BUILD__.version = "0.6.42";
 
 /* ===== 00-config.js ===== */
 /**
@@ -1409,16 +1409,13 @@ window.__ZHS_BUILD__.version = "0.6.41";
         if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
       } catch (e) { /* 滚动失败不影响点击 */ }
 
-      // 【round-26 真机校准】优先走「内部标题 + 拟真鼠标事件」这条路。
-      // 真机在旧版共享课（legacy）上验证：把带坐标的 mousedown/mouseup/click 三连
-      // 派发到 .catalogue_title → 页内换 video 源、URL 不变（成功的页内切集）；
-      // 而直接点 li 本体出现过整页跳到门户首页的情况（见 legacy.clickTarget 注释）。
-      // 只有显式配了 clickTarget 的适配器才走这条，其余保持「点条目本体」不变。
-      const ad = this.adapter;
-      if (ad && ad.clickTarget) {
-        let inner = null;
-        try { inner = el.querySelector(ad.clickTarget); } catch (e) { inner = null; }
-        if (inner && U.realClick && U.realClick(inner)) return true;
+      // round-36：不再裸点容器 el。真机结论（legacy .catalogue_title）——点标题/链接
+      // 子元素才触发切集，点 li 本体有时整页跳门户首页。故按优先级挑「最可能带处理器」的
+      // 子目标，用拟人化点击派发；找不到合适子目标才回落 el.click()。
+      const target = this._bestClickTarget(el);
+      if (target && target !== el) {
+        const fire = U.realClickHuman || U.realClick;
+        if (fire && fire(target)) return true;
       }
 
       try {
@@ -1432,6 +1429,26 @@ window.__ZHS_BUILD__.version = "0.6.41";
         ZHS.Log.error('点击章节失败：', e.message);
         return false;
       }
+    },
+
+    /**
+     * round-36：挑选目录项里「最可能绑定点击处理器」的子目标。
+     * 优先级（依据 legacy 真机：标题子元素可切、容器本体会跳门户）：
+     *   适配器 clickTarget → 标题/名称类子节点 → 带 onclick 的节点 → 真链接 a[href] → null（回落本体）
+     */
+    _bestClickTarget(el) {
+      if (!el || !el.querySelector) return null;
+      const ad = this.adapter;
+      const cands = [];
+      const push = (c) => { try { if (c && c !== el && cands.indexOf(c) < 0) cands.push(c); } catch (e) {} };
+      if (ad && ad.clickTarget) { try { push(el.querySelector(ad.clickTarget)); } catch (e) {} }
+      try {
+        const tn = el.querySelector('[class*="title"],[class*="name"],[class*="chapter"],[class*="text"],[class*="lesson"],[class*="catalogue"]');
+        push(tn);
+      } catch (e) {}
+      try { push(el.querySelector('[onclick]')); } catch (e) {}
+      try { push(el.querySelector('a[href]')); } catch (e) {}
+      return cands[0] || null;
     },
 
     /**
@@ -1998,6 +2015,20 @@ window.__ZHS_BUILD__.version = "0.6.41";
         }
       }
 
+      // 策略③：平台原生下一节/继续按钮（仅 gotoNext 场景允许）
+      if (opt.allowNativeNext) {
+        try {
+          const fired = await this._viaNativeNext();
+          if (fired && await this._waitSwitched(el, opt.fromKey, opt.timeout || 2500)) {
+            this.lastStrategy = 'nativeNext';
+            ZHS.Log.info('[Nav] 策略『nativeNext』跳转成功并验收');
+            return true;
+          }
+        } catch (e) {
+          this.lastError = 'nativeNext: ' + e.message;
+        }
+      }
+
       // 回落：拟人化点击（唯一会派发事件的策略）
       try {
         const ok = (cat && cat.clickAndVerify)
@@ -2009,6 +2040,29 @@ window.__ZHS_BUILD__.version = "0.6.41";
       }
       ZHS.Log.warn('[Nav] 所有跳转策略均失败（lastError=' + (this.lastError || 'n/a') + '）');
       return false;
+    },
+
+    /**
+     * 策略③：平台原生「下一节/下一集/继续学习」按钮（round-36，用户明确要求「用平台本身的按钮指令」）。
+     * 只在 gotoNext 场景开启（opt.allowNativeNext）——它按「下一节」推进，不保证等于任意指定目标 el，
+     * 但 gotoNext 的 next 本就是下一节，语义吻合；其它场景（续播定位到指定节）不启用，交给验收兜底。
+     */
+    async _viaNativeNext() {
+      const kw = /下一节|下一集|下一课时|下一个|继续学习|继续播放|继续课程|继 *续/;
+      const visible = (elm) => {
+        try { const s = getComputedStyle(elm); return s.display !== 'none' && s.visibility !== 'hidden'; }
+        catch (e) { return true; }
+      };
+      const els = Array.from(document.querySelectorAll('button,[role="button"],a,li,div,span,i')).filter((elm) => {
+        const t = (elm.textContent || '').replace(/\s+/g, '').trim();
+        if (!t || t.length > 10 || !kw.test(t)) return false;
+        return visible(elm);
+      });
+      if (!els.length) return false;
+      els.sort((a, b) => (b.tagName === 'BUTTON' ? 1 : 0) - (a.tagName === 'BUTTON' ? 1 : 0));  // 按钮类优先
+      const btn = els[0];
+      const fire = U.realClickHuman || ((x) => { x.click(); return true; });
+      return fire(btn);
     },
 
     /**
@@ -3661,7 +3715,7 @@ window.__ZHS_BUILD__.version = "0.6.41";
         // round-14【P4】：clickAndVerify 内部已加「当前节必须真的从旧节变成新节」的第二信号校验。
         // round-35：改用 Nav.jumpTo —— 它内部按「SPA 内部 API → URL 深链 → 拟人化点击」顺序尝试，
         // 绝大多数情况不再依赖会被反作弊判定为脚本的合成点击。
-        const switched = await ZHS.Nav.jumpTo(next, { timeout: 3000, fromKey: _prevKey });
+        const switched = await ZHS.Nav.jumpTo(next, { timeout: 3000, fromKey: _prevKey, allowNativeNext: true });
         if (!switched) {
           // round-14【P1】：点击失败 → 课时标识必须回滚，绝不让「记错节」发生
           ZHS.state.lessonKey = _prevKey;

@@ -54,6 +54,20 @@
         }
       }
 
+      // 策略③：平台原生下一节/继续按钮（仅 gotoNext 场景允许）
+      if (opt.allowNativeNext) {
+        try {
+          const fired = await this._viaNativeNext();
+          if (fired && await this._waitSwitched(el, opt.fromKey, opt.timeout || 2500)) {
+            this.lastStrategy = 'nativeNext';
+            ZHS.Log.info('[Nav] 策略『nativeNext』跳转成功并验收');
+            return true;
+          }
+        } catch (e) {
+          this.lastError = 'nativeNext: ' + e.message;
+        }
+      }
+
       // 回落：拟人化点击（唯一会派发事件的策略）
       try {
         const ok = (cat && cat.clickAndVerify)
@@ -65,6 +79,29 @@
       }
       ZHS.Log.warn('[Nav] 所有跳转策略均失败（lastError=' + (this.lastError || 'n/a') + '）');
       return false;
+    },
+
+    /**
+     * 策略③：平台原生「下一节/下一集/继续学习」按钮（round-36，用户明确要求「用平台本身的按钮指令」）。
+     * 只在 gotoNext 场景开启（opt.allowNativeNext）——它按「下一节」推进，不保证等于任意指定目标 el，
+     * 但 gotoNext 的 next 本就是下一节，语义吻合；其它场景（续播定位到指定节）不启用，交给验收兜底。
+     */
+    async _viaNativeNext() {
+      const kw = /下一节|下一集|下一课时|下一个|继续学习|继续播放|继续课程|继 *续/;
+      const visible = (elm) => {
+        try { const s = getComputedStyle(elm); return s.display !== 'none' && s.visibility !== 'hidden'; }
+        catch (e) { return true; }
+      };
+      const els = Array.from(document.querySelectorAll('button,[role="button"],a,li,div,span,i')).filter((elm) => {
+        const t = (elm.textContent || '').replace(/\s+/g, '').trim();
+        if (!t || t.length > 10 || !kw.test(t)) return false;
+        return visible(elm);
+      });
+      if (!els.length) return false;
+      els.sort((a, b) => (b.tagName === 'BUTTON' ? 1 : 0) - (a.tagName === 'BUTTON' ? 1 : 0));  // 按钮类优先
+      const btn = els[0];
+      const fire = U.realClickHuman || ((x) => { x.click(); return true; });
+      return fire(btn);
     },
 
     /**

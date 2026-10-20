@@ -3219,6 +3219,35 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
       eq('11.3 全部策略失败返回 false', fail, false);
     }
 
+    // 11.4 点击目标级联：优先标题子节点，而非裸容器（round-36）—— 先恢复真实 Catalog
+    {
+      Z.Catalog = realCat;
+      const doc = win.document;
+      const li = doc.createElement('li'); li.className = 'file-item';
+      const title = doc.createElement('span'); title.className = 'catalogue_title'; title.textContent = '1.1 导论';
+      const a = doc.createElement('a'); a.setAttribute('href', 'javascript:;'); a.textContent = '1.1 导论';
+      li.appendChild(title); li.appendChild(a);
+      eq('11.4a _bestClickTarget 优先选标题子节点', Z.Catalog._bestClickTarget(li), title);
+      const li2 = doc.createElement('li'); li2.appendChild(a.cloneNode(true));
+      eq('11.4b 无标题子节点回落 a[href]', Z.Catalog._bestClickTarget(li2), li2.querySelector('a'));
+    }
+
+    // 11.5 平台原生「下一节」按钮：能定位并拟人点击（round-36）
+    {
+      const doc = win.document;
+      const btn = doc.createElement('button'); btn.className = 'next-btn'; btn.textContent = '下一节';
+      doc.body.appendChild(btn);
+      let fired = null;
+      const orig = Z.Util.realClickHuman;
+      Z.Util.realClickHuman = (x) => { fired = x; return true; };
+      const ok = await Z.Nav._viaNativeNext();
+      Z.Util.realClickHuman = orig;
+      eq('11.5a _viaNativeNext 定位到原生下一节按钮', ok, true);
+      eq('11.5b 点火目标就是该按钮', fired, btn);
+      btn.remove();
+      eq('11.5c 无原生按钮时返回 false', await Z.Nav._viaNativeNext(), false);
+    }
+
     restore();
   })();
   await _g71;

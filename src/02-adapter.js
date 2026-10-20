@@ -705,16 +705,13 @@
         if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
       } catch (e) { /* 滚动失败不影响点击 */ }
 
-      // 【round-26 真机校准】优先走「内部标题 + 拟真鼠标事件」这条路。
-      // 真机在旧版共享课（legacy）上验证：把带坐标的 mousedown/mouseup/click 三连
-      // 派发到 .catalogue_title → 页内换 video 源、URL 不变（成功的页内切集）；
-      // 而直接点 li 本体出现过整页跳到门户首页的情况（见 legacy.clickTarget 注释）。
-      // 只有显式配了 clickTarget 的适配器才走这条，其余保持「点条目本体」不变。
-      const ad = this.adapter;
-      if (ad && ad.clickTarget) {
-        let inner = null;
-        try { inner = el.querySelector(ad.clickTarget); } catch (e) { inner = null; }
-        if (inner && U.realClick && U.realClick(inner)) return true;
+      // round-36：不再裸点容器 el。真机结论（legacy .catalogue_title）——点标题/链接
+      // 子元素才触发切集，点 li 本体有时整页跳门户首页。故按优先级挑「最可能带处理器」的
+      // 子目标，用拟人化点击派发；找不到合适子目标才回落 el.click()。
+      const target = this._bestClickTarget(el);
+      if (target && target !== el) {
+        const fire = U.realClickHuman || U.realClick;
+        if (fire && fire(target)) return true;
       }
 
       try {
@@ -728,6 +725,26 @@
         ZHS.Log.error('点击章节失败：', e.message);
         return false;
       }
+    },
+
+    /**
+     * round-36：挑选目录项里「最可能绑定点击处理器」的子目标。
+     * 优先级（依据 legacy 真机：标题子元素可切、容器本体会跳门户）：
+     *   适配器 clickTarget → 标题/名称类子节点 → 带 onclick 的节点 → 真链接 a[href] → null（回落本体）
+     */
+    _bestClickTarget(el) {
+      if (!el || !el.querySelector) return null;
+      const ad = this.adapter;
+      const cands = [];
+      const push = (c) => { try { if (c && c !== el && cands.indexOf(c) < 0) cands.push(c); } catch (e) {} };
+      if (ad && ad.clickTarget) { try { push(el.querySelector(ad.clickTarget)); } catch (e) {} }
+      try {
+        const tn = el.querySelector('[class*="title"],[class*="name"],[class*="chapter"],[class*="text"],[class*="lesson"],[class*="catalogue"]');
+        push(tn);
+      } catch (e) {}
+      try { push(el.querySelector('[onclick]')); } catch (e) {}
+      try { push(el.querySelector('a[href]')); } catch (e) {}
+      return cands[0] || null;
     },
 
     /**
