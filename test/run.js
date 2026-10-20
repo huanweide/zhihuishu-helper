@@ -3077,6 +3077,17 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
     ok('状态卡更新块位于 Catalog 调用之前',
       panelSrc.indexOf('#zhs-dlg-card') < panelSrc.indexOf('ZHS.Catalog.stats()'));
 
+    // 6) 日志页：切过去必须立刻有内容（修前必然空白）
+    const logBtn = Z.panel._shadow.querySelector('.tabs button[data-tab="log"]');
+    ok('日志页标签存在', !!logBtn);
+    if (logBtn) {
+      logBtn.click();                                  // 触发切 tab（内部会 refresh）
+      await U2Sleep(80);
+      const logsEl = Z.panel._shadow.querySelector('.logs');
+      const n = logsEl ? (logsEl.textContent || '').trim().length : -1;
+      ok('切到日志页后有日志内容', n > 0, '长度=' + n);
+    }
+
     Z.state.dialogPhase = 'none';
   })();
 

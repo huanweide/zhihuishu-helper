@@ -1343,6 +1343,16 @@
         }
       } catch (e) { ZHS.Log.debug('弹题状态卡刷新异常：' + (e && e.message)); }
 
+      // 日志页：切到该页时必须立刻有内容。
+      // 【2026-10-20 真机实测修】_renderLogs 原本只在 onLog() 里被调用，
+      // 而 onLog() 又要求「日志页已激活」才渲染 → 切到日志页的那一刻没有任何人渲染，
+      // 于是切过去一片空白，只有之后恰好产生一条新日志才会突然显示出来。
+      // 这里在每次刷新时补渲染：切页后 1.5 秒内必有内容，且日志随新条目滚动。
+      try {
+        const logPane = box.querySelector('.pane[data-pane="log"]');
+        if (logPane && logPane.classList.contains('on')) this._renderLogs(box);
+      } catch (e) { ZHS.Log.debug('日志页渲染异常：' + (e && e.message)); }
+
       const cfg = ZHS.config;
       const $ = (s) => box.querySelector(s);
       // 状态页元素取不到时直接跳过（面板结构被外部脚本改动等极端情况）
