@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.46
+// @version      0.6.47
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.46";
+window.__ZHS_BUILD__.version = "0.6.47";
 
 /* ===== 00-config.js ===== */
 /**
@@ -684,7 +684,10 @@ window.__ZHS_BUILD__.version = "0.6.46";
    */
   ZHS.Const = ZHS.Const || {};
   ZHS.Const.QUESTION_SELECTORS =
-    '#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog';
+    '#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog,'
+    // round-39b：AI 助教随堂练习弹题双变体（ocsjs 原厂：StudyPlusH5=.ai-test-question-wrapper，
+    // WishdomH5=.ai-class-exercise-dialog）。补进来才能被守卫/Observer 检测到，进而分流到简单处理器。
+    + ' .ai-test-question-wrapper, .ai-class-exercise-dialog';
 
   /**
    * 平台「视为已完成」的进度阈值（单一真源）。
@@ -3217,34 +3220,11 @@ window.__ZHS_BUILD__.version = "0.6.46";
         }
       }
 
-      // ===== 守卫 4：融合课 AI 随堂练习弹窗 → 选任意选项并提交 =====
-      // 融合课（AI 助教翻转课）播到 AI 时间点时，平台会暂停视频并弹出这个弹窗。
-      // 它没有关闭/跳过按钮，只能选一个选项再点提交才会消失；不处理就是
-      // 「播到一半停住、也不跳下一节」。选择器与流程照搬 Autovisor
-      // modules/fusion_adapter.py 的 skip_ai_exercise
-      // （选第一个 .option → 等 600ms → 点 footer 按钮 → 等 1000ms → 恢复播放）。
-      if (cfg.guardOverlays && U.hasStructurallyVisible(AI_EXERCISE_SELECTORS)) {
-        const opt = document.querySelector('.ai-class-exercise-dialog .option');
-        if (!opt) {
-          ZHS.Log.debug('AI 随堂练习弹窗里没找到选项按钮，等下一轮');
-          return;
-        }
-        opt.click();
-        ZHS.Log.info('检测到 AI 随堂练习弹窗，已选中第一个选项');
-        await U.sleep(600);
-        const submit = document.querySelector('.ai-class-exercise-dialog .el-dialog__footer button.el-button');
-        if (submit) submit.click();
-        await U.sleep(1000);
-        if (video) {
-          try {
-            video.muted = true;               // 静音兜底：部分浏览器对非用户手势的 play() 会拒绝
-            const p = video.play();
-            if (p && p.catch) p.catch(() => {});
-          } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
-        }
-        ZHS.Log.info('AI 随堂练习已提交，视频继续');
-        return;
-      }
+      // ===== 守卫 4：融合课 AI 随堂练习弹窗 =====
+      // round-39b：已上收为统一处理器——AI 弹题命中 QUESTION_SELECTORS 后被守卫 2 交给
+      // Answerer.handleDialog，并在其入口按 _isAiExercise 分流到 _handleAiExercise
+      // （选→提交→关闭→验收，ocsjs 原厂 grounding，覆盖 .ai-test-question-wrapper 双变体）。
+      // 此处不再重复处理，避免两套逻辑打架；守卫 2 已 return，正常不会到达这里。
 
       // ===== 无视频：先等加载，连续多个 tick 仍无才判为文档节点切下一节 =====
       // 防止刚启动视频未加载就误切课
@@ -7423,7 +7403,7 @@ window.__ZHS_BUILD__.version = "0.6.46";
 
   /** 选项类元素（用于判断一个弹窗「是不是题」） */
   const OPTION_FEATURE_SELECTORS = '.el-radio, .el-checkbox, [role="radio"], [role="option"],'
-    + ' .option-item, .choice-item, .answer-option, ul li';
+    + ' .option-item, .choice-item, .answer-option, ul li, .option';
   /** 题干类元素（同上） */
   const TITLE_FEATURE_SELECTORS = '.topic-title, .topic-content, .question-topic,'
     + ' .el-dialog__title, .topic-question';
@@ -7663,12 +7643,17 @@ window.__ZHS_BUILD__.version = "0.6.46";
    *   0 = 都不是（公告/提示/设置窗之类）
    */
   function questionScore(el) {
+    // round-39b：AI 助教随堂练习容器（双变体）本身就是一道题，直接保底 ≥2 分，
+    // 免得它的选项是自定义 .option（不在传统特征里）时被误判成"不是题"→ root() 漏掉。
+    let aiBonus = 0;
+    try { if (el.matches && el.matches('.ai-test-question-wrapper, .ai-class-exercise-dialog')) aiBonus = 2; } catch (e) { /* 忽略 */ }
     const hasOpt = !!el.querySelector(OPTION_FEATURE_SELECTORS);
     const hasTitle = !!el.querySelector(TITLE_FEATURE_SELECTORS);
-    if (hasOpt && hasTitle) return 3;
-    if (hasOpt) return 2;
-    if (hasTitle) return 1;
-    return 0;
+    let s = 0;
+    if (hasOpt && hasTitle) s = 3;
+    else if (hasOpt) s = 2;
+    else if (hasTitle) s = 1;
+    return Math.max(s, aiBonus);
   }
 
   const DialogQuestions = {
@@ -10050,6 +10035,14 @@ ${question}${optionText}
         return;
       }
 
+      // round-39b：AI 助教随堂练习弹题分流（Root Cause：此前它命中 QUESTION_SELECTORS 被
+      // 守卫 2 交给本 Answerer 的 isChecked 门控流，而 AI 弹窗选中态常不可见 → 永远"选不中"）。
+      // 现改走 ocsjs 同款简单处理器：选一项→提交→关闭→以「弹窗消失」验收，绝不依赖选中态。
+      if (this._isAiExercise(root)) {
+        await this._handleAiExercise(root);
+        return;
+      }
+
       // 防止同一份弹题重复处理（用题干+选项拼接作签名）。
       // 手动触发例外：用户主动点了「答题」按钮，即使签名没变也必须重试，
       // 否则按钮看起来就是「点了没反应」。
@@ -10447,6 +10440,122 @@ ${question}${optionText}
       ZHS.Log.warn('逐个选项均未确认选中，遵守「没答完不关」，转人工');
       this._resumePlay();
       return false;
+    },
+
+    /**
+     * round-39b：当前 root（或页面）是否是 AI 助教随堂练习弹题（双变体）。
+     */
+    _isAiExercise(root) {
+      try {
+        if (root && root.matches && root.matches('.ai-test-question-wrapper, .ai-class-exercise-dialog')) return true;
+        const scope = (root && root.querySelector) ? root : document;
+        return !!scope.querySelector('.ai-test-question-wrapper, .ai-class-exercise-dialog');
+      } catch (e) { return false; }
+    },
+
+    /** round-39b：AI 弹窗盒子是否仍可见（含祖先链 inline 隐藏判定，Element UI 藏 wrapper） */
+    _aiBoxVisible(box) {
+      try {
+        if (!box || !document.contains(box)) return false;
+        let n = box;
+        while (n && n.style) {
+          if (n.style.display === 'none' || n.style.visibility === 'hidden') return false;
+          n = n.parentElement;
+        }
+        return U.isStructurallyVisible ? U.isStructurallyVisible(box) : true;
+      } catch (e) { return false; }
+    },
+
+    /**
+     * round-39b：AI 助教随堂练习弹题统一处理器（ocsjs 原厂 grounding）。
+     * 双变体：.ai-test-question-wrapper（选项 .options .option，提交 .submit-btn .submits，关 .close-box）；
+     *         .ai-class-exercise-dialog（选项 .ques-list .item .option / .option，提交 .el-dialog__footer .el-button，关 .header-icon）。
+     * 流程：选一项（内嵌答案→求解→第一个）→ 点提交 → 点关闭 → 以「弹窗是否消失」验收 → 恢复播放。
+     * 关键：**不依赖 isChecked**（AI 弹窗选中态常不可见），成功判据 = 弹窗关掉没。
+     */
+    async _handleAiExercise(root) {
+      const video = ZHS.Player && ZHS.Player.video();
+      if (video && !video.paused) { try { video.pause(); } catch (e) {} }
+      let box = null;
+      try {
+        box = (root && root.querySelector)
+          ? (root.querySelector('.ai-test-question-wrapper, .ai-class-exercise-dialog') || root)
+          : document.querySelector('.ai-test-question-wrapper, .ai-class-exercise-dialog');
+      } catch (e) { box = root || null; }
+      if (!box) return;
+
+      // 1) 选哪项：内嵌答案 > 求解(LLM/题库/启发式) > 第一个
+      let idx = 0;
+      try {
+        let ans = null;
+        try { ans = ZHS.Questions.Dialog.answerFromDom(); } catch (e) { ans = null; }
+        if (!ans) {
+          const q = ZHS.Questions.Dialog.readCurrent(box);
+          if (q && q.options && q.options.length) {
+            const r = await ZHS.Solver.solve({ title: q.title, options: q.options, type: q.type });
+            if (r && r.answer) ans = r.answer;
+          }
+        }
+        if (ans) { const ii = ZHS.Bank.toIndexes(ans); if (ii.length) idx = ii[0]; }
+      } catch (e) { /* 求解失败用第一个 */ }
+
+      // 2) 选项元素（双变体选择器优先，宽松回退）
+      let opts = Array.from(box.querySelectorAll('.options .option, .ques-list .item .option, .option'));
+      if (opts.length < 2) {
+        const more = Array.from(box.querySelectorAll('.option, [role="option"], .option-item, .choice-item'));
+        opts = opts.concat(more.filter((el) => opts.indexOf(el) < 0));
+      }
+      if (!opts.length) {
+        ZHS.Log.warn('AI 随堂练习没找到选项元素，转人工');
+        this._pendingHuman = true;
+        if (ZHS.panel) ZHS.panel.alert('AI 随堂练习没识别到选项，请手动选一个', 'warn', 8000);
+        return;
+      }
+      const pick = opts[Math.min(idx, opts.length - 1)] || opts[0];
+      try { pick.click(); } catch (e) {}
+      ZHS.Log.info('AI 随堂练习：已选第 ' + (opts.indexOf(pick) + 1) + '/' + opts.length + ' 项');
+      await U.sleep(800);
+
+      // 3) 提交（双变体 + 文本兜底）
+      let submit = null;
+      try {
+        submit = box.querySelector('.submit-btn .submits, .el-dialog__footer button.el-button, .el-dialog__footer .el-button.btn, .submit-btn, .btn.submit');
+      } catch (e) {}
+      if (!submit) {
+        try {
+          submit = Array.from(box.querySelectorAll('button, .el-button, .btn'))
+            .find((b) => /^(提交|确定|确认|提交答案)$/.test((b.textContent || '').replace(/\s+/g, ''))) || null;
+        } catch (e) {}
+      }
+      if (submit) { try { submit.click(); ZHS.Log.info('AI 随堂练习：已点提交'); } catch (e) {} }
+      await U.sleep(800);
+
+      // 4) 关闭（提交后仍在才关）
+      if (this._aiBoxVisible(box)) {
+        let closeBtn = null;
+        try {
+          closeBtn = box.querySelector('.close-box, .header-icon, .el-dialog__close, .close-btn')
+            || (box.closest('.el-dialog__wrapper') || box).querySelector('.close-box, .header-icon, .el-dialog__close, .close-btn');
+        } catch (e) {}
+        if (!closeBtn) {
+          try {
+            closeBtn = Array.from(box.querySelectorAll('button, .el-button, .btn, [class*="close"]'))
+              .find((b) => /^(关闭|我知道了)$/.test((b.textContent || '').replace(/\s+/g, ''))) || null;
+          } catch (e) {}
+        }
+        if (closeBtn) { try { closeBtn.click(); ZHS.Log.info('AI 随堂练习：已点关闭'); } catch (e) {} }
+        await U.sleep(600);
+      }
+
+      // 5) 验收（弹窗消失）+ 恢复
+      const gone = !this._aiBoxVisible(box);
+      ZHS.Log.info(gone ? 'AI 随堂练习已处理并关闭' : 'AI 随堂练习已提交（弹窗仍在，下轮再判）');
+      if (ZHS.Player) ZHS.Player.resetSync();
+      ZHS.state.dialogActive = false;
+      ZHS.state.dialogPhase = 'answered';
+      if (video && video.paused && !video.ended) {
+        try { video.muted = true; const p = video.play(); if (p && p.catch) p.catch(() => {}); ZHS.Log.info('AI 随堂练习后已恢复播放'); } catch (e) {}
+      }
     },
 
     /**

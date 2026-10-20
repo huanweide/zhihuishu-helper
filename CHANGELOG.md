@@ -4,6 +4,21 @@
 
 ---
 
+## [0.6.47] - 2026-10-20
+> 第二十六轮补丁（round-39b）：**AI 助教随堂练习弹题分流到 ocsjs 同款简单处理器** —— 多轮只读审计 + 开会质询定位 Root Cause（路由抢跑）后落地。
+
+### Root Cause（多轮审计收敛）
+AI 助教弹题命中 `QUESTION_SELECTORS`（`.el-dialog__wrapper .el-dialog`）→ 被调度器守卫 2 交给 `Answerer` 的 **isChecked 门控流**；而 AI 弹题选中态常不可见（代码自留真机结论"点选项后选中态不变"）→ 永远判"选不中"→ 转人工。**正确的处理器（守卫 4，ocsjs 同款）本就存在，却被守卫 2 的 `return` 抢先挡死。**
+
+### 改动（按"问题×所有解法×代码"总表落地）
+1. **检测**：`Const.QUESTION_SELECTORS` 补 `.ai-test-question-wrapper` / `.ai-class-exercise-dialog`（此前 StudyPlusH5 变体完全不被发现）。
+2. **路由分流**：`Answerer.handleDialog` 入口按 `_isAiExercise(root)` 判定，AI 弹题**直接转 `_handleAiExercise` 并 return**，不再进 isChecked 流（自动 + 手动两条路径都覆盖，因都收敛到 handleDialog）。
+3. **统一处理器 `_handleAiExercise`**（ocsjs 原厂 grounding，双变体）：选一项（内嵌答案→LLM/题库/启发式→第一个）→ 点提交（`.submit-btn .submits`/`.el-dialog__footer button.el-button`/文本兜底）→ 点关闭（`.close-box`/`.header-icon`/`.el-dialog__close`/文本兜底）→ **以「弹窗是否消失」验收（`_aiBoxVisible`）** → 恢复播放。**成功判据=关掉没，不依赖选中态。**
+4. **移除死代码**：调度器旧守卫 4 已被 `_handleAiExercise` 取代，删除避免两套逻辑打架。
+5. 经典 `#playTopic-dialog` 与其它弹题路径不变，仍走 Answerer 原流程。
+
+---
+
 ## [0.6.46] - 2026-10-20
 > 第二十五轮补丁（round-39）：**按 ocsjs 原厂实现校正弹窗答题全流程** —— 单次纯净点击 + 选完先提交再关 + AI 弹窗专用选择器。
 

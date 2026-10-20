@@ -465,34 +465,11 @@
         }
       }
 
-      // ===== 守卫 4：融合课 AI 随堂练习弹窗 → 选任意选项并提交 =====
-      // 融合课（AI 助教翻转课）播到 AI 时间点时，平台会暂停视频并弹出这个弹窗。
-      // 它没有关闭/跳过按钮，只能选一个选项再点提交才会消失；不处理就是
-      // 「播到一半停住、也不跳下一节」。选择器与流程照搬 Autovisor
-      // modules/fusion_adapter.py 的 skip_ai_exercise
-      // （选第一个 .option → 等 600ms → 点 footer 按钮 → 等 1000ms → 恢复播放）。
-      if (cfg.guardOverlays && U.hasStructurallyVisible(AI_EXERCISE_SELECTORS)) {
-        const opt = document.querySelector('.ai-class-exercise-dialog .option');
-        if (!opt) {
-          ZHS.Log.debug('AI 随堂练习弹窗里没找到选项按钮，等下一轮');
-          return;
-        }
-        opt.click();
-        ZHS.Log.info('检测到 AI 随堂练习弹窗，已选中第一个选项');
-        await U.sleep(600);
-        const submit = document.querySelector('.ai-class-exercise-dialog .el-dialog__footer button.el-button');
-        if (submit) submit.click();
-        await U.sleep(1000);
-        if (video) {
-          try {
-            video.muted = true;               // 静音兜底：部分浏览器对非用户手势的 play() 会拒绝
-            const p = video.play();
-            if (p && p.catch) p.catch(() => {});
-          } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
-        }
-        ZHS.Log.info('AI 随堂练习已提交，视频继续');
-        return;
-      }
+      // ===== 守卫 4：融合课 AI 随堂练习弹窗 =====
+      // round-39b：已上收为统一处理器——AI 弹题命中 QUESTION_SELECTORS 后被守卫 2 交给
+      // Answerer.handleDialog，并在其入口按 _isAiExercise 分流到 _handleAiExercise
+      // （选→提交→关闭→验收，ocsjs 原厂 grounding，覆盖 .ai-test-question-wrapper 双变体）。
+      // 此处不再重复处理，避免两套逻辑打架；守卫 2 已 return，正常不会到达这里。
 
       // ===== 无视频：先等加载，连续多个 tick 仍无才判为文档节点切下一节 =====
       // 防止刚启动视频未加载就误切课

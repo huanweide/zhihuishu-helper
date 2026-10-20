@@ -1201,12 +1201,13 @@ const _aiExercise = (async () => {
 <video></video>
 </body></html>`;
   const { win } = makeEnv(html, 'https://fusioncourseh5.zhihuishu.com/stuStudy');
+  const A = win.ZHS.Answerer;
   const S = win.ZHS.Scheduler;
   const doc = win.document;
   const video = doc.querySelector('video');
+  win.ZHS.config.autoAnswer = true;
+  win.ZHS.config.answerDialog = true;
   win.ZHS.state.running = true;
-  // 只验证这一轮 tick 没有触发跳课
-  // （lessonKey 会被 boot 的异步绑定改写，不能当「有没有切课」的判据）
   let navCalls = 0;
   const origGoto = S.gotoNext.bind(S);
   S.gotoNext = function () { navCalls++; return origGoto.apply(null, arguments); };
@@ -1220,11 +1221,14 @@ const _aiExercise = (async () => {
     .addEventListener('click', () => { submitClicks++; });
   video.play = function () { playCalls++; return Promise.resolve(); };
 
-  await S.tick();
+  // round-39b：走 handleDialog 入口——内部 _isAiExercise 命中 AI 弹窗 → 分流到 _handleAiExercise
+  // （选一项→提交→恢复），不再进 isChecked 门控流。
+  await A.handleDialog();
+  await win.ZHS.Util.sleep(400);
 
-  eq('点了第一个选项', optClicks, 1);
-  eq('点了提交按钮', submitClicks, 1);
-  eq('提交后恢复播放', playCalls, 1);
+  eq('AI 弹题分流：点了选项', optClicks >= 1, true);
+  eq('AI 弹题分流：点了提交', submitClicks >= 1, true);
+  eq('AI 弹题分流：恢复播放', playCalls >= 1, true);
   eq('AI 弹窗处理期间没有跳课', navCalls, 0);
 })();
 

@@ -95,7 +95,7 @@
 
   /** 选项类元素（用于判断一个弹窗「是不是题」） */
   const OPTION_FEATURE_SELECTORS = '.el-radio, .el-checkbox, [role="radio"], [role="option"],'
-    + ' .option-item, .choice-item, .answer-option, ul li';
+    + ' .option-item, .choice-item, .answer-option, ul li, .option';
   /** 题干类元素（同上） */
   const TITLE_FEATURE_SELECTORS = '.topic-title, .topic-content, .question-topic,'
     + ' .el-dialog__title, .topic-question';
@@ -335,12 +335,17 @@
    *   0 = 都不是（公告/提示/设置窗之类）
    */
   function questionScore(el) {
+    // round-39b：AI 助教随堂练习容器（双变体）本身就是一道题，直接保底 ≥2 分，
+    // 免得它的选项是自定义 .option（不在传统特征里）时被误判成"不是题"→ root() 漏掉。
+    let aiBonus = 0;
+    try { if (el.matches && el.matches('.ai-test-question-wrapper, .ai-class-exercise-dialog')) aiBonus = 2; } catch (e) { /* 忽略 */ }
     const hasOpt = !!el.querySelector(OPTION_FEATURE_SELECTORS);
     const hasTitle = !!el.querySelector(TITLE_FEATURE_SELECTORS);
-    if (hasOpt && hasTitle) return 3;
-    if (hasOpt) return 2;
-    if (hasTitle) return 1;
-    return 0;
+    let s = 0;
+    if (hasOpt && hasTitle) s = 3;
+    else if (hasOpt) s = 2;
+    else if (hasTitle) s = 1;
+    return Math.max(s, aiBonus);
   }
 
   const DialogQuestions = {

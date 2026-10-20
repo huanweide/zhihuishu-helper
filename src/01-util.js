@@ -326,7 +326,10 @@
    */
   ZHS.Const = ZHS.Const || {};
   ZHS.Const.QUESTION_SELECTORS =
-    '#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog';
+    '#playTopic-dialog, [class*="topic-dialog"], .el-dialog__wrapper .el-dialog,'
+    // round-39b：AI 助教随堂练习弹题双变体（ocsjs 原厂：StudyPlusH5=.ai-test-question-wrapper，
+    // WishdomH5=.ai-class-exercise-dialog）。补进来才能被守卫/Observer 检测到，进而分流到简单处理器。
+    + ' .ai-test-question-wrapper, .ai-class-exercise-dialog';
 
   /**
    * 平台「视为已完成」的进度阈值（单一真源）。
