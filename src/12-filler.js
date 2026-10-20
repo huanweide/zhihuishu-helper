@@ -88,6 +88,48 @@
       if (await fireOne(t)) return true;
     }
 
+    // ===== round-37b：三种本质不同的点击机制（治「子目标都点过仍选不中」） =====
+    // (a) 坐标点击最顶层元素：选项若被遮罩/蒙层盖住，点元素本身被拦，点坐标命中的才是真控件
+    try {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+        const top = document.elementFromPoint(cx, cy);
+        if (top && top !== el) {
+          if (U.realClickHuman) U.realClickHuman(top); else { try { top.click(); } catch (e) {} }
+          await sleep(200);
+          if (isChecked(el)) return true;
+        }
+      }
+    } catch (e) { /* 忽略 */ }
+
+    // (b) 指针事件：现代框架（含部分 AI 部件）监听 pointerdown/pointerup 而非 mouse 事件
+    try {
+      const r = el.getBoundingClientRect();
+      const base = { bubbles: true, cancelable: true, view: window, composed: true, pointerType: 'mouse', isPrimary: true, button: 0, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
+      if (window.PointerEvent) {
+        el.dispatchEvent(new PointerEvent('pointerover', base));
+        el.dispatchEvent(new PointerEvent('pointerdown', Object.assign({}, base, { buttons: 1 })));
+        el.dispatchEvent(new PointerEvent('pointerup', Object.assign({}, base, { buttons: 0 })));
+        el.dispatchEvent(new PointerEvent('click', base));
+        await sleep(200);
+        if (isChecked(el)) return true;
+      }
+    } catch (e) { /* 忽略 */ }
+
+    // (c) 聚焦 + 键盘：radio 组常用 空格/回车/方向键 切换选中
+    try {
+      if (el.focus) el.focus();
+      const keys = [[' ', 32], ['Enter', 13], ['ArrowRight', 39], ['ArrowDown', 40]];
+      for (const [key, kc] of keys) {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key, code: key === ' ' ? 'Space' : key, keyCode: kc, which: kc, bubbles: true, cancelable: true }));
+        el.dispatchEvent(new KeyboardEvent('keyup', { key, code: key === ' ' ? 'Space' : key, keyCode: kc, which: kc, bubbles: true, cancelable: true }));
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(120);
+        if (isChecked(el)) return true;
+      }
+    } catch (e) { /* 忽略 */ }
+
     // 强制兜底：直接置 input.checked + 派发事件
     const input = el.querySelector ? el.querySelector('input') : (el.matches && el.matches('input') ? el : null);
     if (input) {
@@ -103,6 +145,54 @@
 
     ZHS.Log.warn('选项点击后仍未选中');
     return false;
+  }
+
+  /**
+   * round-37b：选项选不中时的诊断转储——把选项真实 DOM 结构打进日志，供精准修复。
+   * 输出：root 信息/是否 shadow/iframe、每个选项的 tag/class/属性/坐标/是否被遮罩
+   * （elementFromPoint）/onclick/完整 HTML 片段、弹窗内 radio 选中态。
+   */
+  function dumpDiag(root, els) {
+    const lines = [];
+    const t = () => new Date().toLocaleTimeString();
+    try {
+      lines.push('=== 选项诊断 ' + t() + '（请把这段发给开发者） ===');
+      if (root) {
+        const rr = root.getBoundingClientRect ? root.getBoundingClientRect() : { x: 0, y: 0, width: 0, height: 0 };
+        const path = []; let n = root;
+        while (n && path.length < 8) { path.push(n.tagName + (n.id ? '#' + n.id : '') + ((n.className && n.className.toString) ? '.' + n.className.toString().split(/\s+/).slice(0, 2).join('.') : '')); n = n.parentElement; }
+        lines.push('root: ' + path.join(' < ') + ' | shadow=' + (root.getRootNode ? (root.getRootNode() instanceof ShadowRoot) : '?')
+          + ' | rect=' + Math.round(rr.x) + ',' + Math.round(rr.y) + ',' + Math.round(rr.width) + 'x' + Math.round(rr.height));
+      }
+      try {
+        const ifr = Array.from(document.querySelectorAll('iframe')).map((f) => (f.src || '').slice(0, 80)).filter(Boolean);
+        lines.push('iframes: ' + JSON.stringify(ifr.slice(0, 8)));
+      } catch (e) { lines.push('iframes err: ' + e.message); }
+      (els || []).slice(0, 6).forEach((el, i) => {
+        try {
+          const r = el.getBoundingClientRect();
+          const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+          let at = null; try { at = document.elementFromPoint(cx, cy); } catch (e) {}
+          const attrs = {}; try { Array.from(el.attributes || []).forEach((a) => { attrs[a.name] = String(a.value).slice(0, 60); }); } catch (e) {}
+          lines.push('opt' + i + ': <' + el.tagName + '> cls="' + (el.className || '').toString().slice(0, 120) + '"');
+          lines.push('  attrs=' + JSON.stringify(attrs));
+          lines.push('  rect=' + Math.round(r.x) + ',' + Math.round(r.y) + ',' + Math.round(r.width) + 'x' + Math.round(r.height)
+            + ' onclick=' + (el.getAttribute ? !!el.getAttribute('onclick') : '?')
+            + ' shadow=' + (el.getRootNode ? (el.getRootNode() instanceof ShadowRoot) : '?'));
+          lines.push('  elementFromPoint(center)=' + (at ? at.tagName + '.' + (at.className || '').toString().slice(0, 40) : 'null')
+            + ' sameAsEl=' + (at === el) + ' coveredBy=' + (at && at !== el && !el.contains(at) ? 'YES(被其它元素盖住)' : 'no'));
+          lines.push('  html=' + (el.outerHTML || '').replace(/\s+/g, ' ').slice(0, 500));
+        } catch (e) { lines.push('opt' + i + ' err: ' + e.message); }
+      });
+      try {
+        const scope = (root && root.querySelectorAll) ? root : document;
+        const radios = Array.from(scope.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
+          .slice(0, 12).map((r, idx) => idx + ':' + (r.checked ? '✓' : '✗') + ':' + (r.name || '') + ':' + (r.className || '').toString().slice(0, 30));
+        lines.push('radios: ' + JSON.stringify(radios));
+      } catch (e) { lines.push('radios err: ' + e.message); }
+      lines.push('=== 诊断结束 ===');
+    } catch (e) { lines.push('诊断异常: ' + e.message); }
+    lines.forEach((l) => { try { ZHS.Log.warn(l); } catch (e) {} });
   }
 
   /** 填文本（填空/简答） */
@@ -131,6 +221,8 @@
 
   const Filler = {
     isChecked,
+    isClearlyChecked,
+    dumpDiag,
     /**
      * 点击一个选项（对外暴露）。
      * 原先 clickOption 只在模块内部使用，13-answerer.js 的 A/B 兜底路径

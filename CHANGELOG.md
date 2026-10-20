@@ -4,6 +4,22 @@
 
 ---
 
+## [0.6.44] - 2026-10-20
+> 第二十三轮补丁（round-37b）：**治「选项点不中」再加三种机制 + 诊断转储** —— 为精准修复采集真实 DOM。
+
+### 背景
+v0.6.43 后真机：AI助教弹题 `LLM：B` → 逐个选项试过 → 仍 `选项点击后仍未选中` → 转人工。多子目标 × 多点击方式都无效，说明点击机制/对象根本不对，需先看清真实 DOM 再精准修。
+
+### 改动
+1. **`clickOption` 增三种本质不同机制**：(a) 坐标点击 `elementFromPoint(center)` 最顶层元素（破遮罩/蒙层拦截）；(b) 指针事件 `pointerdown/pointerup/click`（治只监听 pointer 的现代部件）；(c) 聚焦 + 键盘（空格/回车/方向键，治 radio 组）。
+2. **诊断转储 `Filler.dumpDiag(root, els)`**：选不中转人工前，把选项真实结构打进日志——root 路径/是否 shadow/iframe、每个选项 tag/class/全部属性/坐标/是否被其它元素盖住（elementFromPoint）/onclick/完整 HTML 片段、弹窗内 radio 选中态。**用户把日志这段发回即可精准修**。
+3. 接线：`_ensureAnsweredThenClose` 与 `_tryNonStandardAB` 第二段的"选不中"分支均先 `dumpDiag` 再转人工。
+
+### 说明
+若诊断显示选项被遮罩盖住 → 用坐标点击已覆盖；若在 shadow/iframe → 按结构精准定位；若确需真实点击(isTrusted) → 需外部 CDP 真实点击方案（下轮可建）。先拿诊断再定。
+
+---
+
 ## [0.6.43] - 2026-10-20
 > 第二十二轮补丁（round-37）：**修「选项点了选不中」+ 严格「没答完不能关闭」** —— 真机日志驱动（AI助教课中弹题）。
 

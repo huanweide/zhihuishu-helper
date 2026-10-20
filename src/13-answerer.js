@@ -374,6 +374,7 @@
         // 严格遵守「没答完不能关」：不硬关，转人工，避免关不掉的死循环。
         if (this._giveUpSigs) this._giveUpSigs.add(sig);
         this._pendingHuman = true;
+        try { if (ZHS.Filler && ZHS.Filler.dumpDiag) ZHS.Filler.dumpDiag(root, opts); } catch (e) { /* 忽略 */ }
         if (ZHS.panel) ZHS.panel.alert('这题要选中才能关，但自动点选没生效（可能是需真实点击的控件），请手动选一个', 'warn', 12000);
         ZHS.Log.warn('无通道兜底逐个试选项均未确认选中，遵守「没答完不关」，转人工');
         this._resumePlay();
@@ -449,6 +450,7 @@
 
       // 逐个都选不中 → 遵守「没答完不关」，转人工
       this._pendingHuman = true;
+      try { if (ZHS.Filler && ZHS.Filler.dumpDiag) ZHS.Filler.dumpDiag(root, els); } catch (e) { /* 诊断失败不影响主流程 */ }
       if (ZHS.panel) ZHS.panel.alert('这题要选中才能关，但自动点选没生效（可能是需真实点击的控件），请手动选一个', 'warn', 12000);
       ZHS.Log.warn('逐个选项均未确认选中，遵守「没答完不关」，转人工');
       this._resumePlay();
