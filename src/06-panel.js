@@ -1278,6 +1278,21 @@
      * 绝不能影响主流程，所以这里兜住并只在 debug 日志里留痕。
      */
     refresh() {
+      // 【this 绑定防御 · 2026-10-20 真机实测修】
+      //
+      // 背景：本模块用 `if (!ZHS.panel) ZHS.panel = {}` 建占位对象，末尾再
+      // `Object.assign(ZHS.panel, Panel)` 把方法填进去。于是出现两份对象：
+      //   · 挂载走 ZHS.panel.mount()  → this = 占位对象，_root/_shadow 落在它身上；
+      //   · 若别处写成 Panel.refresh()  → this = 原 Panel 对象，_shadow 永远 undefined。
+      // 后者会让 _refreshInner() 第一行 `if (!this._shadow) return;` 静默早退，
+      // 面板所有状态字段与弹题状态卡永久停在挂载瞬间的值，且**没有任何报错**。
+      // （实测铁证：.s-uptime 75 秒不涨、状态卡恒为「弹题：空闲」、日志页永远空白。）
+      //
+      // 这里做一次转发：只要真正持有面板实例的是 ZHS.panel，就转给它执行。
+      // 这样任何调用姿势（Panel.refresh / ZHS.panel.refresh）都能真正刷新。
+      if (this !== ZHS.panel && ZHS.panel && ZHS.panel._shadow) {
+        return ZHS.panel.refresh();
+      }
       // 自愈：面板宿主被页面脚本移除后，重新挂载，避免静默消失（round-7 面板⑨）
       if (this._root && !document.contains(this._root)) {
         try {
@@ -1303,6 +1318,31 @@
       if (!this._shadow) return;
       const box = this._shadow.querySelector('.wrap');
       if (!box) return;
+
+      // round-31【弹题实时状态卡】：必须放在 Player/Catalog 之前更新。
+      //
+      // 【2026-10-20 真机实测修正】原实现把这段放在 _refreshInner() 最末尾，
+      // 注释写着「独立于 Catalog，Catalog 异常也不影响此卡刷新」——但代码位置在末尾，
+      // 只要上面 Player.video() / Catalog.stats() / Catalog.breakdown() 任意一处抛异常，
+      // 整段 refresh() 就在到达这里之前中断，卡片永远停在「弹题：空闲」。
+      // 真机就是被这个坑骗了：日志明明在自动作答，卡片 9 秒内 600 次采样纹丝不动。
+      // 放到最前面 = 任何后续异常都影响不到它，注释的承诺才算兑现。
+      try {
+        const dlgCard = box.querySelector('#zhs-dlg-card');
+        if (dlgCard) {
+          const phase = ZHS.state.dialogPhase || 'none';
+          const phaseText = {
+            'none': '弹题：空闲', 'detected': '弹题：检测到',
+            'answering': '弹题：作答中', 'answered': '弹题：已答',
+            'pending-human': '弹题：待人工',
+          }[phase] || '弹题：空闲';
+          const suffix = phase === 'pending-human' ? 'pending' : phase;
+          dlgCard.className = 'dlg-card s-dlg-' + suffix;
+          const dlgText = dlgCard.querySelector('.s-dlg');
+          if (dlgText) dlgText.textContent = phaseText;
+        }
+      } catch (e) { ZHS.Log.debug('弹题状态卡刷新异常：' + (e && e.message)); }
+
       const cfg = ZHS.config;
       const $ = (s) => box.querySelector(s);
       // 状态页元素取不到时直接跳过（面板结构被外部脚本改动等极端情况）
@@ -1343,22 +1383,7 @@
       const mins = Math.floor((Date.now() - ZHS.state.startedAt) / 60000);
       setText('.s-uptime', mins + ' 分钟');
 
-      // round-31【弹题实时状态卡】：独立于 Catalog，Catalog 异常也不影响此卡刷新
-      try {
-        const dlgCard = box.querySelector('#zhs-dlg-card');
-        if (dlgCard) {
-          const phase = ZHS.state.dialogPhase || 'none';
-          const phaseText = {
-            'none': '弹题：空闲', 'detected': '弹题：检测到',
-            'answering': '弹题：作答中', 'answered': '弹题：已答',
-            'pending-human': '弹题：待人工',
-          }[phase] || '弹题：空闲';
-          const suffix = phase === 'pending-human' ? 'pending' : phase;
-          dlgCard.className = 'dlg-card s-dlg-' + suffix;
-          const dlgText = dlgCard.querySelector('.s-dlg');
-          if (dlgText) dlgText.textContent = phaseText;
-        }
-      } catch (e) { /* 状态卡异常不得影响其余刷新 */ }
+      // round-31【弹题实时状态卡】已上移到 _refreshInner() 开头（见下方），此处不再重复。
 
       // 开关状态
       box.querySelectorAll('.sw[data-cfg]').forEach((sw) => {
@@ -1503,7 +1528,19 @@
   };
 
   // 面板每 1.5 秒自刷新
-  setInterval(() => Panel.refresh(), 1500);
+  //
+  // 【this 绑定铁律 · 2026-10-20 真机实测修】
+  // 挂载走的是 ZHS.panel.mount()（this = 占位对象 ZHS.panel），实例字段 _root/_shadow
+  // 都落在 ZHS.panel 上；这里若写成 Panel.refresh()，this 就是原 Panel 对象，
+  // 它的 _shadow 永远是 undefined → _refreshInner() 第一行静默早退 →
+  // 面板状态字段与弹题状态卡永久冻在挂载瞬间（且无任何报错）。
+  // 所以定时器必须调 ZHS.panel.refresh()，与 mount 保持同一个对象；
+  // refresh() 内部还有一层转发兜底，双保险。
+  setInterval(() => {
+    try {
+      if (ZHS.panel && typeof ZHS.panel.refresh === 'function') ZHS.panel.refresh();
+    } catch (e) { /* 面板刷新失败不影响脚本其余部分 */ }
+  }, 1500);
 
   // round-14：把完整 Panel 填充进模块开头已占位的 ZHS.panel。
   // 用 Object.assign 而非直接赋值：保留占位对象引用，任何早前拿到 ZHS.panel 引用的

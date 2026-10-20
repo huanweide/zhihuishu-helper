@@ -3022,6 +3022,66 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
 
   await _g69;
 
+  // ============================================================
+  // 第 70 组：面板刷新真源（2026-10-20 真机实测发现的真 bug）
+  //
+  // 真机现象：日志明明在自动作答（MutationObserver 也确实唤醒了），
+  // 但面板状态卡 9 秒内 600 次采样纹丝不动，恒为「弹题：空闲」；
+  // .s-uptime 75 秒不涨；面板「日志」页永远空白；且全程零报错。
+  //
+  // 根因（两份对象 + this 绑定分裂）：
+  //   06-panel.js 用 `if (!ZHS.panel) ZHS.panel = {}` 建占位对象，末尾
+  //   `Object.assign(ZHS.panel, Panel)` 填方法；挂载走 ZHS.panel.mount()，
+  //   实例字段 _root/_shadow 落在占位对象上；而定时器写的是
+  //   `setInterval(() => Panel.refresh(), 1500)` → this = 原 Panel 对象，
+  //   它的 _shadow 永远 undefined → _refreshInner() 第一行静默早退。
+  // 附带第二个坑：状态卡更新块原本在 _refreshInner() 最末尾，
+  // 上面 Player/Catalog 一旦抛异常就轮不到它（注释声称"独立于 Catalog"并未兑现）。
+  // ============================================================
+  const _g70 = (async () => {
+    const { win } = makeEnv('<html><body><div id="host"></div><video></video></body></html>',
+      'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=g70');
+    const Z = win.ZHS;
+    const cardText = () => {
+      const el = Z.panel._shadow && Z.panel._shadow.querySelector('#zhs-dlg-card .s-dlg');
+      return el ? (el.textContent || '').trim() : '(无卡片)';
+    };
+
+    // 1) 挂载面板（与真机一致：走 ZHS.panel.mount()）
+    try { Z.panel.mount(); } catch (e) { /* 某些环境挂载失败则后续断言不适用 */ }
+    ok('面板已挂载（_shadow 存在）', !!(Z.panel._shadow && Z.panel._root));
+    ok('状态卡元素存在', cardText() !== '(无卡片)');
+
+    // 2) 状态推进后主动刷新 → 卡片应跟随
+    Z.state.dialogPhase = 'detected';
+    Z.panel.refresh();
+    eq('主动刷新时状态卡跟随 detected', cardText(), '弹题：检测到');
+
+    // 3) ★ 定时器路径：等 1.5s 周期过去，卡片必须被自动刷新
+    //    （修之前：定时器调 Panel.refresh() → 静默早退 → 这里必然失败）
+    Z.state.dialogPhase = 'answering';
+    await U2Sleep(1800);
+    eq('定时器自动刷新状态卡（1.5s 周期）', cardText(), '弹题：作答中');
+
+    // 4) ★ Catalog 抛异常时状态卡仍要更新（round-31 注释承诺的"独立于 Catalog"）
+    const realStats = Z.Catalog.stats;
+    Z.Catalog.stats = function () { throw new Error('boom'); };
+    Z.state.dialogPhase = 'pending-human';
+    Z.panel.refresh();
+    eq('Catalog 抛异常不影响状态卡刷新', cardText(), '弹题：待人工');
+    Z.Catalog.stats = realStats;
+
+    // 5) 源码层防线：定时器不得裸调 Panel.refresh()
+    const panelSrc = fs.readFileSync(path.join(__dirname, '..', 'src', '06-panel.js'), 'utf8');
+    ok('定时器不再裸调 Panel.refresh()', !/setInterval\(\s*\(\)\s*=>\s*Panel\.refresh\(/.test(panelSrc));
+    ok('状态卡更新块位于 Catalog 调用之前',
+      panelSrc.indexOf('#zhs-dlg-card') < panelSrc.indexOf('ZHS.Catalog.stats()'));
+
+    Z.state.dialogPhase = 'none';
+  })();
+
+  await _g70;
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {
