@@ -4,6 +4,42 @@
 
 ---
 
+## [0.6.39] - 2026-10-20
+> 第十八轮补丁（round-33）：**修「进入课程永远停在第 1 节、不能自动跳未学节」** + 落地网课实时监控启动器。
+
+### 现象
+开网课自动播放时，脚本总是从页面默认加载的那一节（通常是第 1 节）开始，不会自动跳到「未学完的节」。用户原话：「你自动看的是第一节课，不能跳转到没学的课（自动）」。
+
+### 根因
+进入课程的初始化流程（`07-main.js` `boot()`）只靠 `Resume.restore()` 跳节：
+- 有续播记录 → 跳到记录里的断点节（正常）；
+- **无记录（缺失/过期/被清）→ 直接播页面默认加载的那节**，没有任何「跳到首节未学」的兜底。
+- 智慧树常把新课默认停在第 1 节，于是表现成「永远看第一节课」。
+
+课内续跳本身正常（`gotoNext` 用的是 `Catalog.findNext(cur)`，能正确找下一个未学节），问题只在**进入那一刻**。
+
+### 修法
+在 `07-main.js` 第 5.5 段（`Resume.restore` 之后）加兜底：
+- 仅当 `skipFinished` 开关开（语义本就是「自动跳过已完成节点」）；
+- 且当前节 `isFinished` 为真；
+- 且 `Catalog.findNext(null)` 能捞到未学节；
+- 才 `Catalog.click(首节未学)` 并等 3s 加载。
+
+三条件同时成立才跳，避免误跳：全新课第 1 节本就没看完 → 不跳，保持平台默认位置。
+
+### 配套：网课实时监控启动器
+按已完成的浏览器操控方案调研，新增 `tools/zhs-monitor.cmd` + `tools/zhs-cdp.js`：
+- 读 Edge `DevToolsActivePort` → 拼 CDP ws → `playwright-cli attach --cdp=<ws> zhs` 接管已登录的 Edge；
+- `playwright-cli -s=zhs show --port 0` 起实时画面面板；
+- 后台用 `console` / `snapshot` / `video-start` / `tracing-*` 观察与留证。
+- 前置：Edge 内 `edge://inspect/#remote-debugging` 勾选 Allow remote debugging（Chromium 136+ 默认 profile 接管唯一干净入口）。
+
+### 验证
+- `node build.js` 通过，dist 同步检查通过；
+- `node test/run.js` **536 通过 / 1 失败**（唯一失败仍是 `开启随机兜底后能作答` 这条 pre-existing 红灯，与本次改动无关——只动了入口流程，未碰答题器）。
+
+---
+
 ## [0.6.38] - 2026-10-20
 > 第十七轮补丁（round-32b）：**修面板「日志」页切过去永远空白**。
 
