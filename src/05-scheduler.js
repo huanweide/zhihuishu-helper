@@ -121,6 +121,7 @@
       // 第 4 次故障起永久失去自愈能力。手动启动 = 用户明确要求重来，理应重新给名额。
       if (!resume) this._transientReloads = 0;
       this._timer = setInterval(() => this.tick(), LOOP_INTERVAL);
+      this._initDialogObserver();   // round-31：弹题实时监听常驻挂载
       if (!resume) ZHS.Log.info('主循环已启动');
       // round-16【P3】：自愈恢复时静默体检 —— 只打日志、不弹「开始自动学习」提示。
       // 原先每次自愈都重弹一次，配合上面的失败-自愈循环会反复刷屏，反而盖住真实异常。
@@ -234,6 +235,7 @@
         clearInterval(this._timer);
         this._timer = null;
       }
+      this._disposeDialogObserver();   // round-31：停主循环时一并卸载弹题监听
       ZHS.state.running = false;
       const reason = why || 'user';
       this._haltReason = reason;
@@ -404,111 +406,15 @@
       }
       if (cfg.guardOverlays && ZHS.Questions.Dialog.present()
           && U.hasStructurallyVisible(QUESTION_SELECTORS)) {
-        if (video && !video.paused) video.pause();
-        if (ZHS.Player) ZHS.Player.resetSync();   // 弹题结束后要重新对一次账
-
-        // ===== 守卫 2.0（round-26 新增 / round-29 修正口径）：答案就写在页面里 → 读出来直接关 + 续播 =====
-        //
-        // 真机实测：AI 助教小智出的「弹题测验」**有时**会把「正确答案：A」直接渲染在
-        // DOM 里（弹窗里还写明「不影响作业考试成绩」）。这类题不必查题库、也不必调 LLM，
-        // 读出来就是答案；而且它**不做选择也能关闭**（实测点选项后选中态不变）。
-        //
-        // 【round-29 重要修正】「答案内嵌」**不是恒定行为，别当铁律**：
-        // 2026-10-19 同一门课复测，4.4 小节弹出的单选题（选项 A.1 / B.3、题干是图片）
-        // 从头到尾没有「正确答案」，**点了选项之后也不会出现**。
-        // 所以这里只能是「有就走捷径」，读不到必须老实降级到下面的答题链路，
-        // 绝不能假设一定有答案、更不能因为读不到就卡住。
-        //
-        // 关闭这类弹窗还有一个副作用：真机实测点「关闭」会**稳定整页跳到门户首页**，
-        // 由上面的守卫 0 自动把页面带回学习页，闭环仍然成立（不会挂机中断）。
-        let domAns = null;
-        try {
-          domAns = (ZHS.Questions && ZHS.Questions.Dialog && ZHS.Questions.Dialog.answerFromDom)
-            ? ZHS.Questions.Dialog.answerFromDom() : null;
-        } catch (e) { domAns = null; }
-        if (domAns) {
-          ZHS.Log.info('弹题答案已内嵌在页面（正确答案：' + domAns + '），直接关闭并续播，不走题库/LLM');
-          try { ZHS.Questions.Dialog.close(); } catch (e) { /* 关不掉下一轮再来 */ }
-          await U.sleep(500);
-          if (video && video.paused && !video.ended) {
-            try {
-              video.muted = true;               // 静音兜底：部分浏览器拒绝非用户手势的 play()
-              const p = video.play();
-              if (p && p.catch) p.catch(() => {});
-              ZHS.Log.info('弹题已关闭，已恢复播放');
-            } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
-          }
-          if (ZHS.Player) ZHS.Player.resetSync();
-          return;
-        }
-
-        if (ZHS.config.autoAnswer && cfg.answerDialog && ZHS.Answerer) {
-          if (ZHS.Answerer._pendingHuman) {
-            // 待人工期：本题没答上/关不掉，用户正在手动作答。安静等待，
-            // 不强关（平台会拒绝）、不告警刷屏。弹窗消失后下一轮自动复位。
-            ZHS.Log.debug('弹题等待人工作答中，脚本保持暂停');
-          } else if (Date.now() < (ZHS.Answerer._cooldownUntil || 0)) {
-            // 退避期内：不作答，直接关弹窗恢复播放，保证不卡死
-            await ZHS.Answerer.forceCloseDialog();
-          } else {
-            // Answerer 内部已含「作答 → 成功才关闭 → 恢复播放；没答上转人工」完整链路，
-            // 但它可能调 LLM（网络慢/超时），必须套总预算：
-            // 宁可这道题不答，也不能让主循环一直吊在这儿。
-            const done = await this._withBudget(
-              ZHS.Answerer.handleDialog({ manual: false }), DIALOG_BUDGET_MS, '弹题作答'
-            );
-            if (!done) {
-              ZHS.Log.warn('弹题作答超时（>' + (DIALOG_BUDGET_MS / 1000) + ' 秒），交由人工处理');
-              if (ZHS.panel) ZHS.panel.alert('弹题作答超时，请手动选择答案后关闭弹窗', 'warn', 8000);
-              ZHS.Answerer._pendingHuman = true;
-            }
-            if (ZHS.Answerer._pendingHuman) {
-              // 转人工：等用户答完，不做任何关闭尝试
-              ZHS.Log.debug('弹题已转人工，等待作答');
-            } else if (ZHS.Questions.Dialog.stillPresent()) {
-              // 作答了但弹窗还在：给一次短观察窗，关不掉就计数告警（不硬关）
-              await U.waitUntilHidden(QUESTION_SELECTORS, QUESTION_WAIT_MAX_MS);
-              if (ZHS.Questions.Dialog.stillPresent()) {
-                this._dialogCloseFails = (this._dialogCloseFails || 0) + 1;
-                ZHS.Log.warn('弹题未能自动关闭（第 ' + this._dialogCloseFails + ' 次）。可能是脚本无法自动关闭的弹窗类型，请手动点掉后脚本会继续重试。');
-                if (this._dialogCloseFails >= 3) {
-                  this._dialogCloseFails = 0;
-                  if (ZHS.panel) {
-                    ZHS.panel.alert('弹题连续关不掉，请手动点掉后脚本会继续', 'warn', 10000);
-                  }
-                }
-              } else {
-                this._dialogCloseFails = 0;
-              }
-            }
-          }
-        } else {
-          // 未开启自动答题：不作答。平台不允许关闭未作答弹窗，
-          // 尝试一次关闭（部分提示型弹窗可以关），关不掉就明确提示等人工，绝不循环硬关。
-          ZHS.Questions.Dialog.close();
-          await U.sleep(800);
-          if (ZHS.Questions.Dialog.stillPresent()) {
-            if (!this._dialogHumanNotified) {
-              this._dialogHumanNotified = true;
-              ZHS.Log.warn('弹题需手动作答（未开启自动答题且平台不允许关闭未作答弹窗）');
-              if (ZHS.panel) {
-                ZHS.panel.alert('弹题需要你手动作答：选择答案后即可关闭；或在设置页开启「自动答题」', 'warn', 10000);
-              }
-            } else {
-              ZHS.Log.debug('弹题仍在等待人工作答');
-            }
-          } else {
-            this._dialogHumanNotified = false;
-            if (video && video.paused) {
-              const p = video.play();
-              if (p && p.catch) p.catch(() => {});
-              ZHS.Log.info('弹题已关闭（未开启自动答题），恢复播放');
-            }
-          }
-        }
+        // round-31【弹题实时感知】：弹窗插入 DOM 立即由 MutationObserver 唤醒
+        // （见 _initDialogObserver / _kickDialog），不再死等下一轮 2 秒轮询；
+        // 主循环路径与即时路径都收敛到同一个 _handleDialog，避免逻辑双份、状态打架。
+        await this._handleDialog();
         return;
       }
       this._dialogHumanNotified = false;
+      // 没有弹题在场 → 实时状态回到空闲（插入即唤醒，消失也即时反映）
+      if (ZHS.state.dialogActive) { ZHS.state.dialogActive = false; ZHS.state.dialogPhase = 'none'; }
 
       // ===== 守卫 3：其他阻塞弹窗 → 尝试关闭 =====
       // 关闭按钮有三处来源：Element-UI 的 .close、业务按钮 .btn，
@@ -642,6 +548,199 @@
       if (ZHS.Player.atEnd(video)) {
         if (cfg.autoNext) await this.onLessonEnd(video);
       }
+    },
+
+    /**
+     * 弹题处理（单一真源）：主循环守卫 2 与 MutationObserver 即时唤醒都收敛到这里。
+     *
+     * 把原来的守卫 2 体抽成独立方法，是为了根治「2 秒轮询延迟 + 逻辑双份」：
+     *   · 主循环路径：_tickInner 守卫 2 命中即调（保底，每轮都会看一眼）；
+     *   · 即时路径：弹窗一插入 DOM，MutationObserver 立刻 _kickDialog → 调本方法，
+     *     不再死等下一轮轮询，尤其消除「主循环正 await 别的分支时弹题插进来无人管」的空窗。
+     *
+     * 防重入：_dialogHandling 保证两条路径同一时刻只有一条在跑，杜绝状态打架。
+     */
+    async _handleDialog() {
+      if (this._dialogHandling) return;       // 防重入：主循环与 Observer 收敛到同一逻辑
+      this._dialogHandling = true;
+      try {
+        const cfg = ZHS.config;
+        const video = ZHS.Player.video();
+        // 实时状态：进入弹题处理即标记「检测到」
+        ZHS.state.dialogActive = true;
+        ZHS.state.dialogPhase = 'detected';
+        ZHS.state.dialogLastAt = Date.now();
+
+        if (video && !video.paused) video.pause();
+        if (ZHS.Player) ZHS.Player.resetSync();   // 弹题结束后要重新对一次账
+
+        // ===== 守卫 2.0（round-26 新增 / round-29 修正口径）：答案就写在页面里 → 读出来直接关 + 续播 =====
+        // 真机实测：AI 助教小智出的「弹题测验」**有时**会把「正确答案：A」直接渲染在
+        // DOM 里（弹窗里还写明「不影响作业考试成绩」）。这类题不必查题库、也不必调 LLM，
+        // 读出来就是答案；而且它**不做选择也能关闭**（实测点选项后选中态不变）。
+        // 【round-29 重要修正】「答案内嵌」**不是恒定行为，别当铁律**：读不到必须老实降级，
+        // 绝不能假设一定有答案、更不能因为读不到就卡住。
+        // 关闭这类弹窗还有一个副作用：真机实测点「关闭」会**稳定整页跳到门户首页**，
+        // 由守卫 0 自动把页面带回学习页，闭环仍然成立（不会挂机中断）。
+        let domAns = null;
+        try {
+          domAns = (ZHS.Questions && ZHS.Questions.Dialog && ZHS.Questions.Dialog.answerFromDom)
+            ? ZHS.Questions.Dialog.answerFromDom() : null;
+        } catch (e) { domAns = null; }
+        if (domAns) {
+          ZHS.Log.info('弹题答案已内嵌在页面（正确答案：' + domAns + '），直接关闭并续播，不走题库/LLM');
+          try { ZHS.Questions.Dialog.close(); } catch (e) { /* 关不掉下一轮再来 */ }
+          await U.sleep(500);
+          if (video && video.paused && !video.ended) {
+            try {
+              video.muted = true;               // 静音兜底：部分浏览器拒绝非用户手势的 play()
+              const p = video.play();
+              if (p && p.catch) p.catch(() => {});
+              ZHS.Log.info('弹题已关闭，已恢复播放');
+            } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
+          }
+          if (ZHS.Player) ZHS.Player.resetSync();
+          ZHS.state.dialogPhase = 'answered';   // 已答/已关
+          return;
+        }
+
+        if (ZHS.config.autoAnswer && cfg.answerDialog && ZHS.Answerer) {
+          if (ZHS.Answerer._pendingHuman) {
+            // 待人工期：本题没答上/关不掉，用户正在手动作答。安静等待，
+            // 不强关（平台会拒绝）、不告警刷屏。弹窗消失后下一轮自动复位。
+            ZHS.Log.debug('弹题等待人工作答中，脚本保持暂停');
+            ZHS.state.dialogPhase = 'pending-human';
+          } else if (Date.now() < (ZHS.Answerer._cooldownUntil || 0)) {
+            // 退避期内：不作答，直接关弹窗恢复播放，保证不卡死
+            await ZHS.Answerer.forceCloseDialog();
+            ZHS.state.dialogPhase = 'answered';
+          } else {
+            // Answerer 内部已含「作答 → 成功才关闭 → 恢复播放；没答上转人工」完整链路，
+            // 但它可能调 LLM（网络慢/超时），必须套总预算：
+            // 宁可这道题不答，也不能让主循环一直吊在这儿。
+            ZHS.state.dialogPhase = 'answering';
+            const done = await this._withBudget(
+              ZHS.Answerer.handleDialog({ manual: false }), DIALOG_BUDGET_MS, '弹题作答'
+            );
+            if (!done) {
+              ZHS.Log.warn('弹题作答超时（>' + (DIALOG_BUDGET_MS / 1000) + ' 秒），交由人工处理');
+              if (ZHS.panel) ZHS.panel.alert('弹题作答超时，请手动选择答案后关闭弹窗', 'warn', 8000);
+              ZHS.Answerer._pendingHuman = true;
+            }
+            if (ZHS.Answerer._pendingHuman) {
+              // 转人工：等用户答完，不做任何关闭尝试
+              ZHS.Log.debug('弹题已转人工，等待作答');
+              ZHS.state.dialogPhase = 'pending-human';
+            } else if (ZHS.Questions.Dialog.stillPresent()) {
+              // 作答了但弹窗还在：给一次短观察窗，关不掉就计数告警（不硬关）
+              await U.waitUntilHidden(QUESTION_SELECTORS, QUESTION_WAIT_MAX_MS);
+              if (ZHS.Questions.Dialog.stillPresent()) {
+                this._dialogCloseFails = (this._dialogCloseFails || 0) + 1;
+                ZHS.Log.warn('弹题未能自动关闭（第 ' + this._dialogCloseFails + ' 次）。可能是脚本无法自动关闭的弹窗类型，请手动点掉后脚本会继续重试。');
+                if (this._dialogCloseFails >= 3) {
+                  this._dialogCloseFails = 0;
+                  if (ZHS.panel) {
+                    ZHS.panel.alert('弹题连续关不掉，请手动点掉后脚本会继续', 'warn', 10000);
+                  }
+                }
+                ZHS.state.dialogPhase = 'pending-human';   // 关不掉 → 交人工
+              } else {
+                this._dialogCloseFails = 0;
+                ZHS.state.dialogPhase = 'answered';
+              }
+            } else {
+              // 弹窗已消失 → 视为已答
+              ZHS.state.dialogPhase = 'answered';
+            }
+          }
+        } else {
+          // 未开启自动答题：不作答。平台不允许关闭未作答弹窗，
+          // 尝试一次关闭（部分提示型弹窗可以关），关不掉就明确提示等人工，绝不循环硬关。
+          ZHS.Questions.Dialog.close();
+          await U.sleep(800);
+          if (ZHS.Questions.Dialog.stillPresent()) {
+            ZHS.state.dialogPhase = 'pending-human';
+            if (!this._dialogHumanNotified) {
+              this._dialogHumanNotified = true;
+              ZHS.Log.warn('弹题需手动作答（未开启自动答题且平台不允许关闭未作答弹窗）');
+              if (ZHS.panel) {
+                ZHS.panel.alert('弹题需要你手动作答：选择答案后即可关闭；或在设置页开启「自动答题」', 'warn', 10000);
+              }
+            } else {
+              ZHS.Log.debug('弹题仍在等待人工作答');
+            }
+          } else {
+            this._dialogHumanNotified = false;
+            ZHS.state.dialogPhase = 'answered';
+            if (video && video.paused) {
+              const p = video.play();
+              if (p && p.catch) p.catch(() => {});
+              ZHS.Log.info('弹题已关闭（未开启自动答题），恢复播放');
+            }
+          }
+        }
+      } catch (e) {
+        ZHS.Log.error('弹题处理异常：' + (e && e.message));
+      } finally {
+        this._dialogHandling = false;
+      }
+    },
+
+    /**
+     * 弹题实时监听：MutationObserver 常驻，弹窗一插入 DOM 立即唤醒处理。
+     * 挂载点：start()；卸载点：stop()。自带去重，重复 mount 安全。
+     */
+    _initDialogObserver() {
+      if (this._dialogObserver) return;            // 去重：SPA 二次启动不会叠加
+      if (typeof MutationObserver === 'undefined') return;
+      const self = this;
+      this._dialogObserver = new MutationObserver(() => self._onDomMaybeDialog());
+      // 监听全文档子树的增删（Element UI 弹窗默认 append 到 body，覆盖在内）。
+      // 回调只在每个微任务批触发一次，配合 _onDomMaybeDialog 的再合并，开销可控。
+      try {
+        this._dialogObserver.observe(document.documentElement, { childList: true, subtree: true });
+        ZHS.Log.debug('弹题实时监听已挂载（MutationObserver）');
+      } catch (e) {
+        ZHS.Log.debug('弹题实时监听挂载失败：' + e.message);
+      }
+    },
+
+    /** 微任务级去抖：把同一批突变合并成一次判定，避免高并发突变刷爆 CPU */
+    _onDomMaybeDialog() {
+      if (this._dialogKickScheduled) return;
+      this._dialogKickScheduled = true;
+      const self = this;
+      Promise.resolve().then(() => {
+        self._dialogKickScheduled = false;
+        self._kickDialog();
+      });
+    },
+
+    /** 弹窗出现/消失都即时反映；插入即唤醒处理，无需等下一轮 2 秒轮询 */
+    _kickDialog() {
+      if (!ZHS.config.guardOverlays) return;
+      if (!ZHS.Questions || !ZHS.Questions.Dialog) return;
+      if (!ZHS.Questions.Dialog.present()) {
+        // 弹窗已不在场：实时状态回到空闲（消失也即时反映）
+        if (ZHS.state.dialogActive) { ZHS.state.dialogActive = false; ZHS.state.dialogPhase = 'none'; }
+        return;
+      }
+      if (!U.hasStructurallyVisible(QUESTION_SELECTORS)) return;
+      // 主循环可能正 await 别的分支，这里抢跑；重入由 _handleDialog 自己管
+      if (this._dialogHandling) return;
+      Promise.resolve().then(() => {
+        this._handleDialog().catch((e) => ZHS.Log.error('弹题即时处理异常：' + (e && e.message)));
+      });
+    },
+
+    /** 卸载监听：stop() 调用，避免监听器随页面长期堆积 */
+    _disposeDialogObserver() {
+      if (this._dialogObserver) {
+        try { this._dialogObserver.disconnect(); } catch (e) { /* 忽略 */ }
+      }
+      // 无论是否曾经挂载，disposed 后统一置 null（保持「未挂载/已卸载 → null」单一不变量）
+      this._dialogObserver = null;
+      this._dialogKickScheduled = false;
     },
 
     /**

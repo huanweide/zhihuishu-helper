@@ -2551,7 +2551,7 @@ const _statsM8 = (async () => {
   ok('明细被限制在 200 条以内（防存储膨胀）', stored > 0 && stored <= 200, '实际 ' + stored);
 })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8]).then(() => {
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8]).then(async () => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');
@@ -2928,6 +2928,99 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
     });
     ok('包含排雷：不片面选被包含的短项', !s7 || s7.answer !== 'A', String(s7 && s7.answer));
   }
+
+  console.log('\n=== 69. 弹题实时感知：MutationObserver 常驻监听 + 状态字段 + 面板入口（round-31） ===');
+  const _g69 = (async () => {
+    const { win } = makeEnv('<html><body><div id="host"></div><video></video></body></html>',
+      'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=g69');
+    const Z = win.ZHS;
+    const S = Z.Scheduler;
+
+    // 1) 状态字段初始值
+    eq('dialogActive 初始 false', Z.state.dialogActive, false);
+    eq('dialogPhase 初始 none', Z.state.dialogPhase, 'none');
+    eq('dialogLastAt 初始 0', Z.state.dialogLastAt, 0);
+
+    // 2) observer 挂载 / 幂等 / 卸载
+    S.stop();
+    S._disposeDialogObserver();
+    ok('初始无 observer', S._dialogObserver === null);
+    S._initDialogObserver();
+    ok('挂载后存在 observer', !!S._dialogObserver);
+    const firstObs = S._dialogObserver;
+    S._initDialogObserver();                 // 重复挂载应幂等
+    ok('重复挂载幂等（同一实例）', S._dialogObserver === firstObs);
+    S._disposeDialogObserver();
+    ok('卸载后 observer 清空', S._dialogObserver === null);
+
+    // 3) observer 唤醒链路：插入弹题节点 → _kickDialog 被调用
+    Z.setConfig({ guardOverlays: true, autoAnswer: true, answerDialog: true });
+    S._handleDialog = async () => {};        // 只验证「唤醒连线」，不跑真实答题逻辑
+    let kickCount = 0;
+    const realKick = S._kickDialog.bind(S);
+    S._kickDialog = function () { kickCount++; return realKick(); };
+    S._initDialogObserver();
+    const dlg = win.document.createElement('div');
+    dlg.id = 'playTopic-dialog';
+    win.document.body.appendChild(dlg);
+    await U2Sleep(40);                        // 等 MutationObserver 异步批触发
+    ok('弹窗插入 DOM 后 observer 唤醒 _kickDialog', kickCount > 0, 'kick=' + kickCount);
+    S._kickDialog = realKick;
+    S._disposeDialogObserver();
+
+    // 4) _kickDialog 路由判定
+    let hdCalls = 0;
+    S._handleDialog = async () => { hdCalls++; };
+    // 4a guardOverlays 关闭 → 不进 handleDialog
+    Z.setConfig({ guardOverlays: false });
+    S._kickDialog();
+    await U2Sleep(0);
+    eq('guardOverlays 关闭时不调用 _handleDialog', hdCalls, 0);
+
+    // 4b present 为 false → 不进 handleDialog，且 dialogActive 复位
+    Z.setConfig({ guardOverlays: true });
+    Z.state.dialogActive = true; Z.state.dialogPhase = 'answering';
+    Z.Questions.Dialog.present = () => false;
+    Z.Util.hasStructurallyVisible = () => true;
+    S._kickDialog();
+    await U2Sleep(0);
+    eq('无弹题在场不调用 _handleDialog', hdCalls, 0);
+    eq('无弹题在场 → dialogActive 复位 false', Z.state.dialogActive, false);
+
+    // 4c present 为 true + 可见 → 调用 _handleDialog
+    Z.Questions.Dialog.present = () => true;
+    S._kickDialog();
+    await U2Sleep(0);
+    ok('有弹题在场 → 调用 _handleDialog', hdCalls > 0, 'hd=' + hdCalls);
+
+    // 4d 重入保护：正在处理时不重复调用
+    const before = hdCalls;
+    S._dialogHandling = true;
+    S._kickDialog();
+    await U2Sleep(0);
+    eq('处理中重入被忽略', hdCalls, before);
+    S._dialogHandling = false;
+
+    // 5) panel 模板含状态卡 + heuristicFallback 开关
+    const html = Z.panel._html();
+    ok('面板模板含弹题状态卡', html.indexOf('id="zhs-dlg-card"') >= 0);
+    ok('面板设置页含 heuristicFallback 开关', html.indexOf('data-cfg="heuristicFallback"') >= 0);
+
+    // 6) config：heuristicFallback 默认开 + 布尔归一化（宽松语义：仅 'true'/'1' 为真，其余含脏串均归 false，不崩）
+    eq('heuristicFallback 默认开启', Z.config.heuristicFallback, true);
+    Z.setConfig({ heuristicFallback: 'true' });
+    eq('字符串 "true" 归一成 true', Z.config.heuristicFallback, true);
+    Z.setConfig({ heuristicFallback: '1' });
+    eq('字符串 "1" 归一成 true', Z.config.heuristicFallback, true);
+    Z.setConfig({ heuristicFallback: 'false' });
+    eq('字符串 "false" 归一成 false', Z.config.heuristicFallback, false);
+    Z.setConfig({ heuristicFallback: '肯定是开' });
+    eq('脏字符串安全归一成 false（不崩、不污染）', Z.config.heuristicFallback, false);
+
+    S.stop();
+  })();
+
+  await _g69;
 
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);

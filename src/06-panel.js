@@ -199,6 +199,22 @@
 .kv span:last-child { color: var(--zhs-n-900); font-weight: 500; flex-shrink: 0;
   max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* round-31【弹题实时状态卡】 */
+.dlg-card { display: flex; align-items: center; gap: var(--zhs-s2); margin: var(--zhs-s2) 0; padding: var(--zhs-s2) var(--zhs-s3);
+  border-radius: var(--zhs-r-sm); font-size: 11px; font-weight: 500; border: 1px solid transparent; }
+.dlg-card .dlg-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--zhs-n-400); }
+.dlg-card .s-dlg { color: var(--zhs-n-900); }
+.dlg-card.s-dlg-none { background: var(--zhs-n-100); border-color: var(--zhs-line); }
+.dlg-card.s-dlg-detected { background: var(--zhs-pri-bg); border-color: var(--zhs-pri-300); color: var(--zhs-pri-ink2); }
+.dlg-card.s-dlg-detected .dlg-dot { background: var(--zhs-pri-500); }
+.dlg-card.s-dlg-answering { background: var(--zhs-warn-bg); border-color: var(--zhs-warn-300, #f0c36d); color: var(--zhs-warn-ink2); }
+.dlg-card.s-dlg-answering .dlg-dot { background: var(--zhs-warn-400, #e6a23c); animation: zhs-pulse 1s ease-in-out infinite; }
+.dlg-card.s-dlg-answered { background: var(--zhs-ok-bg); border-color: var(--zhs-ok-400); color: var(--zhs-ok-ink2); }
+.dlg-card.s-dlg-answered .dlg-dot { background: var(--zhs-ok-500); }
+.dlg-card.s-dlg-pending { background: var(--zhs-danger-bg); border-color: var(--zhs-danger-400); color: var(--zhs-danger-ink); }
+.dlg-card.s-dlg-pending .dlg-dot { background: var(--zhs-danger-400); animation: zhs-pulse 1.2s ease-in-out infinite; }
+@keyframes zhs-pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.4); opacity: .5; } }
+
 .sw { width: 36px; height: 19px; border-radius: 10px; background: var(--zhs-n-250); position: relative;
   cursor: pointer; border: none; transition: background .15s; flex: 0 0 auto; }
 .sw.on { background: var(--zhs-ok-400); }
@@ -720,6 +736,9 @@
       <div class="kv"><span>未解锁</span><span class="s-locked">—</span></div>
       <div class="kv"><span>本次完成</span><span class="s-done-run">0 节</span></div>
       <div class="kv"><span>已答题数</span><span class="s-ans">0</span></div>
+      <div class="dlg-card s-dlg-none" id="zhs-dlg-card">
+        <span class="dlg-dot"></span><span class="s-dlg">弹题：空闲</span>
+      </div>
       <div class="kv"><span>本次运行</span><span class="s-uptime">—</span></div>
     </div>
     <div class="pane" data-pane="log">
@@ -761,6 +780,9 @@
       <div class="hint">默认是「不蒙」：没时可答题通道就留空不答（可事后手工作答）。<br>
         勾选后才会在走投无路时随机选一个，保证流程不卡住。</div>
       <div class="row"><label>无通道时随机兜底</label><button class="sw" data-cfg="gatedRandom"></button></div>
+      <div class="row"><label>离线启发式兜底</label><button class="sw" data-cfg="heuristicFallback"></button></div>
+      <div class="hint">默认开启。查不到题库/没填 Key 时，用内置规则（对话标签、称谓等）推断答案，
+        保证弹窗答得上、流程不卡死。关闭后这类题会转为「待人工」交给你手动作答。</div>
       <div class="row"><label>答题模式</label>
         <select class="sel-mode inp">
           <option value="both">双通道</option>
@@ -1320,6 +1342,23 @@
       setText('.s-ans', String(ZHS.state.answeredCount));
       const mins = Math.floor((Date.now() - ZHS.state.startedAt) / 60000);
       setText('.s-uptime', mins + ' 分钟');
+
+      // round-31【弹题实时状态卡】：独立于 Catalog，Catalog 异常也不影响此卡刷新
+      try {
+        const dlgCard = box.querySelector('#zhs-dlg-card');
+        if (dlgCard) {
+          const phase = ZHS.state.dialogPhase || 'none';
+          const phaseText = {
+            'none': '弹题：空闲', 'detected': '弹题：检测到',
+            'answering': '弹题：作答中', 'answered': '弹题：已答',
+            'pending-human': '弹题：待人工',
+          }[phase] || '弹题：空闲';
+          const suffix = phase === 'pending-human' ? 'pending' : phase;
+          dlgCard.className = 'dlg-card s-dlg-' + suffix;
+          const dlgText = dlgCard.querySelector('.s-dlg');
+          if (dlgText) dlgText.textContent = phaseText;
+        }
+      } catch (e) { /* 状态卡异常不得影响其余刷新 */ }
 
       // 开关状态
       box.querySelectorAll('.sw[data-cfg]').forEach((sw) => {

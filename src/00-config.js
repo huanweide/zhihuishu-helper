@@ -277,6 +277,10 @@
     pausedByGuard: false,  // 是否因守卫暂停（验证码）
     guardSince: 0,         // 本轮验证码守卫暂停的开始时刻（用于汇报等待了多久）
     startedAt: Date.now(),
+    // round-31【弹题实时感知】：弹题处理实时状态（供面板状态卡展示）
+    dialogActive: false,   // 当前是否有弹题在场处理中
+    dialogPhase: 'none',   // none | detected | answering | answered | pending-human
+    dialogLastAt: 0,       // 最近一次弹题事件时间戳
   };
 
   window.__ZHS_HELPER__ = true;

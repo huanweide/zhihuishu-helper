@@ -4,6 +4,31 @@
 
 ---
 
+## [0.6.36] - 2026-10-20
+> 第十六轮（round-31）：**弹题实时感知（MutationObserver 常驻）+ 面板状态卡 + 离线启发式开关**。
+
+### 痛点：主循环 2 秒轮询，弹题随机弹出时响应有「空窗」
+弹题是随机插入 DOM 的，旧实现只能靠 2 秒一轮的主循环去「碰」它。后果：
+- 弹窗已经弹出、但下一轮轮询还没到 → 白白等最多 2 秒才去答；
+- **更隐蔽的坑**：主循环此刻正 `await` 在别的分支（如视频探测、章节跳转）里，轮询被这条 await 卡住，弹题响应延迟被成倍放大，体验上像「卡死」。
+
+### 解法：弹窗一插入 DOM 立即唤醒，不再死等轮询
+- 新增 `Scheduler._initDialogObserver()`：用 `MutationObserver` 常驻监听 `document.documentElement` 的 `childList/subtree` 变化，弹窗节点一进 DOM 就异步唤醒 `_kickDialog()`（微任务级去抖，不刷 CPU）。
+- 单一真源：把「守卫 2」原来的弹题体抽成 `Scheduler._handleDialog()`，主循环路径与 Observer 即时路径**都收敛到它**；用 `_dialogHandling` 防重入，杜绝两条路径状态打架。
+- `start()` 挂载 observer、`stop()` 一并卸载（`_disposeDialogObserver()`），SPA 二次启动自带去重。
+
+### 端到端美化：弹题实时状态卡 + 启发式开关
+- 面板首页新增**弹题实时状态卡**：`空闲 / 检测到 / 作答中 / 已答 / 待人工` 五态，带脉冲圆点，独立刷新不受其它模块异常影响。
+- `ZHS.state` 新增三字段支撑状态卡：`dialogActive` / `dialogPhase`（`none|detected|answering|answered|pending-human`）/ `dialogLastAt`。
+- 设置页新增**「离线启发式兜底」开关**（`heuristicFallback`），与 round-30 的离线启发式求解层打通，用户可一键关掉兜底蒙答。
+
+### 顺手修的真实 bug（单测抓出）
+- `_disposeDialogObserver()` 把 `this._dialogObserver = null` 写在了 `if` 块内：从未挂载过时 observer 是 `undefined`，disposed 后仍是 `undefined` 而非 `null`，状态不一致。改为「无论是否曾挂载，disposed 后统一置 null」，恢复「未挂载/已卸载 → null」单一不变量。
+
+### 验证
+- `test/run.js` 新增第 69 组（21 条断言）覆盖：状态字段初始值、observer 挂载/幂等/卸载、插入节点异步唤醒 `_kickDialog`、`_kickDialog` 四类路由（guardOverlays 关 / present 假复位 / present 真调用 / 重入忽略）、面板模板含状态卡与开关、配置布尔归一化。
+- 跑测 `527 通过 / 1 失败`；唯一剩余失败 `开启随机兜底后能作答` 为 round-31 之前的 **pre-existing 红灯**（位于 Answerer 作答计数层，与本轮无关），需单独开轮排查，非本轮回归。
+
 ## [0.6.35] - 2026-10-20
 > 第十五轮（round-30）：**补上「答不上就卡死」的最后一环 —— 离线启发式兜底**。
 
