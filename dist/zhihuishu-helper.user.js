@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.38
+// @version      0.6.39
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.38";
+window.__ZHS_BUILD__.version = "0.6.39";
 
 /* ===== 00-config.js ===== */
 /**
@@ -6652,6 +6652,33 @@ window.__ZHS_BUILD__.version = "0.6.38";
 
     // 5. 尝试断点恢复
     await ZHS.Resume.restore(ZHS.state.courseId);
+
+    // 5.5 进入即跳首节未学（兜底：续播记录缺失/过期时，避免停在已看完的第 1 节）
+    //   根因：原先进入课程后只靠 resume 记录跳节；无记录就直接播页面默认加载的那节
+    //   （智慧树常把新课默认停在第 1 节），于是「永远看第一节课」。
+    //   守则需要同时满足，避免误跳：
+    //     ① skipFinished 开关开（语义本就是「自动跳过已完成节点」）；
+    //     ② 当前节确实已学完（isFinished）；
+    //     ③ 目录里还存在未学节（findNext 能捞到）。
+    //   全新课第 1 节本就没看完 → ② 不成立 → 不跳，保持平台默认位置。
+    if (ZHS.config.skipFinished) {
+      try {
+        const _cur = ZHS.Catalog.current();
+        if (_cur && ZHS.Catalog.isFinished(_cur)) {
+          const _firstUndone = ZHS.Catalog.findNext(null);
+          if (_firstUndone) {
+            ZHS.Log.info('进入课程：当前节已学完，自动跳到首节未学：'
+              + ZHS.Catalog.itemTitle(_firstUndone));
+            ZHS.Catalog.click(_firstUndone);
+            await U.sleep(3000);   // 等切换加载（与 resume.restore 同等待遇）
+          } else {
+            ZHS.Log.info('进入课程：当前节已学完，但目录里没有可跳的未学节，保持现状');
+          }
+        }
+      } catch (e) {
+        ZHS.Log.warn('进入即跳首节未学失败（已忽略，交给调度器后续处理）：' + e.message);
+      }
+    }
 
     // 6. 当前课时标识 + 绑定进度记录
     const cur = ZHS.Catalog.current();
