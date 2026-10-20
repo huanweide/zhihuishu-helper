@@ -77,6 +77,13 @@
       return true;
     }
     const sleep = (ms) => U.sleep(ms);
+
+    // round-39 主路径（ocsjs 原厂做法）：对选项本体**单次原生 click** —— 真机验证过即可选中，
+    // 绝不连点（早期 20 连发式过度点击反而把已选中的点乱/误触）。SVG 自检通过即收手。
+    try { el.click(); } catch (e) { /* 忽略 */ }
+    await sleep(300);
+    if (isChecked(el)) return true;
+
     const fireOne = async (t) => {
       if (!t) return false;
       try { if (U.realClickHuman) U.realClickHuman(t); else t.click(); } catch (e) { /* 忽略 */ }

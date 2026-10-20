@@ -4,6 +4,24 @@
 
 ---
 
+## [0.6.46] - 2026-10-20
+> 第二十五轮补丁（round-39）：**按 ocsjs 原厂实现校正弹窗答题全流程** —— 单次纯净点击 + 选完先提交再关 + AI 弹窗专用选择器。
+
+### 背景
+maxloop 深度调研：直接拉取 ocsjs `zhs.ts` 源码，拿到它对智慧树课中弹题的**原厂验证过的实现**，逐一校正我的偏差。
+
+### ocsjs 原厂实现（verbatim 提炼）
+- 经典 `#playTopic-dialog`：点 `#playTopic-dialog .topic .radio ul > li:nth-child(N)`（**单次原生 `.click()`**，不派发事件、不判断选中）→ 关 `#playTopic-dialog .close-btn, #playTopic-dialog .btn`。
+- **AI 助教弹窗 `StudyPlusH5`（`.ai-test-question-wrapper`）**：选项 `.options .option` → **提交 `.submit-btn .submits`** → 关 `.close-box`。
+- **AI 助教弹窗 `WishdomH5`（`.ai-class-exercise-dialog`）**：选项 `.ques-list .item .option` → 提交 `.el-dialog__footer .el-button.btn` → 关 `.header-icon`。
+
+### 我校正的三处关键偏差
+1. **点击**：早期"20 连发"式过度点击（多子目标×多事件）反而把已选中的点乱/误触。改为 **ocsjs 原厂的「选项本体单次原生 `.click()`」为主路径**，SVG 自检通过即收，失败才升级（保留 pointer/坐标/键盘作兜底）。
+2. **提交（重大遗漏）**：AI 弹窗流程是「选完→**先点提交**→再关」。我之前选完直接关，平台以「未提交答案」拒绝关闭 → **关不掉死循环的真因之一**。新增 `_clickSubmitIfAny()`，仅在检测到 AI 弹窗时、于其作用域内点提交（`.submit-btn .submits` / `.el-dialog__footer .el-button.btn`），在 `closeDialogAndResume` 关闭前调用；经典 `#playTopic-dialog` 不提交（与原厂一致）。
+3. **关闭选择器**：`Dialog.close` 补 AI 弹窗关闭控件 `.close-box` / `.header-icon`（旧列表没有，AI 弹窗关不掉）。
+
+---
+
 ## [0.6.45] - 2026-10-20
 > 第二十四轮补丁（round-38）：**根治「选项点不中」—— 选中态识别错了信号**（深度调研 ocsjs/greasyfork/Natro92 后定位）。
 

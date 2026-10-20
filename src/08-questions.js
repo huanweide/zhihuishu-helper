@@ -1024,8 +1024,14 @@
       if (!r) return false;
 
       // 按优先级找关闭按钮（智慧树弹题的关闭控件在多个位置出现过）
+      // round-39：补 AI 助教弹窗关闭控件（ocsjs 原厂：.ai-test-question-wrapper 用 .close-box；
+      // .ai-class-exercise-dialog 用 .header-icon）——旧列表里没有，导致 AI 弹窗关不掉。
       const CANDIDATES = [
         '.close-btn',
+        '.close-box',
+        '.header-icon',
+        '.ai-class-exercise-dialog .el-dialog__close',
+        '.ai-test-question-wrapper .el-dialog__close',
         '.el-dialog__close',
         '.close',
         '.topic-close',

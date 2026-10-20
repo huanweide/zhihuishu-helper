@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.45
+// @version      0.6.46
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.45";
+window.__ZHS_BUILD__.version = "0.6.46";
 
 /* ===== 00-config.js ===== */
 /**
@@ -8352,8 +8352,14 @@ window.__ZHS_BUILD__.version = "0.6.45";
       if (!r) return false;
 
       // 按优先级找关闭按钮（智慧树弹题的关闭控件在多个位置出现过）
+      // round-39：补 AI 助教弹窗关闭控件（ocsjs 原厂：.ai-test-question-wrapper 用 .close-box；
+      // .ai-class-exercise-dialog 用 .header-icon）——旧列表里没有，导致 AI 弹窗关不掉。
       const CANDIDATES = [
         '.close-btn',
+        '.close-box',
+        '.header-icon',
+        '.ai-class-exercise-dialog .el-dialog__close',
+        '.ai-test-question-wrapper .el-dialog__close',
         '.el-dialog__close',
         '.close',
         '.topic-close',
@@ -9746,6 +9752,13 @@ ${question}${optionText}
       return true;
     }
     const sleep = (ms) => U.sleep(ms);
+
+    // round-39 主路径（ocsjs 原厂做法）：对选项本体**单次原生 click** —— 真机验证过即可选中，
+    // 绝不连点（早期 20 连发式过度点击反而把已选中的点乱/误触）。SVG 自检通过即收手。
+    try { el.click(); } catch (e) { /* 忽略 */ }
+    await sleep(300);
+    if (isChecked(el)) return true;
+
     const fireOne = async (t) => {
       if (!t) return false;
       try { if (U.realClickHuman) U.realClickHuman(t); else t.click(); } catch (e) { /* 忽略 */ }
@@ -10437,11 +10450,42 @@ ${question}${optionText}
     },
 
     /**
+     * round-39（ocsjs 原厂 grounding）：点 AI 助教弹窗的「提交/确定」按钮（若存在）。
+     * 仅当页面上存在 AI 弹窗（.ai-test-question-wrapper / .ai-class-exercise-dialog）时才动，
+     * 且限定在该弹窗作用域内点击——经典 #playTopic-dialog 选完直接关（ocsjs 即如此），不提交。
+     * 原厂选择器：StudyPlusH5=.submit-btn .submits；WishdomH5=.el-dialog__footer .el-button.btn。
+     */
+    async _clickSubmitIfAny() {
+      let box = null;
+      try { box = document.querySelector('.ai-test-question-wrapper, .ai-class-exercise-dialog'); } catch (e) { return false; }
+      if (!box) return false;
+      const vis = (b) => { try { return b.offsetParent !== null || b.offsetWidth > 0; } catch (e) { return true; } };
+      const SELS = ['.submit-btn .submits', '.el-dialog__footer .el-button.btn', '.submit-btn', '.btn.submit', '.confirm-btn', '.submit'];
+      for (const s of SELS) {
+        try {
+          const btn = box.querySelector(s);
+          if (btn && vis(btn)) { btn.click(); await U.sleep(500); ZHS.Log.info('已点击提交按钮：' + s); return true; }
+        } catch (e) { /* 忽略 */ }
+      }
+      // 文本兜底（限定在 AI 弹窗内，且不含"下一题/关闭"，避免误推进）
+      try {
+        const txt = (el) => U.normText(el.innerText !== undefined && el.innerText !== null ? el.innerText : el.textContent);
+        const byText = Array.from(box.querySelectorAll('button, .el-button, .btn, [class*="submit"], [class*="confirm"], [class*="sure"]'))
+          .filter((b) => /^(提交|确定|确认|提交答案)$/.test(txt(b)) && vis(b));
+        if (byText.length) { byText[byText.length - 1].click(); await U.sleep(500); ZHS.Log.info('已点击提交按钮（文本匹配）'); return true; }
+      } catch (e) { /* 忽略 */ }
+      return false;
+    },
+
+    /**
      * 关闭弹题并恢复播放（N4 需求）
      * 策略：点关闭 → 校验是否真关了 → 没关就重试（最多 3 次，每次间隔递增）
      */
     async closeDialogAndResume(opts) {
       const noChannel = !!(opts && opts.noChannel);
+      // round-39（ocsjs 原厂实现）：AI 助教弹窗流程是「选完选项 → 先点提交 → 再关」。
+      // 漏了提交，平台会以「未提交答案」拒绝关闭 → 关不掉死循环（这正是用户实测的根因之一）。
+      await this._clickSubmitIfAny();
       const Q = ZHS.Questions.Dialog;
       for (let attempt = 1; attempt <= 3; attempt++) {
         const ok = Q.close();
