@@ -92,6 +92,8 @@
       }
       this._halted = false;
       ZHS.state.running = true;
+      // round-34：主循环启动时同步拉起防卡死看门狗（停止时由 stop() 一并清理定时器）
+      try { if (ZHS.Guard && ZHS.Guard.start) ZHS.Guard.start(); } catch (e) {}
 
       // round-16【P1/P2 关键修正】：必须区分两类计数器，不能一刀切「保留」或「重置」——
       //   · 成果计数器（startedAt / _navCount / _completedThisRun）：
@@ -197,7 +199,8 @@
           + ' / 未看完 ' + bd.undone + ' / 未解锁 ' + bd.locked
           + '（完成度 ' + bd.percent + '%）');
 
-        if (bd.allDone) {
+        // round-34：用交叉校验版 trulyAllDone 取代裸 bd.allDone，空/错目录不会误判「全部看完」
+        if (cat.trulyAllDone()) {
           ZHS.Log.info('课程已全部看完，无需播放');
           if (!silent && ZHS.panel) ZHS.panel.alert('检测到课程已全部看完', 'info');
           return bd;
@@ -237,6 +240,8 @@
       }
       this._disposeDialogObserver();   // round-31：停主循环时一并卸载弹题监听
       ZHS.state.running = false;
+      // round-34：主循环停止时同步停掉防卡死看门狗，避免残留定时器
+      try { if (ZHS.Guard && ZHS.Guard.stop) ZHS.Guard.stop(); } catch (e) {}
       const reason = why || 'user';
       this._haltReason = reason;
       // 只有「用户停 / 达标停」才彻底封死；瞬时故障停允许 tryResumeAfterTransientStop 救回
@@ -894,8 +899,9 @@
             if (ZHS.panel) ZHS.panel.alert('未识别到课程目录，请先进入具体课程的播放页', 'error');
             // round-14：目录临时读不到属瞬时故障（SPA 重渲染/懒加载瞬间），允许自愈，不永久封死
             this.stop('transient');
-          } else if (bd.undone === 0) {
-            // 真正全看完：先看是否要「自动跳课」回课程中心找下一门，
+          } else if (bd.undone === 0 && cat.trulyAllDone()) {
+            // 真正全看完（round-34：经检测健康+视频进度交叉校验，排除空/错目录误判）：
+            // 先看是否要「自动跳课」回课程中心找下一门，
             // 没开开关（或不在学习页 / 模块缺失）就保持原有「出总结并停止」行为。
             const hub = ZHS.CourseHub;
             const canHop = cfg.autoCourseHop && hub && !hub.isHubPage();

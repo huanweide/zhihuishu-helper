@@ -303,6 +303,70 @@ console.log('\n=== 9. 入口层（API 暴露） ===');
   ok('日志已记录（有初始化痕迹）', logs.length > 0);
 }
 
+console.log('\n=== 9b. 检测健康自检 / 完成态交叉校验（round-34） ===');
+{
+  // 9b-1：识别置信度探针
+  const emptyHtml = '<html><body><video></video></body></html>';
+  const { win: wE } = makeEnv(emptyHtml);
+  const dEmpty = wE.ZHS.Catalog.diagnose();
+  eq('空页面识别置信度 low', dEmpty.confidence, 'low');
+  eq('空页面 itemCount 0', dEmpty.itemCount, 0);
+
+  const okHtml = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo current"><span class="child-name" title="1.1 A">1.1 A</span><i class="child-check"></i></div>
+  <div class="child-info hasvideo"><span class="child-name" title="1.2 B">1.2 B</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win: wO } = makeEnv(okHtml);
+  const dOk = wO.ZHS.Catalog.diagnose();
+  eq('正常页面识别置信度 high', dOk.confidence, 'high');
+  eq('正常页面 itemCount 2', dOk.itemCount, 2);
+
+  // 9b-2：交叉校验——已识别全部完成、但视频进度还停在 45% → 不能判全看完（防误停）
+  const allDoneHtml = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo current"><span class="child-name" title="1.1 A">1.1 A</span><i class="child-check"></i></div>
+  <div class="child-info hasvideo"><span class="child-name" title="1.2 B">1.2 B</span><i class="child-check"></i></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win: wD, win: wD2 } = makeEnv(allDoneHtml);
+  // jsdom 的 video.duration/currentTime 是只读 getter，需就地重定义才能模拟进度
+  const videoStuck = wD.document.querySelector('video');
+  Object.defineProperty(videoStuck, 'duration', { value: 100, configurable: true });
+  Object.defineProperty(videoStuck, 'currentTime', { value: 45, configurable: true });
+  eq('全完成但视频 45% → trulyAllDone 为 false（防误停）', wD.ZHS.Catalog.trulyAllDone(), false);
+
+  // 视频进度到 95%（>= 完成线 91%）→ 确为全部看完
+  const vDone = wD2.document.querySelector('video');
+  Object.defineProperty(vDone, 'currentTime', { value: 95, configurable: true });
+  eq('全完成且视频 95% → trulyAllDone 为 true', wD2.ZHS.Catalog.trulyAllDone(), true);
+
+  // 9b-3：空目录（识别失败）绝不误判全看完：breakdown 无条目时 trulyAllDone 直接 false
+  eq('空目录 trulyAllDone 为 false', wE.ZHS.Catalog.trulyAllDone(), false);
+}
+
+console.log('\n=== 9c. 全局防卡死看门狗（round-34） ===');
+{
+  const { win } = makeEnv('<html><body><video></video></body></html>');
+  const G = win.ZHS.Guard;
+  ok('看门狗已挂载', !!G);
+  ok('有 start/stop/tick 方法', typeof G.start === 'function' && typeof G.stop === 'function' && typeof G._tick === 'function');
+  // 启停不抛错、不留悬挂定时器（start 后立即 stop）
+  let threw = false;
+  try { G.start(); G.stop(); } catch (e) { threw = true; }
+  ok('start+stop 不抛错', !threw);
+  eq('stop 后定时器已清理', G._timer, null);
+  // _tick 在 running 态下对陈旧指纹安全升级、不抛错
+  win.ZHS.state.running = true;
+  win.ZHS.state.startedAt = Date.now();
+  let tickThrew = false;
+  try { G._tick(); } catch (e) { tickThrew = true; }
+  ok('_tick 不抛错', !tickThrew);
+}
+
 console.log('\n=== 10. 答案归一化（核心算法） ===');
 {
   const { win } = makeEnv('<html><body></body></html>');

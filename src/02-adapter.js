@@ -980,6 +980,80 @@
       const done = all.filter((el) => this.isFinished(el)).length;
       return { total: all.length, done, percent: all.length ? Math.round((done / all.length) * 100) : 0 };
     },
+
+    /**
+     * round-34【检测健康自检】—— 识别置信度探针。
+     *
+     * 为什么需要：detect() 是「评分选举」而非硬路由，平台一改版就可能选错适配器，
+     * 导致 items() 返回空 / 全是空壳 / 标题读不到。这时 breakdown 的 done/undone 全是 0，
+     * 上层若直接拿 `undone === 0` 当「全部看完」就会**误停**（见 trulyAllDone 的交叉校验）。
+     * 这里独立给出「这次识别到底靠不靠谱」的结论，供 trulyAllDone / 看门狗判断。
+     *
+     * @returns {{ adapter:string, itemCount:number, titledCount:number, hasActive:boolean, confidence:'low'|'mid'|'high' }}
+     *   confidence:
+     *     low  —— 空目录或读不到任何标题（识别基本失败，结论不可信）
+     *     mid  —— 有条目有标题但定位不到「当前项」（可能进了播放页但适配器没对上）
+     *     high —— 有条目、有标题、且能定位当前项（识别可靠）
+     */
+    diagnose() {
+      const items = this.items();
+      const itemCount = items.length;
+      let titledCount = 0;
+      for (const el of items) {
+        const t = this.itemTitle(el);
+        if (t && t.length >= 2) titledCount++;
+      }
+      const cur = this.current();
+      const hasActive = !!cur;
+      let confidence = 'low';
+      if (itemCount > 0 && titledCount > 0) {
+        // 能定位当前项 → 高置信；否则只要不止一个可读标题也视为中（排除了纯空壳）
+        confidence = (hasActive || titledCount > 1) ? 'high' : 'mid';
+      }
+      return { adapter: this.adapter.name, itemCount, titledCount, hasActive, confidence };
+    },
+
+    /**
+     * round-34【完成态交叉校验】—— 比 breakdown().allDone 更严格，专门堵「误判全部看完」的假停摆。
+     *
+     * 常规口径：`total > 0 && undone === 0` 即 allDone。但这条在两种情况下会坑人：
+     *   ① 检测层返回空/错目录 → undone 恒为 0 → 谎报全看完，脚本停在假完成；
+     *   ② 当前视频还在播（进度远未到完成线 91%），但目录侧某次快照把本节点判成了 done
+     *      → undone 瞬时为 0 → 触发 finishAll，实则那一节根本没看完。
+     *
+     * 因此真正「全部看完」必须同时满足：
+     *   1. breakdown 常规口径通过；
+     *   2. 目录识别置信度非 low（否则空目录不能当全看完）；
+     *   3. 当前若有视频在播，其进度必须已到完成线（否则仍有未完成课时）。
+     * 任一不满足都返回 false，交由上层走「定位失败 / 瞬时故障」分支而非「达标停」。
+     */
+    trulyAllDone() {
+      const bd = this.breakdown();
+      if (!(bd.total > 0 && bd.undone === 0)) return false;   // 常规口径不过，直接 false
+
+      // 交叉校验①：识别置信度必须够高，否则空/错目录极易误判
+      const d = this.diagnose();
+      if (d.confidence === 'low') {
+        ZHS.Log.warn('[防误停] 目录识别置信度低（adapter=' + d.adapter
+          + '，itemCount=' + d.itemCount + '，titled=' + d.titledCount
+          + '），不急于判定全部看完');
+        return false;
+      }
+
+      // 交叉校验②：当前还有视频在播且进度远未到完成线 → 仍有未完成课时，不能停
+      try {
+        const v = (ZHS.Player && ZHS.Player.video) ? ZHS.Player.video() : null;
+        if (v && ZHS.Player.hasValidDuration && ZHS.Player.hasValidDuration(v)) {
+          const pct = ZHS.Player.percent(v);
+          const FINISH_PCT = (ZHS.Const && ZHS.Const.FINISH_PCT) || 91;
+          if (pct > 0 && pct < FINISH_PCT) {
+            ZHS.Log.warn('[防误停] 当前视频进度仅 ' + pct + '%，仍属未完成课时，不判定全部看完');
+            return false;
+          }
+        }
+      } catch (e) { /* 播放器不可用不影响主判据 */ }
+      return true;
+    },
   };
 
   ZHS.Catalog = Catalog;

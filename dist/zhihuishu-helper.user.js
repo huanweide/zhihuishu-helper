@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.39
+// @version      0.6.40
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.39";
+window.__ZHS_BUILD__.version = "0.6.40";
 
 /* ===== 00-config.js ===== */
 /**
@@ -1638,10 +1638,222 @@ window.__ZHS_BUILD__.version = "0.6.39";
       const done = all.filter((el) => this.isFinished(el)).length;
       return { total: all.length, done, percent: all.length ? Math.round((done / all.length) * 100) : 0 };
     },
+
+    /**
+     * round-34【检测健康自检】—— 识别置信度探针。
+     *
+     * 为什么需要：detect() 是「评分选举」而非硬路由，平台一改版就可能选错适配器，
+     * 导致 items() 返回空 / 全是空壳 / 标题读不到。这时 breakdown 的 done/undone 全是 0，
+     * 上层若直接拿 `undone === 0` 当「全部看完」就会**误停**（见 trulyAllDone 的交叉校验）。
+     * 这里独立给出「这次识别到底靠不靠谱」的结论，供 trulyAllDone / 看门狗判断。
+     *
+     * @returns {{ adapter:string, itemCount:number, titledCount:number, hasActive:boolean, confidence:'low'|'mid'|'high' }}
+     *   confidence:
+     *     low  —— 空目录或读不到任何标题（识别基本失败，结论不可信）
+     *     mid  —— 有条目有标题但定位不到「当前项」（可能进了播放页但适配器没对上）
+     *     high —— 有条目、有标题、且能定位当前项（识别可靠）
+     */
+    diagnose() {
+      const items = this.items();
+      const itemCount = items.length;
+      let titledCount = 0;
+      for (const el of items) {
+        const t = this.itemTitle(el);
+        if (t && t.length >= 2) titledCount++;
+      }
+      const cur = this.current();
+      const hasActive = !!cur;
+      let confidence = 'low';
+      if (itemCount > 0 && titledCount > 0) {
+        // 能定位当前项 → 高置信；否则只要不止一个可读标题也视为中（排除了纯空壳）
+        confidence = (hasActive || titledCount > 1) ? 'high' : 'mid';
+      }
+      return { adapter: this.adapter.name, itemCount, titledCount, hasActive, confidence };
+    },
+
+    /**
+     * round-34【完成态交叉校验】—— 比 breakdown().allDone 更严格，专门堵「误判全部看完」的假停摆。
+     *
+     * 常规口径：`total > 0 && undone === 0` 即 allDone。但这条在两种情况下会坑人：
+     *   ① 检测层返回空/错目录 → undone 恒为 0 → 谎报全看完，脚本停在假完成；
+     *   ② 当前视频还在播（进度远未到完成线 91%），但目录侧某次快照把本节点判成了 done
+     *      → undone 瞬时为 0 → 触发 finishAll，实则那一节根本没看完。
+     *
+     * 因此真正「全部看完」必须同时满足：
+     *   1. breakdown 常规口径通过；
+     *   2. 目录识别置信度非 low（否则空目录不能当全看完）；
+     *   3. 当前若有视频在播，其进度必须已到完成线（否则仍有未完成课时）。
+     * 任一不满足都返回 false，交由上层走「定位失败 / 瞬时故障」分支而非「达标停」。
+     */
+    trulyAllDone() {
+      const bd = this.breakdown();
+      if (!(bd.total > 0 && bd.undone === 0)) return false;   // 常规口径不过，直接 false
+
+      // 交叉校验①：识别置信度必须够高，否则空/错目录极易误判
+      const d = this.diagnose();
+      if (d.confidence === 'low') {
+        ZHS.Log.warn('[防误停] 目录识别置信度低（adapter=' + d.adapter
+          + '，itemCount=' + d.itemCount + '，titled=' + d.titledCount
+          + '），不急于判定全部看完');
+        return false;
+      }
+
+      // 交叉校验②：当前还有视频在播且进度远未到完成线 → 仍有未完成课时，不能停
+      try {
+        const v = (ZHS.Player && ZHS.Player.video) ? ZHS.Player.video() : null;
+        if (v && ZHS.Player.hasValidDuration && ZHS.Player.hasValidDuration(v)) {
+          const pct = ZHS.Player.percent(v);
+          const FINISH_PCT = (ZHS.Const && ZHS.Const.FINISH_PCT) || 91;
+          if (pct > 0 && pct < FINISH_PCT) {
+            ZHS.Log.warn('[防误停] 当前视频进度仅 ' + pct + '%，仍属未完成课时，不判定全部看完');
+            return false;
+          }
+        }
+      } catch (e) { /* 播放器不可用不影响主判据 */ }
+      return true;
+    },
   };
 
   ZHS.Catalog = Catalog;
   ZHS.STATUS = STATUS;
+})();
+
+/* ===== 02d-guard.js ===== */
+/**
+ * 全局防卡死看门狗（round-34）
+ *
+ * 解决「整体无进展、但各单点触发器都没命中」的盲区 —— 这是「希望不要被卡住」的最后一道防线。
+ *
+ * 现有单点防护（已存在）：
+ *   · Player.checkStall        —— 视频 currentTime 120s 不推进 → 唤醒
+ *   · ZERO_PROGRESS_GIVEUP_MS  —— 平台进度持续 0% 超 3min → 停手交人
+ *   · pendingHop 看门狗        —— 课程中心进入请求 5min 未落地 → 标失败
+ *   · tryResumeAfterTransientStop —— DOM 变化后瞬时故障自愈
+ *
+ * 但仍有盲区：
+ *   · 检测层返回空/错目录 → breakdown 误报 allDone → 看似「正常结束」，实则卡在假完成；
+ *   · 视频被平台缓冲卡住、currentTime 不前进，但 checkStall 反复唤醒、视频又不是 0% → 两端都不触发；
+ *   · SPA 静默把目录节点换掉但 courseId 没变 → adapter 缓存陈旧，findNext 永远指向旧节点。
+ *
+ * 本模块：心跳每 HEARTBEAT_MS 采样一次「进展指纹」（已完成节数 + 当前视频进度 + currentTime），
+ * 指纹无变化即视为停滞。按停滞时长分四级逐级升级，每次升级都刷新基准避免重复升级：
+ *   T1（STUCK_T1）：重探测页面版本 + 清目录缓存（重新识别 / 补全虚拟滚动目录）；
+ *   T2（STUCK_T2）：强制续播唤醒（Player.ensurePlaying）+ 重新对账；
+ *   T3（STUCK_T3）：尝试跳到下一节（Scheduler.gotoNext）；
+ *   T4（STUCK_T4）：标记瞬时停摆交人（Scheduler.stop('transient')），绝不静默无限挂起。
+ *
+ * 设计约束（与测试/工程兼容）：
+ *   · 仅在 ZHS.state.running 时续排下一拍；停止后不残留定时器（否则 node 测试进程挂起）。
+ *   · 自身绝不抛错影响主流程；所有外部调用 try/catch 包裹。
+ *   · 由 Scheduler.start/stop 负责启停（见 05-scheduler.js），不在本模块自启动。
+ */
+(function () {
+  'use strict';
+  const ZHS = window.ZHS;
+  if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免定时器叠加
+  if (ZHS.__mod02d_guard) return;
+  ZHS.__mod02d_guard = true;
+
+  const HEARTBEAT_MS = 60000;          // 心跳间隔
+  const STUCK_T1 = 4 * 60 * 1000;     // 4 分钟无进展 → 重探测
+  const STUCK_T2 = 8 * 60 * 1000;     // 8 分钟 → 唤醒续播
+  const STUCK_T3 = 12 * 60 * 1000;    // 12 分钟 → 跳下一节
+  const STUCK_T4 = 16 * 60 * 1000;    // 16 分钟 → 交人
+
+  const Guard = {
+    _timer: null,
+    _lastProgressAt: 0,
+    _fp: null,            // 上一次进展指纹
+    _tier: 0,             // 已升到的级别（0=未升级），避免同级别重复升级
+
+    start() {
+      if (this._timer) return;
+      this._lastProgressAt = Date.now();
+      this._fp = null;
+      this._tier = 0;
+      this._loop();
+    },
+
+    stop() {
+      if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    },
+
+    _loop() {
+      // 自调度：仅当主循环仍在运行时续排下一拍；停止后不残留定时器
+      this._timer = setTimeout(() => {
+        try { this._tick(); } catch (e) { /* 看门狗自身绝不能抛错 */ }
+        if (ZHS.state && ZHS.state.running) this._loop();
+        else this._timer = null;
+      }, HEARTBEAT_MS);
+    },
+
+    /** 采样进展指纹：已完成节数 + 当前视频进度 + currentTime */
+    _sample() {
+      let done = -1, pct = -1, cur = -1;
+      try {
+        const cat = ZHS.Catalog;
+        if (cat && cat.stats) done = cat.stats().done;
+      } catch (e) { done = -1; }
+      try {
+        const v = (ZHS.Player && ZHS.Player.video) ? ZHS.Player.video() : null;
+        if (v) { pct = ZHS.Player.percent(v); cur = Math.round(v.currentTime || 0); }
+      } catch (e) { /* 忽略 */ }
+      return done + '#' + pct + '#' + cur;
+    },
+
+    _tick() {
+      if (!ZHS.state || !ZHS.state.running) return;
+      const fp = this._sample();
+      const now = Date.now();
+      // 指纹变化 → 确有进展，刷新基准并复位升级级别
+      if (fp !== this._fp) {
+        this._fp = fp;
+        this._lastProgressAt = now;
+        this._tier = 0;
+        return;
+      }
+      const stuck = now - this._lastProgressAt;
+      if (stuck < STUCK_T1) return;     // 还没到第一级，继续观察
+
+      // —— 逐级升级，每级只触发一次（靠 _tier 防重）；升级后给本级别一段观察窗口 ——
+      if (this._tier < 1 && stuck >= STUCK_T1) {
+        this._tier = 1;
+        this._lastProgressAt = now;
+        ZHS.Log.warn('[防卡死 T1] 已 ' + Math.round(stuck / 1000) + 's 无进展，重新探测页面版本并清目录缓存');
+        try { if (ZHS.Catalog && ZHS.Catalog.redetect) ZHS.Catalog.redetect(); } catch (e) {}
+        try { if (ZHS.Catalog && ZHS.Catalog.resetCatalogCache) ZHS.Catalog.resetCatalogCache(); } catch (e) {}
+        return;
+      }
+      if (this._tier < 2 && stuck >= STUCK_T2) {
+        this._tier = 2;
+        this._lastProgressAt = now;
+        ZHS.Log.warn('[防卡死 T2] 已 ' + Math.round(stuck / 1000) + 's 无进展，强制唤醒续播');
+        try {
+          const v = (ZHS.Player && ZHS.Player.video) ? ZHS.Player.video() : null;
+          if (v && ZHS.Player.ensurePlaying) ZHS.Player.ensurePlaying(v);
+          if (ZHS.Player && ZHS.Player.resetSync) ZHS.Player.resetSync();
+        } catch (e) {}
+        return;
+      }
+      if (this._tier < 3 && stuck >= STUCK_T3) {
+        this._tier = 3;
+        this._lastProgressAt = now;
+        ZHS.Log.warn('[防卡死 T3] 已 ' + Math.round(stuck / 1000) + 's 无进展，尝试跳到下一节');
+        try { if (ZHS.Scheduler && ZHS.Scheduler.gotoNext) ZHS.Scheduler.gotoNext('guard', { manual: true }); } catch (e) {}
+        return;
+      }
+      if (this._tier < 4 && stuck >= STUCK_T4) {
+        this._tier = 4;
+        this._lastProgressAt = now;
+        ZHS.Log.error('[防卡死 T4] 已 ' + Math.round(stuck / 1000) + 's 无任何进展，标记瞬时停摆交人处理（不再静默挂起）');
+        try { if (ZHS.Scheduler && ZHS.Scheduler.stop) ZHS.Scheduler.stop('transient'); } catch (e) {}
+        return;
+      }
+    },
+  };
+
+  ZHS.Guard = Guard;
 })();
 
 /* ===== 03-player.js ===== */
@@ -2292,6 +2504,8 @@ window.__ZHS_BUILD__.version = "0.6.39";
       }
       this._halted = false;
       ZHS.state.running = true;
+      // round-34：主循环启动时同步拉起防卡死看门狗（停止时由 stop() 一并清理定时器）
+      try { if (ZHS.Guard && ZHS.Guard.start) ZHS.Guard.start(); } catch (e) {}
 
       // round-16【P1/P2 关键修正】：必须区分两类计数器，不能一刀切「保留」或「重置」——
       //   · 成果计数器（startedAt / _navCount / _completedThisRun）：
@@ -2397,7 +2611,8 @@ window.__ZHS_BUILD__.version = "0.6.39";
           + ' / 未看完 ' + bd.undone + ' / 未解锁 ' + bd.locked
           + '（完成度 ' + bd.percent + '%）');
 
-        if (bd.allDone) {
+        // round-34：用交叉校验版 trulyAllDone 取代裸 bd.allDone，空/错目录不会误判「全部看完」
+        if (cat.trulyAllDone()) {
           ZHS.Log.info('课程已全部看完，无需播放');
           if (!silent && ZHS.panel) ZHS.panel.alert('检测到课程已全部看完', 'info');
           return bd;
@@ -2437,6 +2652,8 @@ window.__ZHS_BUILD__.version = "0.6.39";
       }
       this._disposeDialogObserver();   // round-31：停主循环时一并卸载弹题监听
       ZHS.state.running = false;
+      // round-34：主循环停止时同步停掉防卡死看门狗，避免残留定时器
+      try { if (ZHS.Guard && ZHS.Guard.stop) ZHS.Guard.stop(); } catch (e) {}
       const reason = why || 'user';
       this._haltReason = reason;
       // 只有「用户停 / 达标停」才彻底封死；瞬时故障停允许 tryResumeAfterTransientStop 救回
@@ -3094,8 +3311,9 @@ window.__ZHS_BUILD__.version = "0.6.39";
             if (ZHS.panel) ZHS.panel.alert('未识别到课程目录，请先进入具体课程的播放页', 'error');
             // round-14：目录临时读不到属瞬时故障（SPA 重渲染/懒加载瞬间），允许自愈，不永久封死
             this.stop('transient');
-          } else if (bd.undone === 0) {
-            // 真正全看完：先看是否要「自动跳课」回课程中心找下一门，
+          } else if (bd.undone === 0 && cat.trulyAllDone()) {
+            // 真正全看完（round-34：经检测健康+视频进度交叉校验，排除空/错目录误判）：
+            // 先看是否要「自动跳课」回课程中心找下一门，
             // 没开开关（或不在学习页 / 模块缺失）就保持原有「出总结并停止」行为。
             const hub = ZHS.CourseHub;
             const canHop = cfg.autoCourseHop && hub && !hub.isHubPage();
