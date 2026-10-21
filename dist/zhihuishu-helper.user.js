@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.48
+// @version      0.6.49
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.48";
+window.__ZHS_BUILD__.version = "0.6.49";
 
 /* ===== 00-config.js ===== */
 /**
@@ -898,6 +898,79 @@ window.__ZHS_BUILD__.version = "0.6.48";
    * 所以这里降级为「加分项」，真正拍板交给 detect() 的评分选举：
    * 谁命中得多、谁能定位到「当前项」，谁上。
    */
+  /**
+   * 自动推导适配器（通用兜底增强）
+   *
+   * 【2026-10-21 根治「切不动课」】用户那门「Windows版/Mac版」课掉进通用兜底分支：
+   * items() 用 sniffItems() 能捞到 20 个候选，但 current()/isFinished()/hasActive()/click()
+   * 全部沿用 wisdom 适配器的选择器（.child-info.hasvideo.current / .child-check …），
+   * 在该布局上一个都匹配不上 → current() 恒为 null → clickAndVerify 的 nowIsTarget 永远 false
+   * → 只能指望视频源变化（非视频节点无视频源）→ 反复点、永远判失败 → 「切不动」。
+   *
+   * 这里不再硬套常量选择器，而是**从 sniffItems 捞到的真实候选里反推**：
+   *   - 当前项：候选里 className 命中 active/current/on/selected/playing 的（行业通用约定）
+   *   - 完成标记：候选后代中 class 含 finish/done/complete/check 且为图标/空壳的
+   *   - 可点目标：候选本身（兜底），或其中最可能带点击处理器的子节点
+   * 这样未知布局也能正常切课，而不是卡死。仅在 detect() 无任何已知适配器命中时启用，
+   * 已知布局完全走原逻辑，零回归风险。
+   */
+  const AUTO_ACTIVE_RE = /(^|\s)(active|current|on|selected|playing|cur|now|focus)(\s|$)/i;
+  const AUTO_FINISH_RE = /(finish|done|complete|check|learned|studied|passed)/i;
+  function buildAutoAdapter() {
+    const cands = sniffItems();
+    if (!cands.length) return null;
+    // 容器：拥有最多候选的父节点
+    const pc = {};
+    for (const c of cands) {
+      const p = c.parentElement;
+      if (p) pc[p] = (pc[p] || 0) + 1;
+    }
+    let container = null, max = 0;
+    for (const k in pc) if (pc[k] > max) { max = pc[k]; container = k; }
+    return {
+      name: 'auto', label: '自动推导(兜底)', item: null, container: null,
+      _cands: cands, _container: container,
+    };
+  }
+
+  /** auto 适配器：从候选里定位「当前播放项」 */
+  function autoCurrent() {
+    const ad = Catalog.adapter;
+    if (!ad || ad.name !== 'auto') return null;
+    const cands = ad._cands || [];
+    // 1. className 命中通用「当前项」约定
+    let hit = cands.find((c) => AUTO_ACTIVE_RE.test(String(c.className || '')));
+    if (hit) return hit;
+    // 2. 后代含 current/active 类
+    hit = cands.find((c) => {
+      try { return !!c.querySelector('.active, .current, .on, .selected, [class*="current"], [class*="active"]'); } catch (e) { return false; }
+    });
+    if (hit) return hit;
+    // 3. 回落：用 lessonKey 文本匹配
+    const key = ZHS.state.lessonKey;
+    if (key) return cands.find((c) => U.normText(c.innerText || c.textContent) === key) || null;
+    return null;
+  }
+
+  /** auto 适配器：判断候选是否已完成 */
+  function autoIsFinished(el) {
+    if (!el) return false;
+    try {
+      const badges = el.querySelectorAll('i, span, em, img, svg, b, strong');
+      for (const n of badges) {
+        const cls = String(n.className || '');
+        if (AUTO_FINISH_RE.test(cls)) {
+          const tag = String(n.tagName || '').toLowerCase();
+          if (/^(i|span|em|img|svg|b|strong)$/.test(tag)) return true;     // 图标型
+          if (!n.firstElementChild) return true;                            // 空壳（可能就是那个勾）
+        }
+      }
+      // 文本兜底：已完成 / 已学完
+      if (/(已完成|已学完|已学习|学完|已看完|已通过)/.test(U.normText(el.innerText || el.textContent))) return true;
+    } catch (e) { /* 忽略 */ }
+    return false;
+  }
+
   function hostBonus(name) {
     const host = location.hostname;
     if (host.includes('polymas.com')) return name === 'polymas' ? 5 : 0;
@@ -1025,6 +1098,13 @@ window.__ZHS_BUILD__.version = "0.6.48";
         + (detail.length > 1 ? '；候选评分 ' + detail.join(' / ') : ''));
       return best;
     }
+    // 无任何已知适配器命中 → 尝试从真实 DOM 自动推导目录结构（治「切不动课」兜底布局）
+    const auto = buildAutoAdapter();
+    if (auto) {
+      ZHS.state.siteVersion = 'auto';
+      ZHS.Log.info('未知布局：已自动推导目录结构，候选 ' + auto._cands.length + ' 个，启用 auto 适配器');
+      return auto;
+    }
     ZHS.state.siteVersion = 'unknown';
     ZHS.Log.warn('未能识别页面版本，将使用通用兜底策略');
     return ADAPTERS.wisdom; // 兜底
@@ -1076,6 +1156,15 @@ window.__ZHS_BUILD__.version = "0.6.48";
     /** 所有章节条目 */
     items() {
       expandTreeOnce(); // 先把折叠章节展开，否则折叠中的课时不在 DOM 里，取不到也点不到
+      // auto 适配器：item 为 null，直接走结构兜底扫描（与 detect 推导用同一套候选）
+      if (this.adapter.name === 'auto') {
+        const cands = sniffItems();
+        if (cands.length) {
+          if (!this._sniffed) { this._sniffed = true; ZHS.Log.warn('预设选择器未命中，已启用结构兜底扫描，捞到 ' + cands.length + ' 个候选条目'); }
+          return cands;
+        }
+        return [];
+      }
       const list = Array.from(document.querySelectorAll(this.adapter.item));
       // hike 版过滤掉目录树中间节点（有子节点的不是叶子）
       if (this.adapter.name === 'hike') {
@@ -1103,6 +1192,8 @@ window.__ZHS_BUILD__.version = "0.6.48";
     /** 当前播放的条目 */
     current() {
       const ad = this.adapter;
+      // auto 适配器：从推导候选里反推当前项（见 autoCurrent）
+      if (ad.name === 'auto') return autoCurrent();
       // round-15【D3】：active 查询必须限定在目录容器内。
       // 原先用 document.querySelector(ad.active) 全局查，只要页面别处（播放器控制条、
       // 顶部导航、其他 tab）恰有带 active/current 类且标题文本又碰巧等于目标节的元素，
@@ -1135,6 +1226,8 @@ window.__ZHS_BUILD__.version = "0.6.48";
     itemTitle(el) {
       if (!el) return '';
       const ad = this.adapter;
+      // auto 适配器：没有专属标题选择器，直接读条目自身文本（sniffItems 已保证是纯课时名）
+      if (ad.name === 'auto') return U.normText(el.innerText || el.textContent).slice(0, 80);
       const readTxt = (n) => {
         if (!n) return '';
         const attr = n.getAttribute && n.getAttribute('title');
@@ -1167,6 +1260,8 @@ window.__ZHS_BUILD__.version = "0.6.48";
     isFinished(el) {
       if (!el) return false;
       const ad = this.adapter;
+      // auto 适配器：用推导逻辑判断完成态（不依赖 wisdom 等专属选择器）
+      if (ad.name === 'auto') return autoIsFinished(el);
       try {
         // 1. 适配器专属完成标记（如 wisdom 的 .child-check / legacy 的 .time_icofinish）
         if (ad.finish && el.querySelector(ad.finish)) return true;
@@ -1373,6 +1468,14 @@ window.__ZHS_BUILD__.version = "0.6.48";
     hasActive(el) {
       if (!el) return false;
       const ad = this.adapter;
+      // auto 适配器：用通用「当前项」类名约定判断（行业通用，不依赖具体选择器）
+      if (ad.name === 'auto') {
+        let rawClass = '';
+        try { rawClass = String((el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (el.className || '')); } catch (e) { rawClass = ''; }
+        if (AUTO_ACTIVE_RE.test(rawClass)) return true;
+        try { if (el.querySelector('.active, .current, .on, .selected, [class*="current"], [class*="active"]')) return true; } catch (e) { /* 忽略 */ }
+        return false;
+      }
       let rawClass = '';
       try {
         rawClass = String((el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (el.className || ''));
@@ -1411,6 +1514,11 @@ window.__ZHS_BUILD__.version = "0.6.48";
       try {
         if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
       } catch (e) { /* 滚动失败不影响点击 */ }
+      // auto 适配器：未知布局下直接点条目本体最稳（上层 Nav 已先尝试 SPA 句柄直调，
+      // 若框架把处理器绑在容器/文档委托上，el.click() 冒泡即可触发）
+      if (this.adapter.name === 'auto') {
+        try { el.click(); return true; } catch (e) { ZHS.Log.error('auto 点击章节失败：', e.message); return false; }
+      }
 
       // round-36：不再裸点容器 el。真机结论（legacy .catalogue_title）——点标题/链接
       // 子元素才触发切集，点 li 本体有时整页跳门户首页。故按优先级挑「最可能带处理器」的

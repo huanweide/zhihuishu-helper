@@ -4,6 +4,28 @@
 
 ---
 
+## [0.6.49] - 2026-10-21
+> 第二十八轮补丁（round-40）：**根治"通用兜底布局切不动课"——新增自动推导适配器（auto）**
+
+### 背景
+v0.6.47/v0.6.48 在「Windows版/Mac版」这类通用兜底布局上仍切不动课。根因不在切课策略（Nav 四档策略够用），而在**目录识别**：`detect()` 无任何已知适配器命中时，回落到 `wisdom` 适配器，但 `items()` 走 `sniffItems()` 能捞到 20 个候选，而 `current()/isFinished()/hasActive()/click()` 仍沿用 wisdom 的选择器（`.child-info.hasvideo.current` / `.child-check` …），在该布局上一个都匹配不上：
+- `current()` 恒为 null → `clickAndVerify` 的 `nowIsTarget` 永远 false；
+- 非视频节点无视频源 → `pageSwitched` 也永远 false；
+- 结果：反复点、永远判失败 → 用户看到的"切不动 / 正在切换课时中"。
+
+### 改动
+1. **自动推导适配器 `auto`**：`detect()` 在无已知适配器命中时，调用 `buildAutoAdapter()`——从 `sniffItems()` 捞到的真实候选反推目录结构（容器=最多候选的父节点），仅在此分支启用，**已知布局零回归**。
+2. **`current()`（auto）**：用行业通用的"当前项"类名约定（active/current/on/selected/playing）定位当前播放项，命中不到再回落 lessonKey 文本匹配。
+3. **`isFinished()`（auto）**：扫描候选后代中 class 含 finish/done/complete/check 且为图标/空壳的标记，加"已完成/已学完"文本兜底，不再依赖 wisdom 专属选择器。
+4. **`hasActive()`（auto）**：同上通用类名约定判定当前项，修好切课验收。
+5. **`itemTitle()` / `items()` / `click()`（auto）**：避开 `querySelector(null)` 报错（`item`/`title` 为 null），直接读条目文本、点击条目本体（上层 Nav 已先尝试 SPA 句柄直调）。
+6. 配套诊断：`debug/zhihuishu-debug.user.js` 实地探针（截后端 API + 穷举候选试切 + 逐档策略实测 + 一键诊断），用于真机确认 auto 推导命中情况。
+
+### 验证
+`tsc --noEmit` 0 错 + `node test/run.js` 全绿（既有 565 用例无新回归）。真实布局切换命中情况待用户真机探针/实际开课确认。
+
+---
+
 ## [0.6.48] - 2026-10-21
 > 第二十七轮补丁（round-39c）：**治"切课切不动 + 非视频节点卡死"** —— 非视频节点不再死等 0% 进度 + 穷举切换兜底 + 切课失败自诊断。
 
