@@ -1025,9 +1025,12 @@ const _noreplay = (async () => {
   const S = win.ZHS.Scheduler;
   const cat = win.ZHS.Catalog;
   const video = win.document.querySelector('video');
-  video.duration = 300;
-  video.currentTime = 300;
-  video.ended = true;
+  // jsdom 的 duration/currentTime 是只读 getter，直接赋值静默失败（停在 0），
+  // 会被 round-39c 的"非视频节点(duration<=0)"分支抢先。必须 defineProperty 设成真实时长，
+  // 让它走"视频放完但平台 0% 进度"的正路。
+  try { Object.defineProperty(video, 'duration', { value: 300, configurable: true }); } catch (e) {}
+  try { Object.defineProperty(video, 'currentTime', { value: 300, configurable: true }); } catch (e) {}
+  try { Object.defineProperty(video, 'ended', { value: true, configurable: true }); } catch (e) {}
 
   // 目录条目无完成标记、无进度条 → progressOf 读到 0
   const cur = cat.current();
@@ -1058,6 +1061,29 @@ const _noreplay = (async () => {
   eq('停手原因为 zero-progress', S._haltReason, 'zero-progress');
   ok('停手后仍未切换课时', cat.itemTitle(cat.current()) === '第一节',
     cat.itemTitle(cat.current()));
+})();
+
+console.log('\n=== 31c. 非视频节点（duration 0）不停死等 0% 进度，直接切下一节（round-39c） ===');
+const _nonvideo = (async () => {
+  const html = `<html><body>
+<div class="chapter-tree-74">
+  <div class="child-info hasvideo current"><span class="child-name">第一节</span></div>
+  <div class="child-info hasvideo"><span class="child-name">第二节</span></div>
+</div>
+<video></video>
+</body></html>`;
+  const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=nonvideo');
+  const S = win.ZHS.Scheduler;
+  const video = win.document.querySelector('video');
+  win.ZHS.state.running = true;
+  win.ZHS.config.nextDelayMin = 0;
+  win.ZHS.config.nextDelayMax = 0;
+  let navCalls = 0;
+  const origGoto = S.gotoNext.bind(S);
+  S.gotoNext = function () { navCalls++; return origGoto.apply(null, arguments); };
+  await S.onLessonEnd(video);
+  ok('非视频节点会尝试切下一节（不死等 0% 进度）', navCalls >= 1, String(navCalls));
+  ok('非视频节点不进入 0% 进度等待', !S._zeroSince, String(S._zeroSince));
 })();
 
 console.log('\n=== 32. 播放器进度对账：超前只告警、绝不 seek（round-26 修订） ===');

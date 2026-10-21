@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.47
+// @version      0.6.48
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.47";
+window.__ZHS_BUILD__.version = "0.6.48";
 
 /* ===== 00-config.js ===== */
 /**
@@ -3495,6 +3495,16 @@ window.__ZHS_BUILD__.version = "0.6.47";
       if (this._navigating) return;
       this._navigating = true;
       try {
+        // round-39c：非视频节点（下载页/文档页，video 常是 duration 0 的桩）——不能按
+        // 「视频放完等平台进度」处理，否则平台永远 0% → 卡满 3 分钟交人（真机：卡在"Windows版"下载节点）。
+        // 改为：停留数秒让平台登记该文档节点，再切下一节。
+        if (video && (!Number.isFinite(video.duration) || video.duration <= 0)) {
+          ZHS.Log.info('当前节点无实际视频流（时长 ' + Math.round(video.duration || 0) + 's，判为文档/下载类节点），停留 4s 让平台登记后切换下一节');
+          await U.sleep(4000);
+          ZHS.Player.resetRetry();
+          await this.gotoNext('非视频节点（无实际视频流）');
+          return;
+        }
         // 用本轮播放的课时标题找回当前节 DOM（不依赖 .current 类——视频放完后该类可能已转移到下一节）
         const locateCur = () => (ZHS.state.lessonKey
           ? (ZHS.Catalog.findByName(ZHS.state.lessonKey) || ZHS.Catalog.current())
@@ -3695,7 +3705,11 @@ window.__ZHS_BUILD__.version = "0.6.47";
         // round-14【P4】：clickAndVerify 内部已加「当前节必须真的从旧节变成新节」的第二信号校验。
         // round-35：改用 Nav.jumpTo —— 它内部按「SPA 内部 API → URL 深链 → 拟人化点击」顺序尝试，
         // 绝大多数情况不再依赖会被反作弊判定为脚本的合成点击。
-        const switched = await ZHS.Nav.jumpTo(next, { timeout: 3000, fromKey: _prevKey, allowNativeNext: true });
+        let switched = await ZHS.Nav.jumpTo(next, { timeout: 3000, fromKey: _prevKey, allowNativeNext: true });
+        // round-39c：穷举兜底——Nav 全策略（SPA/URL/原生按钮/拟人点击）都失败后，
+        // 对目标项的各候选子目标逐一拟人点击，每个点击后以「当前课时是否真变成目标」验收
+        // （不看选中态，AI/新版布局选中态常不可见），命中即收。
+        if (!switched) switched = await this._exhaustiveSwitch(next, _targetKey, _prevKey);
         if (!switched) {
           // round-14【P1】：点击失败 → 课时标识必须回滚，绝不让「记错节」发生
           ZHS.state.lessonKey = _prevKey;
@@ -3709,6 +3723,9 @@ window.__ZHS_BUILD__.version = "0.6.47";
           const hitTotal = this._navFailTotal >= NAV_FAIL_TOTAL_MAX;
           ZHS.Log.warn('点击「' + _targetKey + '」后未检测到切换（同目标 ' + this._navFailCount
             + ' 次 / 本轮累计 ' + this._navFailTotal + ' 次），已回滚课时标识');
+          // round-39c：切课失败自诊断——首次失败即 dump 目标项真实结构/框架/适配器/遮罩/可点子目标，
+          // 下一跑凭这段精准定位"这个布局到底该点哪个、要不要真实点击"。
+          if (this._navFailCount <= 1) this._dumpSwitchDiag(next);
           if (hitSame || hitTotal) {
             const _why = hitSame
               ? '连续 ' + this._navFailCount + ' 次点击「' + _targetKey + '」都无反应'
@@ -3750,6 +3767,84 @@ window.__ZHS_BUILD__.version = "0.6.47";
       } finally {
         if (owned) this._navigating = false;
       }
+    },
+
+    /**
+     * round-39c：穷举切换兜底——Nav 全策略失败后，对目标项各候选子目标逐一拟人点击，
+     * 每个点击后以「当前课时是否真变成 targetKey」验收（不看选中态）。命中即返回 true。
+     */
+    async _exhaustiveSwitch(el, targetKey, prevKey) {
+      const cat = ZHS.Catalog;
+      const U2 = ZHS.Util;
+      const switchedNow = async () => {
+        try {
+          const cur = cat.current();
+          if (!cur) return false;
+          const ck = cat.itemTitle(cur);
+          if (prevKey && ck === prevKey && ck !== targetKey) return false;
+          return ck === targetKey;
+        } catch (e) { return false; }
+      };
+      const cands = [];
+      const add = (c) => { try { if (c && cands.indexOf(c) < 0) cands.push(c); } catch (e) {} };
+      try { add(el.querySelector('a[href]')); } catch (e) {}
+      try { add(el.querySelector('[onclick]')); } catch (e) {}
+      try { add(el.querySelector('[class*="title"],[class*="name"],[class*="chapter"],[class*="text"]')); } catch (e) {}
+      try { add(el.querySelector('i, svg, [class*="icon"]')); } catch (e) {}
+      add(el);
+      for (const c of cands) {
+        try { if (U2.realClickHuman) U2.realClickHuman(c); else c.click(); }
+        catch (e) { try { c.click(); } catch (e2) {} }
+        await U2.sleep(900);
+        // eslint-disable-next-line no-await-in-loop
+        if (await switchedNow()) {
+          ZHS.Log.info('穷举切换：命中候选子目标，已切到「' + targetKey + '」');
+          return true;
+        }
+      }
+      return false;
+    },
+
+    /**
+     * round-39c：切课失败自诊断——把目标目录项真实结构/框架/适配器/遮罩/可点子目标打日志，
+     * 用于精准定位"这个通用兜底布局到底该点哪个元素、要不要真实点击"。
+     */
+    _dumpSwitchDiag(el) {
+      const L = [];
+      try {
+        L.push('=== 切课诊断 ' + new Date().toLocaleTimeString() + '（请把这段发给开发者） ===');
+        try {
+          L.push('framework: vue=' + (window.Vue && window.Vue.version) + ' nuxt=' + !!window.__NUXT__
+            + ' react=' + (!!window.React || Object.keys(window).some((k) => /^__react/.test(k))) + ' jq=' + !!window.jQuery);
+        } catch (e) {}
+        try {
+          const ad = ZHS.Catalog && ZHS.Catalog.adapter;
+          L.push('adapter: ' + (ad ? ((ad.name || '?') + ' | container=' + ad.container + ' | items=' + ad.items + ' | clickTarget=' + ad.clickTarget) : 'null'));
+        } catch (e) {}
+        if (el) {
+          try {
+            const r = el.getBoundingClientRect ? el.getBoundingClientRect() : { x: 0, y: 0, width: 0, height: 0 };
+            const cx = Math.round(r.x + r.width / 2), cy = Math.round(r.y + r.height / 2);
+            let at = null; try { at = document.elementFromPoint(cx, cy); } catch (e) {}
+            const attrs = {}; try { Array.from(el.attributes || []).forEach((a) => { attrs[a.name] = String(a.value).slice(0, 60); }); } catch (e) {}
+            L.push('target: <' + el.tagName + '> cls="' + (el.className || '').toString().slice(0, 120) + '" rect=' + Math.round(r.x) + ',' + Math.round(r.y) + ',' + Math.round(r.width) + 'x' + Math.round(r.height));
+            L.push('  attrs=' + JSON.stringify(attrs));
+            L.push('  onclick=' + (el.getAttribute ? !!el.getAttribute('onclick') : '?') + ' vue=' + !!(el.__vue__ || el.__vueParentComponent) + ' shadow=' + (el.getRootNode ? (el.getRootNode() instanceof ShadowRoot) : '?'));
+            L.push('  elementFromPoint(center)=' + (at ? at.tagName + '.' + (at.className || '').toString().slice(0, 40) : 'null') + ' covered=' + (at && at !== el && !el.contains(at) ? 'YES(被盖住)' : 'no'));
+            L.push('  html=' + (el.outerHTML || '').replace(/\s+/g, ' ').slice(0, 300));
+            const cands = [];
+            try { const a = el.querySelector('a[href]'); if (a) cands.push('a[href]=' + String(a.getAttribute('href')).slice(0, 40)); } catch (e) {}
+            try { if (el.querySelector('[onclick]')) cands.push('[onclick]'); } catch (e) {}
+            try { const ti = el.querySelector('[class*="title"],[class*="name"]'); if (ti) cands.push('title-child=<' + ti.tagName + '>'); } catch (e) {}
+            L.push('  clickCandidates=' + JSON.stringify(cands));
+          } catch (e) { L.push('target err: ' + e.message); }
+        } else { L.push('target: null'); }
+        try {
+          L.push('current lessonKey=' + ZHS.state.lessonKey + ' | catalog.current=' + (ZHS.Catalog.current ? (ZHS.Catalog.itemTitle(ZHS.Catalog.current()) || '?') : '?'));
+        } catch (e) {}
+        L.push('=== 切课诊断结束 ===');
+      } catch (e) { L.push('诊断异常: ' + e.message); }
+      L.forEach((l) => { try { ZHS.Log.warn(l); } catch (e) {} });
     },
 
     /**
