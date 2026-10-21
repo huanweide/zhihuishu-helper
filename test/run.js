@@ -263,7 +263,55 @@ console.log('\n=== 5b. 适配层（auto 自动推导兜底） ===');
   <div class="player"><video></video></div>
 </div>`), 'https://example.com/unknown-layout');
     const C = win.ZHS.Catalog;
-    eq('媒体独立区+无类名 → current() 识别盲区返回 null（已知局限，需探针数据）', C.current(), null);
+      eq('媒体独立区+无类名 → current() 识别盲区返回 null（已知局限，需探针数据）', C.current(), null);
+  }
+}
+
+console.log('\n=== 5c. 适配层（Windows/Mac版通用布局「切不动课」根治） ===');
+{
+  // 复现用户那门「Windows版/Mac版」课的真实病灶：页面在 studyvideoh5 上，
+  // wisdom 的 item 选择器 .child-info.hasvideo 在页面别处碰巧命中少量节点（拿到 hostBonus +3，
+  // 抢在 auto 前被选中），但其 active 选择器 .child-info.hasvideo.current 一个都匹配不上
+  // → 旧版 current() 直接 return null → clickAndVerify 的 nowIsTarget 永远 false → 反复点、切不动。
+  //
+  // ① detect 自愈：已知适配器仅命中少量节点且定位不到当前项 → 降级 auto，从真实 DOM 反推目录
+  {
+    const { win } = makeEnv(`<html><body>
+      <div class="chapter-tree-74">
+        <div class="child-info hasvideo"><span class="child-name">侧栏A</span></div>
+        <div class="child-info hasvideo"><span class="child-name">侧栏B</span></div>
+      </div>
+      <div class="catalog">
+        <div class="lesson"><span class="name">1.1 课时A</span><i class="finished"></i></div>
+        <div class="lesson active"><span class="name">1.2 课时B</span></div>
+        <div class="lesson"><span class="name">1.3 课时C</span></div>
+        <div class="lesson"><span class="name">1.4 课时D</span></div>
+      </div>
+      <video></video>
+    </body></html>`, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=wc1');
+    const C = win.ZHS.Catalog;
+    eq('已知适配器仅命中侧栏 2 节点 → 自愈降级 auto', C.adapter.name, 'auto');
+    eq('auto 从真实 DOM 反推出 4 个候选', C.items().length, 4);
+    eq('当前项反推命中带 active 的 1.2', C.itemTitle(C.current()), '1.2 课时B');
+    eq('下一节链路可用 → 1.3', C.itemTitle(C.findNext(C.current())), '1.3 课时C');
+  }
+
+  // ② 已知适配器 item 选择器恰好命中真实大目录（≥3）、但用通用 .on 而非 .current 标记当前项：
+  //    detect 不应误降级（knownCount≥3），但 current() 必须用通用反推兜底命中 .on → 这才是「切得动」的关键
+  {
+    const { win } = makeEnv(`<html><body>
+      <div class="chapter-tree-74">
+        <div class="child-info hasvideo"><span class="child-name">1.1 课时A</span><i class="child-check"></i></div>
+        <div class="child-info hasvideo on"><span class="child-name">1.2 课时B</span></div>
+        <div class="child-info hasvideo"><span class="child-name">1.3 课时C</span></div>
+        <div class="child-info hasvideo"><span class="child-name">1.4 课时D</span></div>
+      </div>
+      <video></video>
+    </body></html>`, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=wc2');
+    const C = win.ZHS.Catalog;
+    eq('真实大目录（4 节点）→ 仍识别为 wisdom（不误降级）', C.adapter.name, 'wisdom');
+    eq('wisdom 专属 active 失效，但通用反推命中 .on 当前项', C.itemTitle(C.current()), '1.2 课时B');
+    eq('切课验收链路可用（nowIsTarget 不再恒 false）→ 1.3', C.itemTitle(C.findNext(C.current())), '1.3 课时C');
   }
 }
 

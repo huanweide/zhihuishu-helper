@@ -4,6 +4,24 @@
 
 ---
 
+## [0.6.52] - 2026-10-21
+> 第三十轮补丁（round-43）：**根治「切不动课」根因（通用反推兜底 + detect 自愈降级）**
+
+### 改动
+1. **`Catalog.current()` 通用反推兜底（治本）**：已知适配器专属 `active` 选择器在该布局失效、返回 null 时，从真实目录条目用行业通用约定（active/current/on/selected 类名 / 媒体邻近 / lessonKey）反推当前项。正确布局的 current() 已在前面分支命中，不会走到这里 → 零回归。直接修复「Windows版/Mac版」课 `clickAndVerify` 的 `nowIsTarget` 永远 false、反复点死循环。
+2. **`Catalog.hasActive()` 通用兜底**：专属判定全失败时，回退到通用「当前项」类名约定，作为 `clickAndVerify` 第二信号的最后防线。
+3. **`detect()` 自愈降级（治表+兜底）**：胜出的已知适配器若连「当前项」都定位不到（最强信号缺失），且自身仅命中 <3 个节点（明显不是真目录）而 auto 能推导出 ≥3 个候选，则降级到 auto，从结构反推。正常大目录（几十节点）绝不满足 `knownCount<3`，不会误降级。
+4. **抽出 `reverseCurrentFrom(list)` 单一真源**：auto 适配器的 `autoCurrent()` 与 `current()` 兜底共用同一套反推逻辑，去重、易测。
+
+### 验证
+- `node test/run.js` 新增「5c」用例组：复现「侧栏少量节点抢选 wisdom + 真实目录被忽略」与「wisdom item 命中真实大目录但用 .on 而非 .current」两场景，断言 detect 自愈降级 / current 通用反推命中。
+- `node build.js` 通过；产物为测试版本（v0.6.52）。
+
+### 残余风险 / 下一步
+- 仍属「结构反推」范畴；若某平台纯靠 JS 内部状态切课（不挂类名、不改 video/URL/标题），需实测后补「后端 API 直调」档（见 zhs-cli diag）。
+
+---
+
 ## [0.6.51] - 2026-10-21
 > 第三十轮补丁（round-42）：**切课验收第 5 档（auto 类名变化软信号）+ 外置 CLI + 诊断探针**
 

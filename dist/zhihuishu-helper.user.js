@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.51
+// @version      0.6.52
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.51";
+window.__ZHS_BUILD__.version = "0.6.52";
 
 /* ===== 00-config.js ===== */
 /**
@@ -933,42 +933,52 @@ window.__ZHS_BUILD__.version = "0.6.51";
     };
   }
 
-  /** auto 适配器：从候选里定位「当前播放项」 */
-  function autoCurrent() {
-    const ad = Catalog.adapter;
-    if (!ad || ad.name !== 'auto') return null;
-    const cands = ad._cands || [];
+  /**
+   * 通用「当前项」反推：给定一份目录条目列表，用行业通用约定定位当前播放项。
+   * 用于两处：① auto 适配器的 current()；② 已知适配器专属 active 选择器失效时的兜底（治「切不动课」）。
+   * 判定优先级（由强到弱）：
+   *   1. 条目 className 命中 active/current/on/selected/playing 等通用约定
+   *   2. 条目后代含 active/current 类
+   *   3. lessonKey 文本精确匹配
+   *   4. 播放媒体（video/audio）就近反推（媒体是某条目后代，或某条目包含媒体）
+   */
+  function reverseCurrentFrom(list) {
+    if (!list || !list.length) return null;
     // 1. className 命中通用「当前项」约定
-    let hit = cands.find((c) => AUTO_ACTIVE_RE.test(String(c.className || '')));
+    let hit = list.find((c) => AUTO_ACTIVE_RE.test(String(c.className || '')));
     if (hit) return hit;
     // 2. 后代含 current/active 类
-    hit = cands.find((c) => {
+    hit = list.find((c) => {
       try { return !!c.querySelector('.active, .current, .on, .selected, [class*="current"], [class*="active"]'); } catch (e) { return false; }
     });
     if (hit) return hit;
-    // 3. 回落：用 lessonKey 文本匹配
+    // 3. lessonKey 文本匹配
     const key = ZHS.state.lessonKey;
     if (key) {
-      const byKey = cands.find((c) => U.normText(c.innerText || c.textContent) === key);
+      const byKey = list.find((c) => U.normText(c.innerText || c.textContent) === key);
       if (byKey) return byKey;
     }
-    // 4. 从播放媒体反推：当前播放的课时条目通常与 <video>/<audio> 同源 DOM 邻近
-    //    （覆盖「平台纯靠 JS 内部状态、不给任何 DOM 挂 active/current 类名」的最坏情况）
+    // 4. 播放媒体就近反推
     try {
       const media = document.querySelector('video, audio');
       if (media) {
-        // 4a. 媒体本身是某候选的后代 → 沿祖先链向上找第一个属于候选集合的节点
         let pm = media.parentElement;
         while (pm) {
-          if (cands.includes(pm)) return pm;
+          if (list.includes(pm)) return pm;
           pm = pm.parentElement;
         }
-        // 4b. 某候选直接包含媒体（如章节缩略图内嵌 video）
-        const owner = cands.find((c) => c.contains(media));
+        const owner = list.find((c) => c.contains(media));
         if (owner) return owner;
       }
     } catch (e) { /* 忽略 */ }
     return null;
+  }
+
+  /** auto 适配器：从推导候选里反推当前播放项 */
+  function autoCurrent() {
+    const ad = Catalog.adapter;
+    if (!ad || ad.name !== 'auto') return null;
+    return reverseCurrentFrom(ad._cands || sniffItems());
   }
 
   /** auto 适配器：判断候选是否已完成 */
@@ -1102,6 +1112,21 @@ window.__ZHS_BUILD__.version = "0.6.51";
    * 存在一两个同名节点，就会抢占成功，真目录被顶掉，后续全部操作打在空气上。
    * 现在改为评分选举：全部候选各打一次分，取最高且 >0 者。
    */
+  /**
+   * 已知适配器能否在自身目录条目内定位到「当前项」（detect 自愈判据）。
+   * 只查「active 选择器命中且落在 item 列表内」，不强制可见，避免加载中途误判。
+   */
+  function adapterCanLocateCurrent(ad) {
+    try {
+      const list = Array.from(document.querySelectorAll(ad.item));
+      if (!list.length) return false;
+      if (!ad.active) return true;       // 无 active 选择器：不阻止该适配器
+      const actives = Array.from(document.querySelectorAll(ad.active));
+      const inList = actives.filter((a) => list.some((el) => el === a || el.contains(a)));
+      return inList.length > 0;          // 在目录条目内（含后代）找到 active 即视为可定位
+    } catch (e) { return false; }
+  }
+
   function detect() {
     let best = null;
     let bestScore = 0;
@@ -1112,6 +1137,22 @@ window.__ZHS_BUILD__.version = "0.6.51";
       if (s > bestScore) { bestScore = s; best = ad; }
     }
     if (best) {
+      // 自愈（治「切不动课」根因）：胜出的是已知适配器，但它连「当前项」都定位不到
+      // （最强信号缺失），说明它只是选择器在页面别处碰巧命中、并非真目录。
+      // 此时若 auto 能从真实 DOM 推导出有规模的目录，则降级到 auto，从结构反推当前项/完成态，
+      // 而不是卡死在错误选择器上。判定很保守——仅当已知适配器命中节点数 < 3（明显不是真目录）
+      // 且 auto 推导出 ≥ 3 个候选时才降级，确保正常大目录布局（几十个节点）绝不误降级。
+      if (!adapterCanLocateCurrent(best)) {
+        const auto = buildAutoAdapter();
+        let knownCount = 0;
+        try { knownCount = document.querySelectorAll(best.item).length; } catch (e) { knownCount = 0; }
+        if (auto && auto._cands.length >= 3 && knownCount < 3) {
+          ZHS.state.siteVersion = 'auto';
+          ZHS.Log.warn('已知适配器「' + best.name + '」评分 ' + bestScore + ' 但仅命中 ' + knownCount
+            + ' 个节点且定位不到当前项，降级到 auto 兜底（候选 ' + auto._cands.length + ' 个）');
+          return auto;
+        }
+      }
       ZHS.state.siteVersion = best.name;
       ZHS.Log.info('页面版本识别为：' + best.label + ' (' + best.name + ')，评分 ' + bestScore
         + (detail.length > 1 ? '；候选评分 ' + detail.join(' / ') : ''));
@@ -1233,11 +1274,17 @@ window.__ZHS_BUILD__.version = "0.6.51";
         const isItem = list.some((el) => el === cur || el.contains(cur) || cur.contains(el));
         if (isItem) return cur;
       }
-      // 兜底：用 lessonKey 文本匹配
+      // 兜底：用 lessonKey 文本匹配（保留原有精确匹配）
       const key = ZHS.state.lessonKey;
       if (key) {
-        return this.items().find((el) => this.itemTitle(el) === key) || null;
+        const byKey = this.items().find((el) => this.itemTitle(el) === key);
+        if (byKey) return byKey;
       }
+      // 通用反推兜底（治「切不动课」根因）：已知适配器专属 active 选择器在该布局失效时，
+      // 从真实目录条目用行业通用约定（active/current 类名 / 媒体邻近）反推当前项。
+      // 正确布局的 current() 已在前面分支命中，不会走到这里 → 零回归。
+      const rev = reverseCurrentFrom(this.items());
+      if (rev) return rev;
       return null;
     },
 
@@ -1516,6 +1563,11 @@ window.__ZHS_BUILD__.version = "0.6.51";
         const cur = ad.active ? scope.querySelector(ad.active) : null;
         if (cur && (cur === el || el.contains(cur) || cur.contains(el))) return true;
       } catch (e) { /* 选择器兼容 */ }
+      // 通用兜底：行业通用「当前项」类名约定（治「切不动课」，最后一道防线，仅当上述专属判定全失败）
+      try {
+        if (AUTO_ACTIVE_RE.test(rawClass)) return true;
+        if (el.querySelector('.active, .current, .on, .selected, [class*="current"], [class*="active"]')) return true;
+      } catch (e) { /* 忽略 */ }
       return false;
     },
 

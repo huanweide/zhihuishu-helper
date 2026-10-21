@@ -34,7 +34,7 @@ async function portAlive(port) {
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 1500);
-    const r = await fetch('http://127.0.0.1:' + port + '/json/version', { signal: ac.signal });
+    const r = await fetch('http://localhost:' + port + '/json/version', { signal: ac.signal });
     clearTimeout(t);
     return r.ok;
   } catch (e) { return false; }
@@ -55,6 +55,18 @@ async function findWs() {
     const port = m ? m[1] : null;
     if (port && await portAlive(port)) return w;
   }
+  // 兜底：直接探固定调试端口（应对 DevToolsActivePort 文件缺失 / 路径被引号偏移的情况）。
+  // 仅当端口确实在监听时才返回，避免连死端口导致 CDP 调用卡死。
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 1500);
+    const r = await fetch('http://[::1]:' + PORT + '/json/version', { signal: ac.signal });
+    clearTimeout(t);
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.webSocketDebuggerUrl) return j.webSocketDebuggerUrl;
+    }
+  } catch (e) { /* 端口未监听，忽略 */ }
   return null;
 }
 
@@ -65,7 +77,7 @@ async function cmdStart() {
   }
   const args = [
     '--remote-debugging-port=' + PORT,
-    '--user-data-dir="' + PROFILE + '"',
+    '--user-data-dir=' + PROFILE,
     '--no-first-run', '--no-default-browser-check',
     '--disable-blink-features=AutomationControlled',
     '--autoplay-policy=no-user-gesture-required',
@@ -172,6 +184,93 @@ async function cmdDiag(url) {
   }
 }
 
+// 深探探针：脚本是否运行 / Tampermonkey 是否安装 / 课程 DOM 结构 / 验证码是否遮挡
+const DEEP_EXPR = `(() => {
+  const r = {};
+  try { r.hasZHS = !!window.ZHS; r.ZHSkeys = window.ZHS ? Object.keys(window.ZHS) : null; } catch(e){ r.ZHSerr = String(e); }
+  try { r.hasTM = typeof window.Tampermonkey; r.hasGM = typeof window.GM_info; r.hasGMapi = typeof window.GM; } catch(e){ r.TMerr = String(e); }
+  try {
+    r.iframeCount = document.querySelectorAll('iframe').length;
+    r.iframes = Array.from(document.querySelectorAll('iframe')).map(f => ({ src: (f.src||'').slice(0,160), id: f.id||'', cls:(f.className||'').toString().slice(0,40) }));
+  } catch(e){ r.iframeErr = String(e); }
+  const sels = ['.child-info.hasvideo','.chapter-item','.chapter-tree-74','.course-name','[class*=chapter]','[class*=lesson]','[class*=catalog]','.video-title','.play-title','[class*=next]','[class*=Next]','.catalogue-name','.chapter-list','.course-list'];
+  r.selCounts = {};
+  sels.forEach(s => { try { r.selCounts[s] = document.querySelectorAll(s).length; } catch(e){ r.selCounts[s] = 'ERR'; } });
+  try {
+    const cap = document.querySelector('iframe[id*=captcha], iframe[src*=captcha]');
+    if (cap) { const b = cap.getBoundingClientRect(); r.captcha = { w: Math.round(b.width), h: Math.round(b.height), top: Math.round(b.top), left: Math.round(b.left), visible: b.width>0 && b.height>0 }; }
+    else r.captcha = 'none';
+  } catch(e){ r.capErr = String(e); }
+  r.bodyTextLen = (document.body ? document.body.innerText : '').length;
+  r.zhsFloat = !!document.getElementById('zhs-helper-root') || !!document.querySelector('[id*=zhs-helper]');
+  return r;
+})()`;
+
+// 深探：复用已验证的连接逻辑（findWs→[::1]→getTargets→attach→eval），避免单独脚本飘到错误调试实例
+async function cmdDeep() {
+  const ws = await findWs();
+  if (!ws) { console.error('✗ 找不到调试 Edge。先跑：node tools/zhs-cli.js start'); process.exit(2); }
+  const conn = new CdpConnection(ws);
+  const guard = setTimeout(() => { console.error('✗ 深探超时(60s)'); process.exit(9); }, 60000);
+  try {
+    let targets = await conn.callT('Target.getTargets', {}, null, 12000);
+    let pages = (targets.targetInfos || []).filter((t) => t.type === 'page' && t.url && t.url !== 'about:blank');
+    let page = pages.find((t) => /zhihuishu/i.test(t.url || ''));
+    if (!page) { console.error('✗ 没有智慧树页面'); process.exit(3); }
+    const attached = await conn.callT('Target.attachToTarget', { targetId: page.targetId, flatten: true }, null, 12000);
+    const sid = attached.sessionId;
+    if (!sid) { console.error('✗ attach 失败'); process.exit(6); }
+    await conn.callT('Runtime.enable', {}, sid, 12000).catch(() => {});
+    console.log('注入深探探针...');
+    const r = await conn.callT('Runtime.evaluate', { expression: DEEP_EXPR, returnByValue: true, awaitPromise: true }, sid, 30000);
+    if (r.exceptionDetails) { console.error('✗ 页内异常: ' + JSON.stringify(r.exceptionDetails).slice(0, 400)); process.exit(7); }
+    const data = r.result.value;
+    const outFile = path.join(__dirname, 'zhs-deep.last.json');
+    fs.writeFileSync(outFile, JSON.stringify(data, null, 2), 'utf8');
+    console.log(JSON.stringify(data, null, 2));
+    console.log('\n已写入: ' + outFile);
+  } finally {
+    conn.close();
+    clearTimeout(guard);
+  }
+}
+
+// inject：把 0.6.51 dist 脚本直接注入当前智慧树页（无需 Tampermonkey，脚本已对 GM_* 做降级），
+// 等 bootstrap+目录识别后，用只读深探观测 ZHS/adapter/items 是否真正激活。
+async function cmdInject() {
+  const ws = await findWs();
+  if (!ws) { console.error('✗ 找不到调试 Edge。先跑：node tools/zhs-cli.js start'); process.exit(2); }
+  const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
+  const dist = fs.readFileSync(distPath, 'utf8');
+  const conn = new CdpConnection(ws);
+  const guard = setTimeout(() => { console.error('✗ inject 超时(60s)'); process.exit(9); }, 60000);
+  try {
+    let targets = await conn.callT('Target.getTargets', {}, null, 12000);
+    let pages = (targets.targetInfos || []).filter((t) => t.type === 'page' && t.url && t.url !== 'about:blank');
+    let page = pages.find((t) => /zhihuishu/i.test(t.url || ''));
+    if (!page) { console.error('✗ 没有智慧树页面'); process.exit(3); }
+    const at = await conn.callT('Target.attachToTarget', { targetId: page.targetId, flatten: true }, null, 12000);
+    const sid = at.sessionId;
+    if (!sid) { console.error('✗ attach 失败'); process.exit(6); }
+    await conn.callT('Runtime.enable', {}, sid, 12000).catch(() => {});
+    console.log('注入 0.6.51 dist（' + (dist.length / 1024 | 0) + 'KB）...');
+    const inj = await conn.callT('Runtime.evaluate', { expression: dist, returnByValue: false, awaitPromise: false }, sid, 30000);
+    if (inj.exceptionDetails) { console.error('✗ 注入抛异常: ' + JSON.stringify(inj.exceptionDetails).slice(0, 400)); process.exit(7); }
+    console.log('注入完成，等待 bootstrap + 目录识别（5s）...');
+    await sleep(5000);
+    const obs = await conn.callT('Runtime.evaluate', { expression: DEEP_EXPR, returnByValue: true, awaitPromise: true }, sid, 30000);
+    if (obs.exceptionDetails) { console.error('✗ 观测抛异常: ' + JSON.stringify(obs.exceptionDetails).slice(0, 400)); process.exit(7); }
+    const data = obs.result.value;
+    const outFile = path.join(__dirname, 'zhs-inject.last.json');
+    fs.writeFileSync(outFile, JSON.stringify(data, null, 2), 'utf8');
+    console.log(JSON.stringify(data, null, 2));
+    console.log('\n已写入: ' + outFile);
+  } finally {
+    conn.close();
+    clearTimeout(guard);
+  }
+}
+
 async function cmdRun(url) {
   const ws = await findWs();
   if (!ws) { console.error('✗ 找不到调试 Edge。先跑：node tools/zhs-cli.js start'); process.exit(2); }
@@ -242,6 +341,8 @@ const url = (argv.find((a) => a.startsWith('--url=')) || '').slice(6);
   if (cmd === 'start') return cmdStart();
   if (cmd === 'connect') return cmdConnect();
   if (cmd === 'diag') return cmdDiag(url);
+  if (cmd === 'deep') return cmdDeep();
+  if (cmd === 'inject') return cmdInject();
   if (cmd === 'run') return cmdRun(url);
   console.log('用法: node tools/zhs-cli.js <start|connect|diag|run> [--url=课程URL]');
   process.exit(0);
