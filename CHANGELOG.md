@@ -4,6 +4,28 @@
 
 ---
 
+## [0.6.53] - 2026-10-21
+> round-44：**补齐作业/单元测试的填空/问答题自动作答（主观题盲区根治）**
+
+### 根因（确诊非猜）
+`06c-exam.js` 是作业/考试作答页**唯一的自动答题链路**（自启动轮询 `tick` + `autoExam` 开关，`05-scheduler` 不接管它；`13-answerer.handleHomework` 只是面板手动触发且默认关），却在主循环里对 `COMPLETION`/`QA` 直接 `continue` 跳过主观题。而下游三层能力早已就绪——`Filler.fill` 的 completion/qa 分支（`fillText` 填输入框+补事件）、`Bank.normalize` 对填空/问答原文返回、`LLM.buildPrompt` 已写好填空/问答专用 prompt——能力在半路断送，导致「平时作业/章节练习/单元测试」的自动答题对主观题完全无解。
+
+### 改动
+1. **`06c-exam.js` 主观题不再无条件跳过**：默认由 LLM 生成答案回填（新增 `fillSubjective` 复用 `Filler.fill` 的 completion/qa 分支 + `localFillText` 模块内兜底）。仅 `examSubjective: false` 时跳过；无答案（无 LLM Key/题库未命中）走「未取得答案」分支提示手动作答，**绝不瞎填污染成绩**。主观题作答日志带「LLM生成·请提交前检查」提示。
+2. **`10-llm.js` 新增 `LLM.ask(question, type)`**：主观题单次生成。`vote` 的「多次投票取众数」对文本答案失效——填空/问答每次生成的文本几乎不可能逐字相同，票数都是 1，既收敛不了又白费最多 3 次调用；主观题只需一次高质量生成。返回 `Bank.normalize` 后的原文（填空/问答走原文返回分支，不字母化）。
+3. **`11-solver.js` LLM 通道按题型分流**：主观题（无选项）走 `ask` 单次，选择题仍走 `vote` 投票提稳（零回归）。
+4. **`00-config.js` 新增 `examSubjective`**（默认 `true`，受 `autoExam` 总开关约束）+ 加入 `BOOL_KEYS` 布尔归一化（防脏值字符串偷偷开关）。
+
+### 验证
+- 测试见 5d 用例组（主观题分流/回填/规整）；`node build.js` 通过。
+
+### 边界（守住不越界）
+- 只针对智慧树作业/考试作答页（`#/webExamList/dohomework`/`doexamination`）的**平时作业/章节练习/单元测试**；正式监考考试（如超星 `reVersionTestStartNew` + monitorStatus）不在本工具范围内。
+- 主观题答案质量取决于 LLM Key；无 Key 时跳过并提示手动，不蒙答案。
+- 提交仍受 `examSubmit` + `waitBeforeSubmit` 倒计时控制，用户可反悔。
+
+---
+
 ## [0.6.52] - 2026-10-21
 > 第三十轮补丁（round-43）：**根治「切不动课」根因（通用反推兜底 + detect 自愈降级）**
 

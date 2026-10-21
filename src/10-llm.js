@@ -163,6 +163,25 @@ ${question}${optionText}
     callOnce,
     vote,
 
+    /**
+     * round-44：主观题（填空/问答）单次生成——不投票。
+     *
+     * 为什么主观题不能走 vote：vote 的「多次生成取众数」机制是为选择题设计的，
+     * 对文本答案完全失效——填空/问答每次生成的文本几乎不可能逐字相同，票数都是 1，
+     * 既收敛不了（`votes[ans] >= ceil(n/2)` 永不满足），又白费最多 3 次调用，
+     * 最后只能取任意一次。主观题只需一次高质量生成即可。
+     *
+     * 返回 normalize 后的原文：Bank.normalize 对填空/问答走「原文返回」分支
+     * （09-bank.js L271），不会把答案字母化，保留 LLM 生成的完整文本。
+     */
+    async ask(question, type) {
+      const raw = await callOnce(question, [], type);
+      // 主观题不走 normalize：normalize 的字母化逻辑会把「维生素A」这类含单个 A-D
+      // 字母的填空/问答答案误转成 'A'（09-bank.js L268 letters.length===1 分支），
+      // 破坏文本答案。主观题只需 trim 后的原文。
+      return String(raw == null ? '' : raw).trim();
+    },
+
     /** 连通性测试（面板「测试连接」按钮走的就是这里） */
     async test() {
       const cfg = ZHS.config;

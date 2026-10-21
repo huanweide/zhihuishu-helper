@@ -479,6 +479,50 @@
     return false;
   }
 
+  /**
+   * round-44：回填主观题（填空/问答）
+   * 复用 ZHS.Filler.fill 的 completion/qa 分支（fillText：找 textarea/input 填文本 + 补 input/change 事件）。
+   * 只传 {type, node}——Filler 的 completion/qa 分支仅用容器定位输入框。
+   * Filler 不可用时降级到模块内 localFillText 兜底（任何一步失败只 warn 不抛异常）。
+   */
+  async function fillSubjective(q, answer) {
+    const text = String(answer == null ? '' : answer).trim();
+    if (!text) {
+      ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题主观题答案为空，跳过');
+      return false;
+    }
+    if (ZHS.Filler && typeof ZHS.Filler.fill === 'function') {
+      try {
+        const r = await ZHS.Filler.fill({ type: q.type, node: q.node }, { answer: text });
+        return !!(r && r.ok);
+      } catch (e) {
+        ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题 Filler 回填异常：' + e.message);
+      }
+    }
+    // 兜底：模块内直接找输入框填
+    return localFillText(q.node, text);
+  }
+
+  /** 模块内填空兜底（Filler 缺失时）：找容器内第一个可输入控件填文本 */
+  function localFillText(root, text) {
+    try {
+      const scope = root || document;
+      const input = scope.querySelector('textarea, input[type="text"]');
+      if (!input) {
+        ZHS.Log.warn(PREFIX + ' 未找到可填写的输入框');
+        return false;
+      }
+      input.focus();
+      input.value = text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.blur();
+      return input.value === text;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // ============ 提交 ============
 
   /** 找到可点的提交按钮（必须先确认不是 disable-color） */
@@ -604,14 +648,19 @@
         const failed = [];       // 未答上的题号
         let answered = 0;
         let subjective = 0;
+        let subjectiveDone = 0;  // round-44：主观题自动作答成功数
 
         for (const q of questions) {
-          // —— 主观题（填空/简答/问答）：跳过，不瞎填 ——
-          if (q.type === QTYPE.COMPLETION || q.type === QTYPE.QA) {
+          const isSubjective = q.type === QTYPE.COMPLETION || q.type === QTYPE.QA;
+          // round-44：主观题（填空/问答）默认改为「LLM 生成答案回填」（Filler.fill 已支持
+          // completion/qa），补齐「作业/单元测试自动答题对主观题完全无解」的盲区。
+          // 仅在用户显式关闭 examSubjective 时才跳过；无答案（无 LLM Key/题库未命中）时
+          // 走下方「未取得答案」分支提示手动作答，绝不瞎填污染成绩。
+          if (isSubjective && cfg.examSubjective === false) {
             subjective++;
             skippedTypes.push(q.qno + '(' + q.typeText + ')');
             ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题是主观题（' + (q.typeText || '填空/问答') +
-              '），自动作答不处理，请手动完成');
+              '），已在配置关闭自动作答，请手动完成');
             continue;
           }
 
@@ -624,7 +673,8 @@
           // eslint-disable-next-line no-await-in-loop
           const result = await askAnswer(q);
           if (!result || !result.answer) {
-            ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题未取得答案，跳过（未配置 LLM Key 或题库未命中）');
+            ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题未取得答案，跳过' +
+              (isSubjective ? '（主观题需 LLM Key，未配置或题库未命中）' : '（未配置 LLM Key 或题库未命中）'));
             failed.push(q.qno);
             continue;
           }
@@ -634,6 +684,9 @@
           if (q.type === QTYPE.JUDGEMENT) {
             // eslint-disable-next-line no-await-in-loop
             okOne = await fillJudgement(q, result.answer);
+          } else if (isSubjective) {
+            // eslint-disable-next-line no-await-in-loop
+            okOne = await fillSubjective(q, result.answer);
           } else {
             // eslint-disable-next-line no-await-in-loop
             okOne = await fillChoice(q, result.answer);
@@ -641,9 +694,10 @@
 
           if (okOne) {
             answered++;
+            if (isSubjective) subjectiveDone++;
             ZHS.state.answeredCount++;
             ZHS.Log.info(PREFIX + ' 第 ' + q.qno + ' 题已作答：' + String(result.answer).slice(0, 40) +
-              '（来源 ' + (result.from || '未知') + '）');
+              '（来源 ' + (result.from || '未知') + '）' + (isSubjective ? '【主观题·LLM生成·请提交前检查】' : ''));
           } else {
             failed.push(q.qno);
             ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题回填失败：答案 ' + String(result.answer).slice(0, 40));

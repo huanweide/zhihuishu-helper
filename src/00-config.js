@@ -62,6 +62,8 @@
     examChapterTo: 0,       // 结束章节，0 = 不限
     examSubmit: true,       // 答完是否自动提交（受 autoExam 总开关约束）
     examSubmitDelay: 5,     // 提交前等待秒数（给用户反悔机会）
+    examSubjective: true,   // round-44：是否自动作答主观题(填空/问答)。受 autoExam 总开关约束；
+                            // 无 LLM Key/题库未命中时仍跳过并提示手动作答，绝不瞎填污染成绩
 
     // 没配 LLM Key / 题库查不到时，是否随机蒙一个答案。
     // 默认【关】：弹题大多计入平时分且很多课程不允许回退重做，
@@ -117,7 +119,7 @@
    */
   const BOOL_KEYS = [
     'autoPlay', 'autoNext', 'skipFinished', 'mute', 'resume',
-    'autoExam', 'examSubmit', 'autoCourseHop', 'autoCoursePick',
+    'autoExam', 'examSubmit', 'examSubjective', 'autoCourseHop', 'autoCoursePick',
     'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
     'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
     'heuristicFallback',

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.52
+// @version      0.6.53
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.52";
+window.__ZHS_BUILD__.version = "0.6.53";
 
 /* ===== 00-config.js ===== */
 /**
@@ -105,6 +105,8 @@ window.__ZHS_BUILD__.version = "0.6.52";
     examChapterTo: 0,       // 结束章节，0 = 不限
     examSubmit: true,       // 答完是否自动提交（受 autoExam 总开关约束）
     examSubmitDelay: 5,     // 提交前等待秒数（给用户反悔机会）
+    examSubjective: true,   // round-44：是否自动作答主观题(填空/问答)。受 autoExam 总开关约束；
+                            // 无 LLM Key/题库未命中时仍跳过并提示手动作答，绝不瞎填污染成绩
 
     // 没配 LLM Key / 题库查不到时，是否随机蒙一个答案。
     // 默认【关】：弹题大多计入平时分且很多课程不允许回退重做，
@@ -160,7 +162,7 @@ window.__ZHS_BUILD__.version = "0.6.52";
    */
   const BOOL_KEYS = [
     'autoPlay', 'autoNext', 'skipFinished', 'mute', 'resume',
-    'autoExam', 'examSubmit', 'autoCourseHop', 'autoCoursePick',
+    'autoExam', 'examSubmit', 'examSubjective', 'autoCourseHop', 'autoCoursePick',
     'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
     'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
     'heuristicFallback',
@@ -7029,6 +7031,50 @@ window.__ZHS_BUILD__.version = "0.6.52";
     return false;
   }
 
+  /**
+   * round-44：回填主观题（填空/问答）
+   * 复用 ZHS.Filler.fill 的 completion/qa 分支（fillText：找 textarea/input 填文本 + 补 input/change 事件）。
+   * 只传 {type, node}——Filler 的 completion/qa 分支仅用容器定位输入框。
+   * Filler 不可用时降级到模块内 localFillText 兜底（任何一步失败只 warn 不抛异常）。
+   */
+  async function fillSubjective(q, answer) {
+    const text = String(answer == null ? '' : answer).trim();
+    if (!text) {
+      ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题主观题答案为空，跳过');
+      return false;
+    }
+    if (ZHS.Filler && typeof ZHS.Filler.fill === 'function') {
+      try {
+        const r = await ZHS.Filler.fill({ type: q.type, node: q.node }, { answer: text });
+        return !!(r && r.ok);
+      } catch (e) {
+        ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题 Filler 回填异常：' + e.message);
+      }
+    }
+    // 兜底：模块内直接找输入框填
+    return localFillText(q.node, text);
+  }
+
+  /** 模块内填空兜底（Filler 缺失时）：找容器内第一个可输入控件填文本 */
+  function localFillText(root, text) {
+    try {
+      const scope = root || document;
+      const input = scope.querySelector('textarea, input[type="text"]');
+      if (!input) {
+        ZHS.Log.warn(PREFIX + ' 未找到可填写的输入框');
+        return false;
+      }
+      input.focus();
+      input.value = text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.blur();
+      return input.value === text;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // ============ 提交 ============
 
   /** 找到可点的提交按钮（必须先确认不是 disable-color） */
@@ -7154,14 +7200,19 @@ window.__ZHS_BUILD__.version = "0.6.52";
         const failed = [];       // 未答上的题号
         let answered = 0;
         let subjective = 0;
+        let subjectiveDone = 0;  // round-44：主观题自动作答成功数
 
         for (const q of questions) {
-          // —— 主观题（填空/简答/问答）：跳过，不瞎填 ——
-          if (q.type === QTYPE.COMPLETION || q.type === QTYPE.QA) {
+          const isSubjective = q.type === QTYPE.COMPLETION || q.type === QTYPE.QA;
+          // round-44：主观题（填空/问答）默认改为「LLM 生成答案回填」（Filler.fill 已支持
+          // completion/qa），补齐「作业/单元测试自动答题对主观题完全无解」的盲区。
+          // 仅在用户显式关闭 examSubjective 时才跳过；无答案（无 LLM Key/题库未命中）时
+          // 走下方「未取得答案」分支提示手动作答，绝不瞎填污染成绩。
+          if (isSubjective && cfg.examSubjective === false) {
             subjective++;
             skippedTypes.push(q.qno + '(' + q.typeText + ')');
             ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题是主观题（' + (q.typeText || '填空/问答') +
-              '），自动作答不处理，请手动完成');
+              '），已在配置关闭自动作答，请手动完成');
             continue;
           }
 
@@ -7174,7 +7225,8 @@ window.__ZHS_BUILD__.version = "0.6.52";
           // eslint-disable-next-line no-await-in-loop
           const result = await askAnswer(q);
           if (!result || !result.answer) {
-            ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题未取得答案，跳过（未配置 LLM Key 或题库未命中）');
+            ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题未取得答案，跳过' +
+              (isSubjective ? '（主观题需 LLM Key，未配置或题库未命中）' : '（未配置 LLM Key 或题库未命中）'));
             failed.push(q.qno);
             continue;
           }
@@ -7184,6 +7236,9 @@ window.__ZHS_BUILD__.version = "0.6.52";
           if (q.type === QTYPE.JUDGEMENT) {
             // eslint-disable-next-line no-await-in-loop
             okOne = await fillJudgement(q, result.answer);
+          } else if (isSubjective) {
+            // eslint-disable-next-line no-await-in-loop
+            okOne = await fillSubjective(q, result.answer);
           } else {
             // eslint-disable-next-line no-await-in-loop
             okOne = await fillChoice(q, result.answer);
@@ -7191,9 +7246,10 @@ window.__ZHS_BUILD__.version = "0.6.52";
 
           if (okOne) {
             answered++;
+            if (isSubjective) subjectiveDone++;
             ZHS.state.answeredCount++;
             ZHS.Log.info(PREFIX + ' 第 ' + q.qno + ' 题已作答：' + String(result.answer).slice(0, 40) +
-              '（来源 ' + (result.from || '未知') + '）');
+              '（来源 ' + (result.from || '未知') + '）' + (isSubjective ? '【主观题·LLM生成·请提交前检查】' : ''));
           } else {
             failed.push(q.qno);
             ZHS.Log.warn(PREFIX + ' 第 ' + q.qno + ' 题回填失败：答案 ' + String(result.answer).slice(0, 40));
@@ -9456,6 +9512,25 @@ ${question}${optionText}
     callOnce,
     vote,
 
+    /**
+     * round-44：主观题（填空/问答）单次生成——不投票。
+     *
+     * 为什么主观题不能走 vote：vote 的「多次生成取众数」机制是为选择题设计的，
+     * 对文本答案完全失效——填空/问答每次生成的文本几乎不可能逐字相同，票数都是 1，
+     * 既收敛不了（`votes[ans] >= ceil(n/2)` 永不满足），又白费最多 3 次调用，
+     * 最后只能取任意一次。主观题只需一次高质量生成即可。
+     *
+     * 返回 normalize 后的原文：Bank.normalize 对填空/问答走「原文返回」分支
+     * （09-bank.js L271），不会把答案字母化，保留 LLM 生成的完整文本。
+     */
+    async ask(question, type) {
+      const raw = await callOnce(question, [], type);
+      // 主观题不走 normalize：normalize 的字母化逻辑会把「维生素A」这类含单个 A-D
+      // 字母的填空/问答答案误转成 'A'（09-bank.js L268 letters.length===1 分支），
+      // 破坏文本答案。主观题只需 trim 后的原文。
+      return String(raw == null ? '' : raw).trim();
+    },
+
     /** 连通性测试（面板「测试连接」按钮走的就是这里） */
     async test() {
       const cfg = ZHS.config;
@@ -9591,7 +9666,14 @@ ${question}${optionText}
       // 2. 通道 B：LLM 兜底
       if (!result && (mode === 'llm' || mode === 'both') && cfg.llmEnabled && cfg.llmKey && question) {
         try {
-          const ans = await ZHS.LLM.vote(question, options, type, cfg.voteTimes);
+          // round-44：主观题（填空/问答，无选项）用单次生成 ask 而非 vote——
+          // vote 的「多次投票取众数」对文本答案失效（每次生成都不同，票数都是 1，
+          // 收敛不了又白费 3 次调用）；选择题才需要投票提稳。
+          const isSubjective = (type === ZHS.Questions.TYPE.COMPLETION
+            || type === ZHS.Questions.TYPE.QA) && !options.length;
+          const ans = (isSubjective && ZHS.LLM.ask)
+            ? await ZHS.LLM.ask(question, type)
+            : await ZHS.LLM.vote(question, options, type, cfg.voteTimes);
           if (ans) {
             result = { answer: ans, from: 'llm', confidence: 'medium' };
             this.stats.llm++;

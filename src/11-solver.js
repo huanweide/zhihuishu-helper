@@ -109,7 +109,14 @@
       // 2. 通道 B：LLM 兜底
       if (!result && (mode === 'llm' || mode === 'both') && cfg.llmEnabled && cfg.llmKey && question) {
         try {
-          const ans = await ZHS.LLM.vote(question, options, type, cfg.voteTimes);
+          // round-44：主观题（填空/问答，无选项）用单次生成 ask 而非 vote——
+          // vote 的「多次投票取众数」对文本答案失效（每次生成都不同，票数都是 1，
+          // 收敛不了又白费 3 次调用）；选择题才需要投票提稳。
+          const isSubjective = (type === ZHS.Questions.TYPE.COMPLETION
+            || type === ZHS.Questions.TYPE.QA) && !options.length;
+          const ans = (isSubjective && ZHS.LLM.ask)
+            ? await ZHS.LLM.ask(question, type)
+            : await ZHS.LLM.vote(question, options, type, cfg.voteTimes);
           if (ans) {
             result = { answer: ans, from: 'llm', confidence: 'medium' };
             this.stats.llm++;

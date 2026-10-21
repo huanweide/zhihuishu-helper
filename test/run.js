@@ -652,6 +652,103 @@ console.log('\n=== 16. LLM Prompt 构建 ===');
   ok('无选项时不输出选项段', !p3.includes('选项：'));
 }
 
+const _exam37 = (async () => {
+console.log('\n=== 37. 主观题自动作答（round-44 填空/问答盲区根治） ===');
+// 背景：06c-exam 是作业/考试作答页唯一自动链路（05-scheduler 不接管它），round-44 前对
+// COMPLETION/QA 直接 continue 跳过，而 Filler.fill / Bank.normalize / LLM.buildPrompt
+// 三层早已就绪——补齐半路断送。本组固化「不再跳过 + 可回退 + 分流 + 字母化陷阱修正」。
+{
+  const ANS_URL = 'https://studyvideoh5.zhihuishu.com/stuStudy#/webExamList/dohomework/abc';
+  const BLANK_HTML = '<html><body>'
+    + '<div class="examPaper_subject" data-questionid="q1">'
+    + '<div class="subject_type_describe"><span class="subject_type">【填空题】(2分)</span></div>'
+    + '<div class="subject_describe">光合作用的场所是？</div>'
+    + '<div class="subject_node"><input type="text"></div>'
+    + '</div></body></html>';
+
+  // ---- A. 06c-exam 主观题不再跳过（核心修复）----
+  {
+    const { win } = makeEnv(BLANK_HTML, ANS_URL);
+    win.ZHS.state = win.ZHS.state || {};
+    // ZHS.config 是 getter 快照，直写属性不生效，必须走 setConfig（merge 语义）
+    win.ZHS.setConfig({ answerDelay: 0, examSubmit: false });
+    let solveCalled = 0;
+    win.ZHS.Solver.solve = async () => { solveCalled++; return { answer: '叶绿体', from: 'test' }; };
+    await win.ZHS.Exam.solvePage({ manual: true });
+    const input = win.document.querySelector('.subject_node input');
+    ok('主观题调用了求解器（不再跳过）', solveCalled === 1, 'solveCalled=' + solveCalled);
+    eq('主观题答案已回填到输入框', input && input.value, '叶绿体');
+  }
+
+  // ---- B. examSubjective=false 时跳过主观题（边界：可回退旧行为）----
+  {
+    const { win } = makeEnv(BLANK_HTML, ANS_URL);
+    win.ZHS.state = win.ZHS.state || {};
+    win.ZHS.setConfig({ answerDelay: 0, examSubmit: false, examSubjective: false });
+    let solveCalled = 0;
+    win.ZHS.Solver.solve = async () => { solveCalled++; return { answer: '叶绿体', from: 'test' }; };
+    await win.ZHS.Exam.solvePage({ manual: true });
+    const input = win.document.querySelector('.subject_node input');
+    eq('关闭开关：主观题不被求解', solveCalled, 0);
+    eq('关闭开关：输入框保持空', input && input.value, '');
+  }
+
+  // ---- C. Filler.fill 填空/问答回填（回填层固化）----
+  {
+    const { win } = makeEnv('<html><body>'
+      + '<div class="examPaper_subject" id="c1"><div class="subject_node"><input type="text"></div></div>'
+      + '<div class="examPaper_subject" id="c2"><div class="subject_node"><textarea></textarea></div></div>'
+      + '</body></html>');
+    const F = win.ZHS.Filler;
+    const n1 = win.document.querySelector('#c1');
+    const n2 = win.document.querySelector('#c2');
+    const r1 = await F.fill({ type: 'completion', node: n1 }, { answer: '叶绿体' });
+    ok('填空回填 ok', r1.ok === true, JSON.stringify(r1));
+    eq('填空值已填入', n1.querySelector('input').value, '叶绿体');
+    const r2 = await F.fill({ type: 'qa', node: n2 }, { answer: '因为植物通过光合作用制造有机物' });
+    ok('问答回填 ok', r2.ok === true, JSON.stringify(r2));
+    eq('问答值已填入', n2.querySelector('textarea').value, '因为植物通过光合作用制造有机物');
+  }
+
+  // ---- D. Solver 主观题走 ask（单次）不走 vote（分流；选择题零回归）----
+  {
+    const { win } = makeEnv('<html><body></body></html>');
+    const S = win.ZHS.Solver;
+    S.clearCache();
+    // 注意：ZHS.config 是 getter 快照，直写属性不生效（2026-10-21 踩坑记录），
+    // 必须走 setConfig —— 否则 Solver 读到的还是默认配置，LLM 通道根本不进。
+    win.ZHS.setConfig({
+      bankEnabled: false,
+      answerMode: 'llm',
+      llmEnabled: true,
+      llmKey: 'test-key',
+      gatedRandom: false,
+    });
+    let askCalled = 0, voteCalled = 0;
+    win.ZHS.LLM.ask = async () => { askCalled++; return '光合作用'; };
+    win.ZHS.LLM.vote = async () => { voteCalled++; return 'A'; };
+    const r1 = await S.solve({ title: '什么是光合作用？', options: [], type: 'completion' });
+    ok('主观题返回答案', !!(r1 && r1.answer === '光合作用'), r1 && r1.answer);
+    ok('主观题走 ask（单次生成）', askCalled === 1, 'ask=' + askCalled);
+    ok('主观题不走 vote', voteCalled === 0, 'vote=' + voteCalled);
+    const r2 = await S.solve({ title: '1+1=?', options: ['1', '2'], type: 'single' });
+    ok('选择题走 vote（零回归）', voteCalled === 1, 'vote=' + voteCalled);
+    ok('选择题返回 vote 结果', !!(r2 && r2.answer === 'A'), r2 && r2.answer);
+  }
+
+  // ---- E. LLM.ask 原文返回，含 A-D 字母不字母化（本轮修正 normalize 陷阱）----
+  {
+    const { win } = makeEnv('<html><body></body></html>');
+    const L = win.ZHS.LLM;
+    win.ZHS.setConfig({ llmKey: 'test-key' });
+    win.ZHS.Bank.request = async () => ({ ok: true });
+    win.ZHS.Bank.parseJsonOrThrow = () => ({ choices: [{ message: { content: '维生素A' } }] });
+    const ans = await L.ask('什么维生素有助于视力？', 'completion');
+    eq('ask 原文返回（含 A-D 字母不被归一化）', ans, '维生素A');
+  }
+}
+})();
+
 console.log('\n=== 17. 弹题编排（签名防抖） ===');
 {
   const html = `<html><body>
@@ -2750,7 +2847,7 @@ const _statsM8 = (async () => {
   ok('明细被限制在 200 条以内（防存储膨胀）', stored > 0 && stored <= 200, '实际 ' + stored);
 })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8]).then(async () => {
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37]).then(async () => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');
