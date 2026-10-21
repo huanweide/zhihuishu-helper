@@ -86,3 +86,6 @@ tools/start-zhs*.cmd
 tools/zhs-audit*
 tools/zhs-data*
 tools/_zhs_data*
+
+# 诊断命令的运行时输出快照（含页面数据，与 zhs-data.last.json 同等对待）
+tools/*.last.json

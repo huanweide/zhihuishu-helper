@@ -33,6 +33,17 @@
     nextDelayMin: 2,     // 切课随机延迟下限（秒），模拟人类
     nextDelayMax: 8,     // 切课随机延迟上限（秒）
 
+    // 拟人化随机暂停（round-45，依据 pjm314159/zhs 官方客户端的播放循环行为）:
+    //   官方客户端每轮播放循环有 0.25% 概率随机暂停 60 秒 —— 真人看课本来就会
+    //   中途离开（接水、回消息、走神）。机器挂机最显著的特征就是「匀速不停」，
+    //   加上这个与官方客户端同款的节奏，能把「挂机」特征进一步拉向「真人在看」。
+    //   暂停期间：不计学习时长（习惯分只算真实观看）、不判卡死、不唤醒，
+    //   到期由主循环的 ensurePlaying 自然恢复。
+    humanPause: true,        // 总开关
+    humanPauseChance: 0.003, // 每个主循环 tick（2 秒）的触发概率（0.3% ≈ 平均二十多分钟一次）
+    humanPauseMinSec: 30,    // 单次暂停时长随机下限（秒）
+    humanPauseMaxSec: 90,    // 单次暂停时长随机上限（秒）
+
     // F2 断点续播
     resume: true,
     resumeRewind: 2,     // 恢复时回退秒数（保险）
@@ -79,6 +90,11 @@
     // 它有 Key 时不会出场（排在题库/LLM 之后），不会拉低已有答题质量。
     heuristicFallback: true,
 
+    // 答案缓存模糊匹配（round-45）：同一道题的题干改几个字 / 换标点 / 多空格时，
+    // 按 90% 相似度复用本次运行内已答过的答案，少打一次题库/模型请求。
+    // 选项不一致的题绝不会误命中（选项串参与判等）。
+    fuzzyCache: true,
+
     // 通用
     debug: true,         // 控制台详细日志
     panelVisible: true,  // 悬浮面板
@@ -122,7 +138,7 @@
     'autoExam', 'examSubmit', 'examSubjective', 'autoCourseHop', 'autoCoursePick',
     'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
     'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
-    'heuristicFallback',
+    'heuristicFallback', 'humanPause', 'fuzzyCache',
     'debug', 'panelVisible', 'guardOverlays',
   ];
 

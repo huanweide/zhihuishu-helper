@@ -512,6 +512,13 @@
       ZHS.Player.checkStall(video);
       // 进度对账：播放器不得跑在平台记录前面太多（原理见 03-player.js syncToCatalog）
       ZHS.Player.syncToCatalog(video, ZHS.state.lessonKey);
+      // round-45：拟人化随机暂停（掷骰子，命中才暂停；暂停期 ensurePlaying 不唤醒）。
+      // 只在自动播放模式下触发 —— 手动模式（autoPlay 关）是用户自己开车，
+      // 脚本擅自暂停等于夺用户的方向盘。
+      // 放在这里的原因：验证码/弹题/阻塞弹窗守卫都在上方已 return，能走到这里
+      // 说明页面是干净播放态；而切课冷却闸门在下方才判定 —— 冷却期内本方法
+      // 根本不会被执行到，天然满足「刚切完课不暂停」。
+      if (cfg.autoPlay) ZHS.Player.maybeHumanPause(video);
 
       if (cfg.autoPlay) {
         ZHS.Player.setSpeed(video, cfg.speed);
@@ -572,7 +579,9 @@
         if (domAns) {
           ZHS.Log.info('弹题答案已内嵌在页面（正确答案：' + domAns + '），直接关闭并续播，不走题库/LLM');
           try { ZHS.Questions.Dialog.close(); } catch (e) { /* 关不掉下一轮再来 */ }
-          await U.sleep(500);
+          // round-45：固定 500ms 改随机 0.5~1.5s（docs/05 硬约束 8：
+          // 弹题关闭加随机延迟 —— 固定值是机器特征，随机才像人）
+          await U.randomDelay(0.5, 1.5);
           if (video && video.paused && !video.ended) {
             try {
               video.muted = true;               // 静音兜底：部分浏览器拒绝非用户手势的 play()
@@ -1003,6 +1012,7 @@
 
         // 重置状态
         ZHS.Player.resetRetry();
+        ZHS.Player.resetHumanPause();   // round-45：旧节的「模拟离座」不带到新节
         ZHS.Resume.reset();
         if (ZHS.Answerer) ZHS.Answerer.reset();
         ZHS.state.videoEl = null;
@@ -1119,6 +1129,7 @@
       const raw = ZHS.Solver ? ZHS.Solver.stats : {};
       const st = {
         bank: raw.bank || 0, llm: raw.llm || 0, cache: raw.cache || 0,
+        fuzzy: raw.fuzzy || 0, heuristic: raw.heuristic || 0,
         random: raw.random || 0, skipped: raw.skipped || 0, fail: raw.fail || 0,
       };
       const elapsedMs = Date.now() - (ZHS.state.startedAt || Date.now());
@@ -1138,6 +1149,7 @@
         本次完成节数: this._completedThisRun || 0,
         已答题数: ZHS.state.answeredCount,
         答题通道: '题库 ' + st.bank + ' / LLM ' + st.llm + ' / 缓存 ' + st.cache
+          + ' / 模糊 ' + st.fuzzy + ' / 启发式 ' + st.heuristic
           + ' / 随机 ' + st.random + ' / 未作答 ' + st.skipped + ' / 失败 ' + st.fail,
         漏答题数: st.skipped,
         总耗时: mins + ' 分 ' + secs + ' 秒',
@@ -1183,6 +1195,32 @@
       const courseId = ZHS.state.courseId;
       const lessonKey = ZHS.state.lessonKey;
       ZHS.Resume.bindVideo(video, courseId, lessonKey);
+      // round-45：切课后强制续播（docs/05 硬约束 3）。
+      // 真机实测：点小节标题切集后平台把视频定位到断点、且 paused=true，
+      // 必须主动 play() 才会继续（与关弹题后同理）。这里不等主循环下一轮
+      // （2 秒后）才保活 —— 绑定时就地尝试，并短轮询确认 paused===false。
+      if (ZHS.config.autoPlay) {
+        try {
+          if (video.paused) {
+            video.muted = true;               // 静音兜底：部分浏览器拒绝非用户手势的 play()
+            const p = video.play();
+            if (p && typeof p.catch === 'function') p.catch(() => {});
+          }
+          for (let i = 0; i < 3 && video.paused && !video.ended; i++) {
+            await U.sleep(600);
+            if (video.paused) {
+              const p2 = video.play();
+              if (p2 && typeof p2.catch === 'function') p2.catch(() => {});
+            }
+          }
+          if (video.paused && !video.ended) {
+            ZHS.Log.debug('切课后首次 play 未生效（ paused 仍在），交给主循环保活');
+          } else {
+            ZHS.Log.info('已切换并重新绑定并恢复播放：' + lessonKey);
+            return;
+          }
+        } catch (e) { /* 播放失败不影响主流程，主循环下一轮会保活 */ }
+      }
       ZHS.Log.info('已切换并重新绑定：' + lessonKey);
     },
   };

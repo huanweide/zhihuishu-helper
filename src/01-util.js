@@ -294,6 +294,54 @@
       return String(s || '').replace(/\s+/g, ' ').trim();
     },
 
+    /**
+     * 题干归一化（round-45）：去全部空白 + 中英标点，供模糊匹配用。
+     *
+     * 为什么不能直接用 normText：题库里同一道题常因「换行/全半角/标点差异」
+     * 被当成两道题，精确缓存永远命不中。去标点后这些差异全部抹平。
+     */
+    normQuestion(s) {
+      return String(s || '')
+        .replace(/[\s\u3000]+/g, '')
+        .replace(/[，。、；：？！""''（）《》【】〔〕—…·,.;:?!"'()\[\]<>]/g, '');
+    },
+
+    /**
+     * 编辑距离（Levenshtein，双行动态规划，O(min) 空间）。
+     * 空串与空串距离 0；单侧为空时为另一侧长度。
+     */
+    levenshtein(a, b) {
+      const s1 = String(a == null ? '' : a);
+      const s2 = String(b == null ? '' : b);
+      if (s1 === s2) return 0;
+      if (!s1) return s2.length;
+      if (!s2) return s1.length;
+      let prev = new Array(s2.length + 1);
+      let cur = new Array(s2.length + 1);
+      for (let j = 0; j <= s2.length; j++) prev[j] = j;
+      for (let i = 1; i <= s1.length; i++) {
+        cur[0] = i;
+        for (let j = 1; j <= s2.length; j++) {
+          const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+          cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        }
+        const tmp = prev; prev = cur; cur = tmp;
+      }
+      return prev[s2.length];
+    },
+
+    /**
+     * 相似度（0~1）：1 - 编辑距离 / 较长串长度。
+     * 两个都空 → 1（视为相同，交给调用方的长度门槛去拦）。
+     */
+    similarity(a, b) {
+      const s1 = String(a == null ? '' : a);
+      const s2 = String(b == null ? '' : b);
+      const m = Math.max(s1.length, s2.length);
+      if (!m) return 1;
+      return 1 - Util.levenshtein(s1, s2) / m;
+    },
+
     /** 在元素内按文本查找子元素 */
     findByText(root, selector, keywords) {
       const list = (root || document).querySelectorAll(selector);

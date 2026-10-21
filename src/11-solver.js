@@ -56,8 +56,47 @@
     CACHE.set(k, v);
   }
 
+  // round-45：模糊匹配阈值与最短题干长度。
+  // 90% 是「改几个字/换标点」与「另一道题」之间的经验分界；题干短于 8 字
+  // （归一化后）不模糊 —— 太短的题随便差两个字相似度就很高，容易张冠李戴。
+  const FUZZY_THRESHOLD = 0.9;
+  const FUZZY_MIN_LEN = 8;
+
+  /**
+   * round-45：模糊缓存匹配 —— 题干改几个字/换标点时复用已答过的答案。
+   *
+   * 背景（GitHub 生态调研结论）：题库/LLM 都是按次收费或限速的，而智慧树
+   * 同一道题常以「换行/全半角/标点差异」的变体重复出现，精确缓存永远命不中，
+   * 于是同一道题被反复请求。模糊匹配把这类变体收敛到一次请求。
+   *
+   * 安全约束（误命中代价 = 答错题，比多打一次请求严重得多）：
+   *   · 选项串必须逐字相同（options 参与判等）—— 题干像但选项不同，是另一道题；
+   *   · 相似度 ≥ 90% 且取最高分那一条的答案；
+   *   · 归一化题干短于 8 字不模糊；
+   *   · 总开关 fuzzyCache 关闭时完全不扫描。
+   *
+   * @returns {{r:object, score:number}|null}
+   */
+  function cacheFuzzy(question, options) {
+    if (!ZHS.config.fuzzyCache) return null;
+    const nq = U.normQuestion(question);
+    if (nq.length < FUZZY_MIN_LEN) return null;
+    const optKey = (options || []).join('|').slice(0, 200);
+    let best = null;
+    let bestScore = 0;
+    for (const entry of CACHE.values()) {
+      if (entry.o !== optKey) continue;              // 选项不一致 → 另一道题，绝不复用
+      const score = U.similarity(nq, U.normQuestion(entry.q));
+      if (score > bestScore) { bestScore = score; best = entry; }
+    }
+    if (best && bestScore >= FUZZY_THRESHOLD) {
+      return { r: best.r, score: bestScore };
+    }
+    return null;
+  }
+
   const Solver = {
-    stats: { bank: 0, llm: 0, cache: 0, heuristic: 0, random: 0, skipped: 0, fail: 0 },
+    stats: { bank: 0, llm: 0, cache: 0, fuzzy: 0, heuristic: 0, random: 0, skipped: 0, fail: 0 },
 
     /** 清空缓存 */
     clearCache() { CACHE.clear(); },
@@ -83,9 +122,22 @@
       const key = cacheKey(question, options);
       const cached = cacheGet(key);
       if (cached) {
-        ZHS.Log.info('答案命中缓存：' + cached.answer);
+        ZHS.Log.info('答案命中缓存：' + cached.r.answer);
         this.stats.cache++;
-        return cached;
+        return cached.r;
+      }
+
+      // 0.5 round-45：模糊命中缓存（题干变体：改字/换标点/多空格）→ 复用答案，
+      //     少打一次题库/模型请求。选项不一致不会误命中（见 cacheFuzzy 约束）。
+      const fz = cacheFuzzy(question, options);
+      if (fz) {
+        ZHS.Log.info('答案模糊命中缓存（题干相似度 ' + Math.round(fz.score * 100) + '%），复用：' + fz.r.answer);
+        this.stats.fuzzy++;
+        // 顺便按新题干精确缓存一份，后续同变体直接精确命中，不再扫描。
+        // 注意与精确命中保持一致：不走 done()（Stats.record）——
+        // 这道题的「首次作答」在第一次 solve 时已经记过账了，此处只是复用。
+        cacheSet(key, { q: question, o: (options || []).join('|').slice(0, 200), t: type, r: fz.r });
+        return fz.r;
       }
 
       const mode = cfg.answerMode || 'both';
@@ -182,7 +234,7 @@
         return done(null);
       }
 
-      cacheSet(key, result);
+      cacheSet(key, { q: question, o: (options || []).join('|').slice(0, 200), t: type, r: result });
       return done(result);
     },
 

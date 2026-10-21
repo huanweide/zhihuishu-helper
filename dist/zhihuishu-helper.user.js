@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.53
+// @version      0.6.54
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.53";
+window.__ZHS_BUILD__.version = "0.6.54";
 
 /* ===== 00-config.js ===== */
 /**
@@ -75,6 +75,17 @@ window.__ZHS_BUILD__.version = "0.6.53";
     mute: true,          // 静音
     nextDelayMin: 2,     // 切课随机延迟下限（秒），模拟人类
     nextDelayMax: 8,     // 切课随机延迟上限（秒）
+
+    // 拟人化随机暂停（round-45，依据 pjm314159/zhs 官方客户端的播放循环行为）:
+    //   官方客户端每轮播放循环有 0.25% 概率随机暂停 60 秒 —— 真人看课本来就会
+    //   中途离开（接水、回消息、走神）。机器挂机最显著的特征就是「匀速不停」，
+    //   加上这个与官方客户端同款的节奏，能把「挂机」特征进一步拉向「真人在看」。
+    //   暂停期间：不计学习时长（习惯分只算真实观看）、不判卡死、不唤醒，
+    //   到期由主循环的 ensurePlaying 自然恢复。
+    humanPause: true,        // 总开关
+    humanPauseChance: 0.003, // 每个主循环 tick（2 秒）的触发概率（0.3% ≈ 平均二十多分钟一次）
+    humanPauseMinSec: 30,    // 单次暂停时长随机下限（秒）
+    humanPauseMaxSec: 90,    // 单次暂停时长随机上限（秒）
 
     // F2 断点续播
     resume: true,
@@ -122,6 +133,11 @@ window.__ZHS_BUILD__.version = "0.6.53";
     // 它有 Key 时不会出场（排在题库/LLM 之后），不会拉低已有答题质量。
     heuristicFallback: true,
 
+    // 答案缓存模糊匹配（round-45）：同一道题的题干改几个字 / 换标点 / 多空格时，
+    // 按 90% 相似度复用本次运行内已答过的答案，少打一次题库/模型请求。
+    // 选项不一致的题绝不会误命中（选项串参与判等）。
+    fuzzyCache: true,
+
     // 通用
     debug: true,         // 控制台详细日志
     panelVisible: true,  // 悬浮面板
@@ -165,7 +181,7 @@ window.__ZHS_BUILD__.version = "0.6.53";
     'autoExam', 'examSubmit', 'examSubjective', 'autoCourseHop', 'autoCoursePick',
     'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
     'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
-    'heuristicFallback',
+    'heuristicFallback', 'humanPause', 'fuzzyCache',
     'debug', 'panelVisible', 'guardOverlays',
   ];
 
@@ -652,6 +668,54 @@ window.__ZHS_BUILD__.version = "0.6.53";
     /** 文本归一化（去多余空白） */
     normText(s) {
       return String(s || '').replace(/\s+/g, ' ').trim();
+    },
+
+    /**
+     * 题干归一化（round-45）：去全部空白 + 中英标点，供模糊匹配用。
+     *
+     * 为什么不能直接用 normText：题库里同一道题常因「换行/全半角/标点差异」
+     * 被当成两道题，精确缓存永远命不中。去标点后这些差异全部抹平。
+     */
+    normQuestion(s) {
+      return String(s || '')
+        .replace(/[\s\u3000]+/g, '')
+        .replace(/[，。、；：？！""''（）《》【】〔〕—…·,.;:?!"'()\[\]<>]/g, '');
+    },
+
+    /**
+     * 编辑距离（Levenshtein，双行动态规划，O(min) 空间）。
+     * 空串与空串距离 0；单侧为空时为另一侧长度。
+     */
+    levenshtein(a, b) {
+      const s1 = String(a == null ? '' : a);
+      const s2 = String(b == null ? '' : b);
+      if (s1 === s2) return 0;
+      if (!s1) return s2.length;
+      if (!s2) return s1.length;
+      let prev = new Array(s2.length + 1);
+      let cur = new Array(s2.length + 1);
+      for (let j = 0; j <= s2.length; j++) prev[j] = j;
+      for (let i = 1; i <= s1.length; i++) {
+        cur[0] = i;
+        for (let j = 1; j <= s2.length; j++) {
+          const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+          cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        }
+        const tmp = prev; prev = cur; cur = tmp;
+      }
+      return prev[s2.length];
+    },
+
+    /**
+     * 相似度（0~1）：1 - 编辑距离 / 较长串长度。
+     * 两个都空 → 1（视为相同，交给调用方的长度门槛去拦）。
+     */
+    similarity(a, b) {
+      const s1 = String(a == null ? '' : a);
+      const s2 = String(b == null ? '' : b);
+      const m = Math.max(s1.length, s2.length);
+      if (!m) return 1;
+      return 1 - Util.levenshtein(s1, s2) / m;
     },
 
     /** 在元素内按文本查找子元素 */
@@ -2432,6 +2496,13 @@ window.__ZHS_BUILD__.version = "0.6.53";
     _lastActiveAt: Date.now(),
     _retryCount: 0,
     _syncedKey: null,        // 已对过账的课时标识（避免同一节内反复 seek）
+    // round-45：拟人化随机暂停状态。
+    // _humanPauseUntil = 本次「模拟离座」的截止时间戳（0 = 不在暂停期）；
+    // _humanPauseLastMs 记录上一次暂停了多久（恢复播报用）；
+    // _humanPauseResumeLogged 保证「回来了」只播报一次。
+    _humanPauseUntil: 0,
+    _humanPauseLastMs: 0,
+    _humanPauseResumeLogged: true,
 
     /** 取当前 video 元素（缓存 + 校验是否还在文档里；顶层找不到再查同域 iframe） */
     video() {
@@ -2492,6 +2563,9 @@ window.__ZHS_BUILD__.version = "0.6.53";
      */
     async ensurePlaying(v) {
       if (!v || v.ended) return false;
+      // round-45：拟人化暂停期内绝不唤醒 —— 这是「模拟真人离开」，
+      // 唤醒它等于把最像人的一段节奏亲手毁掉。到期由下一轮自然恢复。
+      if (this.isHumanPausing()) return false;
       if (!v.paused) { this._markActive(v); return false; }
       if (!this.hasValidDuration(v) && v.currentTime === 0) {
         // 还没加载元数据，等一等
@@ -2643,6 +2717,70 @@ window.__ZHS_BUILD__.version = "0.6.53";
     },
 
     resetRetry() { this._retryCount = 0; },
+
+    /** 是否处于「模拟真人离座」暂停期 */
+    isHumanPausing() {
+      return this._humanPauseUntil > 0 && Date.now() < this._humanPauseUntil;
+    },
+
+    /**
+     * 拟人化随机暂停（round-45，听课程拟人节奏的核心一环）
+     *
+     * 依据：pjm314159/zhs（协议逆向参考实现的官方客户端复刻）播放循环每轮有
+     * 0.25% 概率随机暂停 60 秒。真人看课本来就会中途离开，而机器挂机最显著的
+     * 特征就是「匀速不停」——补上与官方客户端同款的随机暂停，能把挂机特征
+     * 进一步拉向真人在看。
+     *
+     * 调用方（调度器主循环）每 2 秒调一次；本方法自己掷骰子，命中才暂停。
+     * 安全约束：
+     *   · 只在「正在播放」时触发（暂停中 / 已结束 / 无视频不触发）；
+     *   · 刚开播 10 秒内不暂停（真人也不会一坐下就走开）；
+     *   · 暂停期间 ensurePlaying 不唤醒、checkStall 不判卡死（paused 早退）、
+     *     学习时长不计（v.paused 天然不计），到期由主循环自然恢复播放；
+     *   · 切课冷却（NAV_COOLDOWN_MS）由调用方的调用位置保证 —— 冷却期内
+     *     主循环在到达本方法之前就 return 了。
+     *
+     * @returns {boolean} 是否本次触发了暂停
+     */
+    maybeHumanPause(video) {
+      const cfg = ZHS.config;
+      if (!cfg.humanPause) return false;
+      const now = Date.now();
+
+      // 暂停到期：播报一次「回来了」（实际恢复由 ensurePlaying 负责）
+      if (this._humanPauseUntil && now >= this._humanPauseUntil) {
+        if (!this._humanPauseResumeLogged) {
+          this._humanPauseResumeLogged = true;
+          ZHS.Log.info('模拟离座结束（暂停约 ' + Math.round(this._humanPauseLastMs / 1000) + ' 秒），恢复播放');
+        }
+        this._humanPauseUntil = 0;
+        return false;
+      }
+      if (this._humanPauseUntil) return false;        // 暂停中，不重复触发
+      if (!video || video.paused || video.ended) return false;
+      if (!this.hasValidDuration(video)) return false;
+      if (video.currentTime < 10) return false;       // 刚开播不暂停
+
+      const chance = Number(cfg.humanPauseChance);
+      if (!(chance > 0) || Math.random() >= chance) return false;
+
+      const min = Math.max(5, Number(cfg.humanPauseMinSec) || 30);
+      const max = Math.max(min, Number(cfg.humanPauseMaxSec) || 90);
+      const dur = Math.round(min + Math.random() * (max - min));
+      this._humanPauseLastMs = dur * 1000;
+      this._humanPauseUntil = now + dur * 1000;
+      this._humanPauseResumeLogged = false;
+      try { video.pause(); } catch (e) { /* 暂停失败不影响主流程 */ }
+      ZHS.Log.info('拟人化随机暂停：模拟真人中途离开，暂停 ' + dur + ' 秒后自动恢复'
+        + '（平台官方客户端同款节奏，降低挂机特征）');
+      return true;
+    },
+
+    /** 清除拟人暂停状态（切课/停机时调用，避免旧节的状态带到新节） */
+    resetHumanPause() {
+      this._humanPauseUntil = 0;
+      this._humanPauseResumeLogged = true;
+    },
   };
 
   ZHS.Player = Player;
@@ -3475,6 +3613,13 @@ window.__ZHS_BUILD__.version = "0.6.53";
       ZHS.Player.checkStall(video);
       // 进度对账：播放器不得跑在平台记录前面太多（原理见 03-player.js syncToCatalog）
       ZHS.Player.syncToCatalog(video, ZHS.state.lessonKey);
+      // round-45：拟人化随机暂停（掷骰子，命中才暂停；暂停期 ensurePlaying 不唤醒）。
+      // 只在自动播放模式下触发 —— 手动模式（autoPlay 关）是用户自己开车，
+      // 脚本擅自暂停等于夺用户的方向盘。
+      // 放在这里的原因：验证码/弹题/阻塞弹窗守卫都在上方已 return，能走到这里
+      // 说明页面是干净播放态；而切课冷却闸门在下方才判定 —— 冷却期内本方法
+      // 根本不会被执行到，天然满足「刚切完课不暂停」。
+      if (cfg.autoPlay) ZHS.Player.maybeHumanPause(video);
 
       if (cfg.autoPlay) {
         ZHS.Player.setSpeed(video, cfg.speed);
@@ -3535,7 +3680,9 @@ window.__ZHS_BUILD__.version = "0.6.53";
         if (domAns) {
           ZHS.Log.info('弹题答案已内嵌在页面（正确答案：' + domAns + '），直接关闭并续播，不走题库/LLM');
           try { ZHS.Questions.Dialog.close(); } catch (e) { /* 关不掉下一轮再来 */ }
-          await U.sleep(500);
+          // round-45：固定 500ms 改随机 0.5~1.5s（docs/05 硬约束 8：
+          // 弹题关闭加随机延迟 —— 固定值是机器特征，随机才像人）
+          await U.randomDelay(0.5, 1.5);
           if (video && video.paused && !video.ended) {
             try {
               video.muted = true;               // 静音兜底：部分浏览器拒绝非用户手势的 play()
@@ -3966,6 +4113,7 @@ window.__ZHS_BUILD__.version = "0.6.53";
 
         // 重置状态
         ZHS.Player.resetRetry();
+        ZHS.Player.resetHumanPause();   // round-45：旧节的「模拟离座」不带到新节
         ZHS.Resume.reset();
         if (ZHS.Answerer) ZHS.Answerer.reset();
         ZHS.state.videoEl = null;
@@ -4082,6 +4230,7 @@ window.__ZHS_BUILD__.version = "0.6.53";
       const raw = ZHS.Solver ? ZHS.Solver.stats : {};
       const st = {
         bank: raw.bank || 0, llm: raw.llm || 0, cache: raw.cache || 0,
+        fuzzy: raw.fuzzy || 0, heuristic: raw.heuristic || 0,
         random: raw.random || 0, skipped: raw.skipped || 0, fail: raw.fail || 0,
       };
       const elapsedMs = Date.now() - (ZHS.state.startedAt || Date.now());
@@ -4101,6 +4250,7 @@ window.__ZHS_BUILD__.version = "0.6.53";
         本次完成节数: this._completedThisRun || 0,
         已答题数: ZHS.state.answeredCount,
         答题通道: '题库 ' + st.bank + ' / LLM ' + st.llm + ' / 缓存 ' + st.cache
+          + ' / 模糊 ' + st.fuzzy + ' / 启发式 ' + st.heuristic
           + ' / 随机 ' + st.random + ' / 未作答 ' + st.skipped + ' / 失败 ' + st.fail,
         漏答题数: st.skipped,
         总耗时: mins + ' 分 ' + secs + ' 秒',
@@ -4146,6 +4296,32 @@ window.__ZHS_BUILD__.version = "0.6.53";
       const courseId = ZHS.state.courseId;
       const lessonKey = ZHS.state.lessonKey;
       ZHS.Resume.bindVideo(video, courseId, lessonKey);
+      // round-45：切课后强制续播（docs/05 硬约束 3）。
+      // 真机实测：点小节标题切集后平台把视频定位到断点、且 paused=true，
+      // 必须主动 play() 才会继续（与关弹题后同理）。这里不等主循环下一轮
+      // （2 秒后）才保活 —— 绑定时就地尝试，并短轮询确认 paused===false。
+      if (ZHS.config.autoPlay) {
+        try {
+          if (video.paused) {
+            video.muted = true;               // 静音兜底：部分浏览器拒绝非用户手势的 play()
+            const p = video.play();
+            if (p && typeof p.catch === 'function') p.catch(() => {});
+          }
+          for (let i = 0; i < 3 && video.paused && !video.ended; i++) {
+            await U.sleep(600);
+            if (video.paused) {
+              const p2 = video.play();
+              if (p2 && typeof p2.catch === 'function') p2.catch(() => {});
+            }
+          }
+          if (video.paused && !video.ended) {
+            ZHS.Log.debug('切课后首次 play 未生效（ paused 仍在），交给主循环保活');
+          } else {
+            ZHS.Log.info('已切换并重新绑定并恢复播放：' + lessonKey);
+            return;
+          }
+        } catch (e) { /* 播放失败不影响主流程，主循环下一轮会保活 */ }
+      }
       ZHS.Log.info('已切换并重新绑定：' + lessonKey);
     },
   };
@@ -4896,6 +5072,7 @@ window.__ZHS_BUILD__.version = "0.6.53";
         <span class="dlg-dot"></span><span class="s-dlg">弹题：空闲</span>
       </div>
       <div class="kv"><span>本次运行</span><span class="s-uptime">—</span></div>
+      <div class="kv" id="zhs-humanpause-row" style="display:none"><span>拟人离座</span><span class="s-humanpause">—</span></div>
     </div>
     <div class="pane" data-pane="log">
       <div class="logs"></div>
@@ -4907,6 +5084,9 @@ window.__ZHS_BUILD__.version = "0.6.53";
       <div class="row"><label>静音</label><button class="sw" data-cfg="mute"></button></div>
       <div class="row"><label>断点续播</label><button class="sw" data-cfg="resume"></button></div>
       <div class="row"><label>倍速</label><input type="range" min="1" max="1.5" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
+      <div class="row"><label>拟人随机暂停</label><button class="sw" data-cfg="humanPause"></button></div>
+      <div class="hint">默认开启。播放中偶尔（平均二十多分钟一次）像真人一样暂停几十秒再继续，
+        这是平台官方客户端自身的节奏，能进一步降低「机器挂机」特征。暂停期间不计学习时长。</div>
 
       <div class="row"><label>自动跳课</label><button class="sw" data-cfg="autoCourseHop"></button></div>
       <div class="hint">本课学完自动去课程中心找下一门</div>
@@ -4939,6 +5119,9 @@ window.__ZHS_BUILD__.version = "0.6.53";
       <div class="row"><label>离线启发式兜底</label><button class="sw" data-cfg="heuristicFallback"></button></div>
       <div class="hint">默认开启。查不到题库/没填 Key 时，用内置规则（对话标签、称谓等）推断答案，
         保证弹窗答得上、流程不卡死。关闭后这类题会转为「待人工」交给你手动作答。</div>
+      <div class="row"><label>缓存模糊匹配</label><button class="sw" data-cfg="fuzzyCache"></button></div>
+      <div class="hint">默认开启。同一道题的题干改几个字或换标点时，按 90% 相似度复用已答过的答案，
+        少一次题库/模型请求。选项不一致的题不会误命中。</div>
       <div class="row"><label>答题模式</label>
         <select class="sel-mode inp">
           <option value="both">双通道</option>
@@ -5548,6 +5731,17 @@ window.__ZHS_BUILD__.version = "0.6.53";
       setText('.s-ans', String(ZHS.state.answeredCount));
       const mins = Math.floor((Date.now() - ZHS.state.startedAt) / 60000);
       setText('.s-uptime', mins + ' 分钟');
+
+      // round-45：拟人离座实时状态（暂停期间才显示，避免常态占一行）
+      const hpRow = box.querySelector('#zhs-humanpause-row');
+      if (hpRow) {
+        const pausing = !!(ZHS.Player && ZHS.Player.isHumanPausing && ZHS.Player.isHumanPausing());
+        hpRow.style.display = pausing ? '' : 'none';
+        if (pausing) {
+          const left = Math.max(0, Math.ceil((ZHS.Player._humanPauseUntil - Date.now()) / 1000));
+          setText('.s-humanpause', '模拟真人离开中 · 约 ' + left + ' 秒后恢复');
+        }
+      }
 
       // round-31【弹题实时状态卡】已上移到 _refreshInner() 开头（见下方），此处不再重复。
 
@@ -9613,8 +9807,47 @@ ${question}${optionText}
     CACHE.set(k, v);
   }
 
+  // round-45：模糊匹配阈值与最短题干长度。
+  // 90% 是「改几个字/换标点」与「另一道题」之间的经验分界；题干短于 8 字
+  // （归一化后）不模糊 —— 太短的题随便差两个字相似度就很高，容易张冠李戴。
+  const FUZZY_THRESHOLD = 0.9;
+  const FUZZY_MIN_LEN = 8;
+
+  /**
+   * round-45：模糊缓存匹配 —— 题干改几个字/换标点时复用已答过的答案。
+   *
+   * 背景（GitHub 生态调研结论）：题库/LLM 都是按次收费或限速的，而智慧树
+   * 同一道题常以「换行/全半角/标点差异」的变体重复出现，精确缓存永远命不中，
+   * 于是同一道题被反复请求。模糊匹配把这类变体收敛到一次请求。
+   *
+   * 安全约束（误命中代价 = 答错题，比多打一次请求严重得多）：
+   *   · 选项串必须逐字相同（options 参与判等）—— 题干像但选项不同，是另一道题；
+   *   · 相似度 ≥ 90% 且取最高分那一条的答案；
+   *   · 归一化题干短于 8 字不模糊；
+   *   · 总开关 fuzzyCache 关闭时完全不扫描。
+   *
+   * @returns {{r:object, score:number}|null}
+   */
+  function cacheFuzzy(question, options) {
+    if (!ZHS.config.fuzzyCache) return null;
+    const nq = U.normQuestion(question);
+    if (nq.length < FUZZY_MIN_LEN) return null;
+    const optKey = (options || []).join('|').slice(0, 200);
+    let best = null;
+    let bestScore = 0;
+    for (const entry of CACHE.values()) {
+      if (entry.o !== optKey) continue;              // 选项不一致 → 另一道题，绝不复用
+      const score = U.similarity(nq, U.normQuestion(entry.q));
+      if (score > bestScore) { bestScore = score; best = entry; }
+    }
+    if (best && bestScore >= FUZZY_THRESHOLD) {
+      return { r: best.r, score: bestScore };
+    }
+    return null;
+  }
+
   const Solver = {
-    stats: { bank: 0, llm: 0, cache: 0, heuristic: 0, random: 0, skipped: 0, fail: 0 },
+    stats: { bank: 0, llm: 0, cache: 0, fuzzy: 0, heuristic: 0, random: 0, skipped: 0, fail: 0 },
 
     /** 清空缓存 */
     clearCache() { CACHE.clear(); },
@@ -9640,9 +9873,22 @@ ${question}${optionText}
       const key = cacheKey(question, options);
       const cached = cacheGet(key);
       if (cached) {
-        ZHS.Log.info('答案命中缓存：' + cached.answer);
+        ZHS.Log.info('答案命中缓存：' + cached.r.answer);
         this.stats.cache++;
-        return cached;
+        return cached.r;
+      }
+
+      // 0.5 round-45：模糊命中缓存（题干变体：改字/换标点/多空格）→ 复用答案，
+      //     少打一次题库/模型请求。选项不一致不会误命中（见 cacheFuzzy 约束）。
+      const fz = cacheFuzzy(question, options);
+      if (fz) {
+        ZHS.Log.info('答案模糊命中缓存（题干相似度 ' + Math.round(fz.score * 100) + '%），复用：' + fz.r.answer);
+        this.stats.fuzzy++;
+        // 顺便按新题干精确缓存一份，后续同变体直接精确命中，不再扫描。
+        // 注意与精确命中保持一致：不走 done()（Stats.record）——
+        // 这道题的「首次作答」在第一次 solve 时已经记过账了，此处只是复用。
+        cacheSet(key, { q: question, o: (options || []).join('|').slice(0, 200), t: type, r: fz.r });
+        return fz.r;
       }
 
       const mode = cfg.answerMode || 'both';
@@ -9739,7 +9985,7 @@ ${question}${optionText}
         return done(null);
       }
 
-      cacheSet(key, result);
+      cacheSet(key, { q: question, o: (options || []).join('|').slice(0, 200), t: type, r: result });
       return done(result);
     },
 

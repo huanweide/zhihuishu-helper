@@ -740,6 +740,7 @@
         <span class="dlg-dot"></span><span class="s-dlg">弹题：空闲</span>
       </div>
       <div class="kv"><span>本次运行</span><span class="s-uptime">—</span></div>
+      <div class="kv" id="zhs-humanpause-row" style="display:none"><span>拟人离座</span><span class="s-humanpause">—</span></div>
     </div>
     <div class="pane" data-pane="log">
       <div class="logs"></div>
@@ -751,6 +752,9 @@
       <div class="row"><label>静音</label><button class="sw" data-cfg="mute"></button></div>
       <div class="row"><label>断点续播</label><button class="sw" data-cfg="resume"></button></div>
       <div class="row"><label>倍速</label><input type="range" min="1" max="1.5" step="0.1" data-cfg-num="speed" style="width:100px"><span class="v-speed"></span></div>
+      <div class="row"><label>拟人随机暂停</label><button class="sw" data-cfg="humanPause"></button></div>
+      <div class="hint">默认开启。播放中偶尔（平均二十多分钟一次）像真人一样暂停几十秒再继续，
+        这是平台官方客户端自身的节奏，能进一步降低「机器挂机」特征。暂停期间不计学习时长。</div>
 
       <div class="row"><label>自动跳课</label><button class="sw" data-cfg="autoCourseHop"></button></div>
       <div class="hint">本课学完自动去课程中心找下一门</div>
@@ -783,6 +787,9 @@
       <div class="row"><label>离线启发式兜底</label><button class="sw" data-cfg="heuristicFallback"></button></div>
       <div class="hint">默认开启。查不到题库/没填 Key 时，用内置规则（对话标签、称谓等）推断答案，
         保证弹窗答得上、流程不卡死。关闭后这类题会转为「待人工」交给你手动作答。</div>
+      <div class="row"><label>缓存模糊匹配</label><button class="sw" data-cfg="fuzzyCache"></button></div>
+      <div class="hint">默认开启。同一道题的题干改几个字或换标点时，按 90% 相似度复用已答过的答案，
+        少一次题库/模型请求。选项不一致的题不会误命中。</div>
       <div class="row"><label>答题模式</label>
         <select class="sel-mode inp">
           <option value="both">双通道</option>
@@ -1392,6 +1399,17 @@
       setText('.s-ans', String(ZHS.state.answeredCount));
       const mins = Math.floor((Date.now() - ZHS.state.startedAt) / 60000);
       setText('.s-uptime', mins + ' 分钟');
+
+      // round-45：拟人离座实时状态（暂停期间才显示，避免常态占一行）
+      const hpRow = box.querySelector('#zhs-humanpause-row');
+      if (hpRow) {
+        const pausing = !!(ZHS.Player && ZHS.Player.isHumanPausing && ZHS.Player.isHumanPausing());
+        hpRow.style.display = pausing ? '' : 'none';
+        if (pausing) {
+          const left = Math.max(0, Math.ceil((ZHS.Player._humanPauseUntil - Date.now()) / 1000));
+          setText('.s-humanpause', '模拟真人离开中 · 约 ' + left + ' 秒后恢复');
+        }
+      }
 
       // round-31【弹题实时状态卡】已上移到 _refreshInner() 开头（见下方），此处不再重复。
 

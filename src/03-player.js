@@ -22,6 +22,13 @@
     _lastActiveAt: Date.now(),
     _retryCount: 0,
     _syncedKey: null,        // 已对过账的课时标识（避免同一节内反复 seek）
+    // round-45：拟人化随机暂停状态。
+    // _humanPauseUntil = 本次「模拟离座」的截止时间戳（0 = 不在暂停期）；
+    // _humanPauseLastMs 记录上一次暂停了多久（恢复播报用）；
+    // _humanPauseResumeLogged 保证「回来了」只播报一次。
+    _humanPauseUntil: 0,
+    _humanPauseLastMs: 0,
+    _humanPauseResumeLogged: true,
 
     /** 取当前 video 元素（缓存 + 校验是否还在文档里；顶层找不到再查同域 iframe） */
     video() {
@@ -82,6 +89,9 @@
      */
     async ensurePlaying(v) {
       if (!v || v.ended) return false;
+      // round-45：拟人化暂停期内绝不唤醒 —— 这是「模拟真人离开」，
+      // 唤醒它等于把最像人的一段节奏亲手毁掉。到期由下一轮自然恢复。
+      if (this.isHumanPausing()) return false;
       if (!v.paused) { this._markActive(v); return false; }
       if (!this.hasValidDuration(v) && v.currentTime === 0) {
         // 还没加载元数据，等一等
@@ -233,6 +243,70 @@
     },
 
     resetRetry() { this._retryCount = 0; },
+
+    /** 是否处于「模拟真人离座」暂停期 */
+    isHumanPausing() {
+      return this._humanPauseUntil > 0 && Date.now() < this._humanPauseUntil;
+    },
+
+    /**
+     * 拟人化随机暂停（round-45，听课程拟人节奏的核心一环）
+     *
+     * 依据：pjm314159/zhs（协议逆向参考实现的官方客户端复刻）播放循环每轮有
+     * 0.25% 概率随机暂停 60 秒。真人看课本来就会中途离开，而机器挂机最显著的
+     * 特征就是「匀速不停」——补上与官方客户端同款的随机暂停，能把挂机特征
+     * 进一步拉向真人在看。
+     *
+     * 调用方（调度器主循环）每 2 秒调一次；本方法自己掷骰子，命中才暂停。
+     * 安全约束：
+     *   · 只在「正在播放」时触发（暂停中 / 已结束 / 无视频不触发）；
+     *   · 刚开播 10 秒内不暂停（真人也不会一坐下就走开）；
+     *   · 暂停期间 ensurePlaying 不唤醒、checkStall 不判卡死（paused 早退）、
+     *     学习时长不计（v.paused 天然不计），到期由主循环自然恢复播放；
+     *   · 切课冷却（NAV_COOLDOWN_MS）由调用方的调用位置保证 —— 冷却期内
+     *     主循环在到达本方法之前就 return 了。
+     *
+     * @returns {boolean} 是否本次触发了暂停
+     */
+    maybeHumanPause(video) {
+      const cfg = ZHS.config;
+      if (!cfg.humanPause) return false;
+      const now = Date.now();
+
+      // 暂停到期：播报一次「回来了」（实际恢复由 ensurePlaying 负责）
+      if (this._humanPauseUntil && now >= this._humanPauseUntil) {
+        if (!this._humanPauseResumeLogged) {
+          this._humanPauseResumeLogged = true;
+          ZHS.Log.info('模拟离座结束（暂停约 ' + Math.round(this._humanPauseLastMs / 1000) + ' 秒），恢复播放');
+        }
+        this._humanPauseUntil = 0;
+        return false;
+      }
+      if (this._humanPauseUntil) return false;        // 暂停中，不重复触发
+      if (!video || video.paused || video.ended) return false;
+      if (!this.hasValidDuration(video)) return false;
+      if (video.currentTime < 10) return false;       // 刚开播不暂停
+
+      const chance = Number(cfg.humanPauseChance);
+      if (!(chance > 0) || Math.random() >= chance) return false;
+
+      const min = Math.max(5, Number(cfg.humanPauseMinSec) || 30);
+      const max = Math.max(min, Number(cfg.humanPauseMaxSec) || 90);
+      const dur = Math.round(min + Math.random() * (max - min));
+      this._humanPauseLastMs = dur * 1000;
+      this._humanPauseUntil = now + dur * 1000;
+      this._humanPauseResumeLogged = false;
+      try { video.pause(); } catch (e) { /* 暂停失败不影响主流程 */ }
+      ZHS.Log.info('拟人化随机暂停：模拟真人中途离开，暂停 ' + dur + ' 秒后自动恢复'
+        + '（平台官方客户端同款节奏，降低挂机特征）');
+      return true;
+    },
+
+    /** 清除拟人暂停状态（切课/停机时调用，避免旧节的状态带到新节） */
+    resetHumanPause() {
+      this._humanPauseUntil = 0;
+      this._humanPauseResumeLogged = true;
+    },
   };
 
   ZHS.Player = Player;

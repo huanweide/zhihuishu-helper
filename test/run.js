@@ -1594,6 +1594,16 @@ const _manualAns = (async () => {
   const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=manualans');
   const A = win.ZHS.Answerer;
 
+  // 【测试稳态化 · 2026-10-21 坐实根因】本组只测 Answerer 本身，必须停掉调度器：
+  // autoAnswer=false 时，调度器的弹题 MutationObserver 会在微任务级把重建的弹窗
+  // 抢先关掉（_root() 随后返回 null，handleDialog 静默返回），
+  // 「开启随机兜底后能作答」于是变成「boot 成功就红、boot 失败才绿」的随机项
+  // （baseline 595/1 的遗留失败项，本轮定位到具体竞态）。
+  // stop() 会把 _halted 置真，boot 第 7 步的 Scheduler.start() 也会被挡下，
+  // 从根本上消除竞态；再关 guardOverlays 双保险。
+  win.ZHS.Scheduler.stop();
+  win.ZHS.setConfig({ guardOverlays: false });
+
   // 关闭自动答题 → 直接调 handleDialog()（非手动）应静默返回
   win.ZHS.setConfig({ autoAnswer: false });
   const before = win.ZHS.state.answeredCount;
@@ -2847,7 +2857,163 @@ const _statsM8 = (async () => {
   ok('明细被限制在 200 条以内（防存储膨胀）', stored > 0 && stored <= 200, '实际 ' + stored);
 })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37]).then(async () => {
+// ==================================================
+// === 38. 听课程拟人节奏 + 模糊缓存（round-45） ===
+//
+// 背景（GitHub 生态调研 → 代码落地）：
+//   ① pjm314159/zhs 的官方客户端复刻：播放循环每轮 0.25% 概率随机暂停 60s。
+//      真人看课本来就会中途离开，而机器挂机最显著的特征是「匀速不停」。
+//      本轮把同款节奏落进 03-player/05-scheduler。
+//   ② 同一道题常以「换行/全半角/标点差异」的变体重复出现，精确缓存永远命不中，
+//      同一道题被反复请求题库/LLM。本轮加 90% 相似度模糊复用（选项必须一致）。
+//
+// 同样守两条框架约定：① 必须 async IIFE；② 必须登记进末尾 Promise.all。
+// ==================================================
+console.log('\n=== 38. 听课程拟人节奏 + 模糊缓存（round-45） ===');
+const _round45 = (async () => {
+  // ---- A. 拟人化随机暂停（03-player.js） ----
+  {
+    const { win } = makeEnv('<html><body><video></video></body></html>');
+    const ZHS = win.ZHS;
+    const P = ZHS.Player;
+    ok('Player 已挂载', !!P);
+    ok('maybeHumanPause 已提供', typeof P.maybeHumanPause === 'function');
+    ok('isHumanPausing 已提供', typeof P.isHumanPausing === 'function');
+
+    // 默认值（配置层）
+    eq('默认开启拟人暂停', ZHS.config.humanPause, true);
+    eq('默认触发概率 0.003（约二十多分钟一次）', ZHS.config.humanPauseChance, 0.003);
+    eq('默认暂停下限 30s', ZHS.config.humanPauseMinSec, 30);
+    eq('默认暂停上限 90s', ZHS.config.humanPauseMaxSec, 90);
+    // 布尔归一化（脏数据不许把开关偷偷打开/关死）
+    ZHS.setConfig({ humanPause: 'false' });
+    eq('humanPause 脏字符串被归一化为 false', ZHS.config.humanPause, false);
+    ZHS.setConfig({ humanPause: true, humanPauseChance: 1 });
+
+    const v = win.document.querySelector('video');
+    Object.defineProperty(v, 'paused', { value: false, configurable: true });
+    Object.defineProperty(v, 'ended', { value: false, configurable: true });
+    Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+    Object.defineProperty(v, 'currentTime', { value: 120, configurable: true });
+
+    // chance=1 → 必触发
+    const triggered = P.maybeHumanPause(v);
+    ok('chance=1 时必触发暂停', triggered === true, String(triggered));
+    ok('触发后进入拟人暂停期', P.isHumanPausing() === true);
+    ok('暂停截止时间已排到未来', P._humanPauseUntil > Date.now());
+    // 暂停期内再调不重复触发（不叠加、不续期）
+    const again = P.maybeHumanPause(v);
+    ok('暂停期内不重复触发', again === false);
+
+    // 暂停期内 ensurePlaying 绝不唤醒（这是「模拟真人离开」，唤醒=毁掉最像人的节奏）
+    const played = await P.ensurePlaying(v);
+    ok('暂停期内 ensurePlaying 不唤醒', played === false && P.isHumanPausing() === true);
+
+    // 到期 → 自动退出暂停态，且「回来了」只播报一次
+    const logs = [];
+    const origInfo = ZHS.Log.info;
+    ZHS.Log.info = (m) => { logs.push(String(m)); };
+    P._humanPauseUntil = Date.now() - 1;
+    const afterExpire = P.maybeHumanPause(v);
+    ok('到期后退出暂停态', afterExpire === false && P.isHumanPausing() === false);
+    // 再调一次确认「回来了」不重复播报。
+    // 注意：必须先把概率打到 0 —— 否则这次调用会重新掷出一个新暂停，
+    // 把后面的断言全污染掉（第一版测试就踩了这个坑）。
+    ZHS.setConfig({ humanPauseChance: 0 });
+    P.maybeHumanPause(v);
+    ZHS.Log.info = origInfo;
+    const resumeLogs = logs.filter((l) => l.includes('模拟离座结束'));
+    eq('「恢复播放」播报恰好一次', resumeLogs.length, 1);
+
+    // 触发时也有明确日志（用户可见，不是静默暂停）
+    P.resetHumanPause();
+    const logs2 = [];
+    ZHS.Log.info = (m) => { logs2.push(String(m)); };
+    ZHS.setConfig({ humanPauseChance: 1 });
+    P.maybeHumanPause(v);
+    ZHS.Log.info = origInfo;
+    ok('触发暂停有明确日志', logs2.some((l) => l.includes('拟人化随机暂停')));
+    P.resetHumanPause();
+
+    // 不触发的三种情形：开关关 / 概率 0 / 刚开播 <10s
+    P.resetHumanPause();
+    ZHS.setConfig({ humanPause: false, humanPauseChance: 1 });
+    ok('开关关闭时不暂停', P.maybeHumanPause(v) === false);
+    ZHS.setConfig({ humanPause: true, humanPauseChance: 0 });
+    ok('概率 0 时不暂停', P.maybeHumanPause(v) === false);
+    ZHS.setConfig({ humanPauseChance: 1 });
+    Object.defineProperty(v, 'currentTime', { value: 5, configurable: true });
+    ok('刚开播 10 秒内不暂停（真人也不会一坐下就走开）', P.maybeHumanPause(v) === false);
+    Object.defineProperty(v, 'currentTime', { value: 120, configurable: true });
+    Object.defineProperty(v, 'paused', { value: true, configurable: true });
+    ok('视频本就在暂停态时不触发', P.maybeHumanPause(v) === false);
+    P.resetHumanPause();
+    ok('resetHumanPause 后暂停态清除', P.isHumanPausing() === false);
+  }
+
+  // ---- B. 模糊匹配三件套（01-util.js） ----
+  {
+    const { win } = makeEnv('<html><body></body></html>');
+    const U = win.ZHS.Util;
+    eq('levenshtein 相同为 0', U.levenshtein('abc', 'abc'), 0);
+    eq('levenshtein 差 1 字', U.levenshtein('abc', 'abd'), 1);
+    eq('levenshtein 插入 1 字', U.levenshtein('abc', 'abxc'), 1);
+    eq('levenshtein 单侧为空取另一侧长度', U.levenshtein('', 'abc'), 3);
+    eq('levenshtein 双侧为空为 0', U.levenshtein('', ''), 0);
+    eq('相似度：完全相同为 1', U.similarity('abc', 'abc'), 1);
+    eq('相似度：双侧空为 1', U.similarity('', ''), 1);
+    ok('相似度：1/19 的字差 ≈ 0.947',
+      U.similarity('智慧树助手测试题以下哪个选项是正确的说法', '智慧树助手测试题以下哪个选项是正确说法') >= 0.9);
+    eq('normQuestion 去空白与中英标点', U.normQuestion('  你好，世界！ (test) '), '你好世界test');
+  }
+
+  // ---- C. Solver 模糊缓存（11-solver.js，入口级判别性） ----
+  {
+    const { win } = makeEnv('<html><body></body></html>');
+    const ZHS = win.ZHS;
+    // 只留 LLM 一个通道，并 stub 掉 vote —— 调用次数就是「有没有重复请求」的铁证
+    ZHS.setConfig({
+      answerMode: 'llm', bankEnabled: false,
+      llmEnabled: true, llmKey: 'dummy-key-for-test',
+      gatedRandom: false, heuristicFallback: false, fuzzyCache: true,
+    });
+    let llmCalls = 0;
+    ZHS.LLM.vote = async () => { llmCalls++; return 'B'; };
+
+    const q1 = { title: '智慧树助手测试题：以下哪个选项是正确的说法', options: ['甲', '乙', '丙'], type: 'single' };
+    const r1 = await ZHS.Solver.solve(q1);
+    ok('首解走 LLM 并拿到答案', !!r1 && r1.answer === 'B' && llmCalls === 1, JSON.stringify(r1));
+
+    // 变体：差一个字 + 换标点（归一化后相似度 ≈0.947 ≥ 0.9）
+    const r2 = await ZHS.Solver.solve({ title: '智慧树助手测试题，以下哪个选项是正确说法', options: ['甲', '乙', '丙'], type: 'single' });
+    ok('★ 变体题干模糊命中缓存（不再调 LLM）',
+      !!r2 && r2.answer === 'B' && llmCalls === 1,
+      'llmCalls=' + llmCalls + ' r2=' + JSON.stringify(r2));
+    eq('模糊计数 +1', ZHS.Solver.stats.fuzzy, 1);
+
+    // 同一变体再解 → 第二次走精确缓存（模糊命中时已按新题干落了一份精确缓存）
+    const r2b = await ZHS.Solver.solve({ title: '智慧树助手测试题，以下哪个选项是正确说法', options: ['甲', '乙', '丙'], type: 'single' });
+    ok('同一变体第二次走精确缓存', !!r2b && r2b.answer === 'B' && llmCalls === 1);
+    eq('精确缓存计数 +1', ZHS.Solver.stats.cache, 1);
+
+    // 选项不同 → 绝不误命中（题干像但选项不同，是另一道题）
+    const r3 = await ZHS.Solver.solve({ title: '智慧树助手测试题：以下哪个选项是正确的说法', options: ['甲', '乙', '丁'], type: 'single' });
+    ok('选项不同不误命中（继续走 LLM）', llmCalls === 2, 'llmCalls=' + llmCalls);
+
+    // 完全不同的题 → 不误命中
+    await ZHS.Solver.solve({ title: '高等数学：函数连续性的定义是什么', options: ['甲', '乙', '丙'], type: 'single' });
+    ok('不同题不误命中', llmCalls === 3, 'llmCalls=' + llmCalls);
+
+    // 开关关闭 → 模糊失效，全新变体重新走 LLM
+    // （必须用没见过的变体标题 —— 复用上一个变体会撞上它自己留下的精确缓存，
+    //   那就变成测精确缓存而不是测「模糊失效」了）
+    ZHS.setConfig({ fuzzyCache: false });
+    await ZHS.Solver.solve({ title: '智慧树助手测试题；以下哪个选项是正确的说法', options: ['甲', '乙', '丙'], type: 'single' });
+    ok('fuzzyCache 关闭后模糊失效（重新走 LLM）', llmCalls === 4, 'llmCalls=' + llmCalls);
+  }
+})();
+
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45]).then(async () => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');
