@@ -78,3 +78,11 @@ build-out.txt
 
 # 调试截图：含登录态，禁止入库
 live-shots/
+
+# 实地诊断 / 数据抓取调试产物（含登录态、个人隐私，严禁入库）
+.playwright-cli/
+tools/auto-watch/
+tools/start-zhs*.cmd
+tools/zhs-audit*
+tools/zhs-data*
+tools/_zhs_data*

@@ -210,6 +210,63 @@ console.log('\n=== 5. 适配层（hike 版） ===');
   eq('下一节 = 课时B', C.itemTitle(C.findNext(C.current())), '课时B');
 }
 
+console.log('\n=== 5b. 适配层（auto 自动推导兜底） ===');
+{
+  // 未知布局：纯同构 div 列表，不含任何已知适配器特征 class（.child-info/.clearfix.video/.file-item/.el-tree...）
+  const unknownLayout = (bodyInner) => `<html><body>${bodyInner}</body></html>`;
+
+  // ① 无媒体、无 active 类名：当前项无法识别（返回 null），但目录/完成态/切课链路必须完整可用
+  {
+    const { win } = makeEnv(unknownLayout(`
+<div class="catalog-list">
+  <div class="entry"><span class="name">1.1 课时A</span><i class="finished"></i></div>
+  <div class="entry"><span class="name">1.2 课时B</span></div>
+  <div class="entry"><span class="name">1.3 课时C</span></div>
+  <div class="entry"><span class="name">1.4 课时D</span></div>
+</div>`), 'https://example.com/unknown-layout');
+    const C = win.ZHS.Catalog;
+    eq('未知布局识别为 auto', C.adapter.name, 'auto');
+    eq('候选条目数 4', C.items().length, 4);
+    eq('无 active 类名+无媒体时 current() 回落 null', C.current(), null);
+    eq('1.1 有 finished 图标 → 已完成', C.isFinished(C.items()[0]), true);
+    eq('1.2 无标记 → 未完成', C.isFinished(C.items()[1]), false);
+    ok('auto 下 click 点本体不抛错', C.click(C.items()[1]) === true);
+    const nx = C.findNext(null);
+    eq('findNext 跳过已完成项，命中 1.2', C.itemTitle(nx), '1.2 课时B');
+  }
+
+  // ② 媒体嵌在当前课时条目内 → autoCurrent 第4档精准命中
+  {
+    const { win } = makeEnv(unknownLayout(`
+<div class="catalog-list">
+  <div class="entry"><span class="name">1.1 课时A</span><i class="finished"></i></div>
+  <div class="entry"><span class="name">1.2 课时B</span><video></video></div>
+  <div class="entry"><span class="name">1.3 课时C</span></div>
+  <div class="entry"><span class="name">1.4 课时D</span></div>
+</div>`), 'https://example.com/unknown-layout');
+    const C = win.ZHS.Catalog;
+    eq('媒体内嵌条目 → current() 精准命中 1.2', C.itemTitle(C.current()), '1.2 课时B');
+  }
+
+  // ③ 媒体在独立播放器区、与目录同处一个容器但不在任何候选内（如左侧目录 + 右则播放器的极端布局）
+  //    → 当前 auto 无法识别当前项（返回 null）。这是「媒体独立区 + 无 active 类名 + lessonKey 不准」的
+  //      识别盲区：向上回溯只会误判为「第一章第一节」，比返回 null 更糟（会导致切错节也判成功）。
+  //      此场景需用户跑 debug/zhihuishu-debug.user.js 一键诊断提供真实 DOM 数据才能精准根治。
+  {
+    const { win } = makeEnv(unknownLayout(`
+<div class="lesson-root">
+  <div class="catalog-list">
+    <div class="entry"><span class="name">1.1 课时A</span><i class="finished"></i></div>
+    <div class="entry"><span class="name">1.2 课时B</span></div>
+    <div class="entry"><span class="name">1.3 课时C</span></div>
+  </div>
+  <div class="player"><video></video></div>
+</div>`), 'https://example.com/unknown-layout');
+    const C = win.ZHS.Catalog;
+    eq('媒体独立区+无类名 → current() 识别盲区返回 null（已知局限，需探针数据）', C.current(), null);
+  }
+}
+
 console.log('\n=== 6. 播放层（边界判定） ===');
 {
   const { win } = makeEnv('<html><body><video></video></body></html>');

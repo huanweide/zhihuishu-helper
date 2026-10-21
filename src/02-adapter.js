@@ -241,7 +241,26 @@
     if (hit) return hit;
     // 3. 回落：用 lessonKey 文本匹配
     const key = ZHS.state.lessonKey;
-    if (key) return cands.find((c) => U.normText(c.innerText || c.textContent) === key) || null;
+    if (key) {
+      const byKey = cands.find((c) => U.normText(c.innerText || c.textContent) === key);
+      if (byKey) return byKey;
+    }
+    // 4. 从播放媒体反推：当前播放的课时条目通常与 <video>/<audio> 同源 DOM 邻近
+    //    （覆盖「平台纯靠 JS 内部状态、不给任何 DOM 挂 active/current 类名」的最坏情况）
+    try {
+      const media = document.querySelector('video, audio');
+      if (media) {
+        // 4a. 媒体本身是某候选的后代 → 沿祖先链向上找第一个属于候选集合的节点
+        let pm = media.parentElement;
+        while (pm) {
+          if (cands.includes(pm)) return pm;
+          pm = pm.parentElement;
+        }
+        // 4b. 某候选直接包含媒体（如章节缩略图内嵌 video）
+        const owner = cands.find((c) => c.contains(media));
+        if (owner) return owner;
+      }
+    } catch (e) { /* 忽略 */ }
     return null;
   }
 

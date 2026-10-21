@@ -4,6 +4,19 @@
 
 ---
 
+## [0.6.50] - 2026-10-21
+> 第二十九轮补丁（round-41）：**auto 适配器当前项反推增强 + 测试固化**
+
+### 改动
+1. **`autoCurrent()` 新增第 4 档（媒体反推）**：当页面不给任何 DOM 挂 active/current 类名、且 lessonKey 又不准时（最坏情况），沿 `<video>/<audio>` 向上回溯祖先找候选、或命中直接包含媒体的候选，覆盖"平台纯靠 JS 内部状态"的极端布局。仍仅 auto 分支生效，已知布局零回归。
+2. **测试固化**：新增「适配层（auto 自动推导兜底）」用例组（test/run.js 5b），构造未知布局 DOM 验证 `adapter.name==='auto'`、候选数、无类名时 current 回落 null、`isFinished` 图标/文本兜底、`click` 点本体不抛错、`findNext` 跳过已完成、媒体嵌入条目时 current 精准命中。
+3. **`.gitignore`**：补忽略实地诊断/数据抓取调试产物（`.playwright-cli/`、`tools/zhs-audit*`、`tools/zhs-data*` 等），防误提交。
+
+### 验证
+- `node build.js` 通过；`node test/run.js` 全测通过（auto 用例组全绿，无新增回归）。
+
+---
+
 ## [0.6.49] - 2026-10-21
 > 第二十八轮补丁（round-40）：**根治"通用兜底布局切不动课"——新增自动推导适配器（auto）**
 
