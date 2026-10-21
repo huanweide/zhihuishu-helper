@@ -893,6 +893,11 @@
 
       const titleKey = this.itemTitle(el);
       let target = el;
+      // round-42：auto 适配器「类名变化」软信号的状态快照。
+      // 点击前记录目标条目类名签名，点击后若「新增了任意非瞬态类名」即视为平台把当前项标记打上
+      // （自适应学习：不预设 active/current/selected 等具体词，平台用任何自定义类都认）。
+      const _sig = (node) => (node && node.getAttribute ? (node.getAttribute('class') || '') : '');
+      let sigBefore = '';
       // round-15【D1】：预先记下目标与「切换前那一节」在目录里的索引，供 nowIsTarget 做身份比对
       const _idxOf = (node) => {
         try {
@@ -983,11 +988,33 @@
         } catch (e) { return false; }
       };
 
+      /**
+       * round-42：auto 适配器的「类名变化」软信号（自适应学习当前项标记）。
+       * 背景：最坏布局下 current() 恒为 null（平台不给当前项挂标准 active 类名），
+       * 且非视频节点也无 video src 可比对 → nowIsTarget / _activeOnlyFallback / pageSwitched 全 false
+       * → 切课验收永远失败 → 反复点死循环（用户报的「正在切换课时中」）。
+       * 这里不预设平台用哪个类名：点击后若目标条目「新增了任意非瞬态类名」，
+       * 即视为平台已把当前项标记打上去（无论叫 active/current/selected/on/cur/zhang-current 什么）。
+       * 关键防护：点击若真没生效（类名不变）就返回 false —— 天然规避假成功，
+       * 不会把「点了没反应」误判成「切走」。瞬态类（hover/focus-visible/anim/loading/disabled 等）排除，防误判。
+       * 仅 auto 适配器生效，已知布局走原逻辑，零回归。
+       */
+      const autoClassFallback = () => {
+        if (this.adapter.name !== 'auto') return false;
+        const now = _sig(target);
+        if (!now || now === sigBefore) return false;
+        const added = now.replace(sigBefore, '').replace(/\s+/g, ' ').trim();
+        if (!added) return false;
+        if (/hover|focus-visible|anim|loading|disabled|transition|pulse|spinner|ripple/i.test(added)) return false;
+        return true;
+      };
+
       for (let i = 0; i < tries; i++) {
         // 点击前先确认还没切过去：若上次点击其实已生效（active 只是晚几拍才落到 DOM），
         // 直接判成功即可，避免「重复点击当前节 → 平台重新加载本节」的怪象。
         // round-14：只有「目标已是当前项」才算已生效；仅凭 active 不算（防假成功）。
         if (nowIsTarget()) return true;
+        sigBefore = _sig(target); // round-42：点击前刷新类名快照
         this.click(target);
         // round-15【D2】判据修正：原先写的是 `hasActive(target) && !_stillOnFrom(...)`，
         // 其中 _stillOnFrom 在 fromKey 为空时**恒返回 false**，于是整条判据退化成
@@ -997,10 +1024,10 @@
         // round-16【P4】：再叠第三信号 pageSwitched —— 视频源/播放器标题变了也算切成功，
         // 治好「平台不给 active 就永远判失败」的老限制。
         if (await waitUntil(
-          () => nowIsTarget() || this._activeOnlyFallback(target, fromKey) || pageSwitched(),
+          () => nowIsTarget() || this._activeOnlyFallback(target, fromKey) || pageSwitched() || autoClassFallback(),
           i === 0 ? timeout : timeout * 2, 150
         )) return true;
-        if (nowIsTarget() || pageSwitched()) return true;
+        if (nowIsTarget() || pageSwitched() || autoClassFallback()) return true;
         // 节点被 SPA 换掉 → 按标题重定位
         if (!target.isConnected) {
           const again = this.findByName(titleKey);

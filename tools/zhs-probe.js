@@ -237,4 +237,9 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error('✗ ' + (e && e.message ? e.message : e)); process.exit(1); });
+// 既可作为独立脚本运行（node tools/zhs-probe.js），也可被 zhs-cli.js require 复用底层能力
+module.exports = { CdpConnection, findWsFromUdd, extract };
+
+if (require.main === module) {
+  main().catch((e) => { console.error('✗ ' + (e && e.message ? e.message : e)); process.exit(1); });
+}

@@ -4,6 +4,24 @@
 
 ---
 
+## [0.6.51] - 2026-10-21
+> 第三十轮补丁（round-42）：**切课验收第 5 档（auto 类名变化软信号）+ 外置 CLI + 诊断探针**
+
+### 改动
+1. **切课验收 `autoClassFallback`（round-42）**：在 auto 兜底适配器下，点击目标条目后若其「新增了任意非瞬态类名」，即视为平台已把当前项标记打上（自适应学习：不预设 active/current/selected 等具体词，平台用任何自定义类都认）。这是 `clickAndVerify` 的第五道验收信号，覆盖「平台不给当前项挂标准 active 类名且非视频节点」的最坏布局（即用户报的「Windows版/Mac版」课切不动）。关键防护：点击若真没生效（类名不变）就返回 false，天然规避假成功。仅 auto 适配器生效，已知布局零回归。
+2. **外置 CLI `tools/zhs-cli.js`**：整合 `start`（启动固定 profile 调试 Edge，登录态持久复用，用户只登录一次）/ `connect`（列标签页）/ `diag`（CDP 网络域截获后端 API + 注入页内诊断穷举 S1~S5 切课策略）/ `run`（实验性：把 dist 注入页面接管播放）。后端截获走 CDP `Network` 域（协议级、零页面污染）。`findWs` 加活体检测，避免陈旧 `DevToolsActivePort` 死端口卡死。
+3. **诊断探针模块 `tools/diag-probe.js`**：导出可注入页面的诊断函数（结构抽取 + 切课策略穷举），不依赖主脚本也能跑结构抽取（降级安全）。
+4. **`tools/zhs-probe.js`**：加 `module.exports`（CdpConnection/findWsFromUdd/extract），可被 CLI 复用，独立运行行为不变。
+
+### 验证
+- `node build.js` 通过；`node test/run.js` 全测通过（574/1，唯一失败为既有 gatedRandom 遗留用例，非本次引入）。
+- CLI 冒烟：无浏览器时 `connect`/`diag` 干净退出码 2 + 友好提示。
+
+### 残余风险 / 下一步
+- 若某平台版本「纯靠 JS 内部状态」切课（既不挂 active 类名、也不改 video src/URL/标题），autoClassFallback 仍可能失效。此时用 `node tools/zhs-cli.js start` 开调试 Edge 登录后，`node tools/zhs-cli.js diag` 实测 strategies 哪个 didSwitch + apis 清单，据此补「后端 API 直调」档。
+
+---
+
 ## [0.6.50] - 2026-10-21
 > 第二十九轮补丁（round-41）：**auto 适配器当前项反推增强 + 测试固化**
 
