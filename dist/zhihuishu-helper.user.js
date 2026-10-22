@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.57
+// @version      0.6.58
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.57";
+window.__ZHS_BUILD__.version = "0.6.58";
 
 /* ===== 00-config.js ===== */
 /**
@@ -4694,6 +4694,44 @@ window.__ZHS_BUILD__.version = "0.6.57";
   .inp, .foot button, .mini-btn { border-color: var(--zhs-line-strong); }
   .about-link { color: var(--zhs-pri-ink2); }
 }
+
+/* ===== round-49 深度美化（纯视觉/交互增强，不改功能逻辑与 class 锚点）===== */
+/* 头部状态灯：挂在那儿就能一眼看出「脚本活着没」+ 版本徽章 */
+.head { display: flex; align-items: center; gap: var(--zhs-s2); position: relative; }
+.head b { flex: 1 1 auto; min-width: 0; font-size: 13px; }
+.head .status-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: var(--zhs-n-250);
+  box-shadow: 0 0 0 3px rgba(255,255,255,.18); transition: background .3s ease, box-shadow .3s ease; }
+.head .status-dot.run { background: var(--zhs-ok-500); box-shadow: 0 0 0 3px rgba(39,192,141,.3); animation: zhs-breathe 2s ease-in-out infinite; }
+.head .status-dot.busy { background: var(--zhs-warn-400, #e6a23c); box-shadow: 0 0 0 3px rgba(230,162,60,.32); animation: zhs-breathe 1.3s ease-in-out infinite; }
+.head .ver { font-size: 10px; font-weight: 600; color: rgba(255,255,255,.85); background: rgba(255,255,255,.16);
+  padding: 2px 7px; border-radius: 999px; flex: 0 0 auto; letter-spacing: .3px; }
+
+/* 进度条：渐变填充 + 平滑过渡（进度跳动不再生硬） */
+.cprog-bar > i { background: linear-gradient(90deg, var(--zhs-pri-500), var(--zhs-pri-400));
+  transition: width .6s cubic-bezier(.4,0,.2,1); }
+
+/* 开关：滑块平滑滑动 + 开态微光晕（点开关不再是瞬移） */
+.sw::after { transition: left .2s cubic-bezier(.4,0,.2,1); }
+.sw.on { box-shadow: 0 0 0 3px rgba(29,158,117,.18); }
+
+/* 动作按钮：胶囊化 + 悬浮上浮 + 按压下压 + 更立体阴影（更现代、更跟手） */
+.foot button { border-radius: 999px; box-shadow: var(--zhs-sh-sm); transition: transform .12s ease, box-shadow .12s ease, background .2s ease; }
+.foot button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--zhs-sh-md); }
+.foot button:active:not(:disabled) { transform: translateY(1px) scale(.97); }
+
+/* tab 切换淡入（切状态/日志/设置时内容平滑出现，不再硬跳） */
+.pane { animation: zhs-fade .22s ease; }
+@keyframes zhs-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes zhs-breathe { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+
+/* 状态页分组卡片：把平铺 .kv 归到语义组，层次更清晰 */
+.card { margin: 0 0 var(--zhs-s2); padding: var(--zhs-s2) var(--zhs-s3); border-radius: var(--zhs-r-md);
+  background: var(--zhs-n-50); border: 1px solid var(--zhs-line-soft); }
+.card-h { font-size: 11px; font-weight: 600; color: var(--zhs-n-600); margin: 0 0 var(--zhs-s1);
+  display: flex; align-items: center; gap: var(--zhs-s1); min-width: 0; }
+.card-h::before { content: ""; width: 3px; height: 11px; border-radius: 2px; background: var(--zhs-pri-400); flex: 0 0 auto; }
+.card .kv:last-child { border-bottom: none; }
+.foot button.stop-armed { background: linear-gradient(135deg, var(--zhs-danger-400), #7a1f1f); color: var(--zhs-n-0); border-color: var(--zhs-danger-400); }
 `;
 
   /**
@@ -5069,7 +5107,9 @@ window.__ZHS_BUILD__.version = "0.6.57";
 <button class="mini" title="智慧树助手">智</button>
 <div class="panel show">
   <div class="head">
-    <b>智慧树助手 v${ZHS.version}</b>
+    <span class="status-dot" id="zhs-status-dot"></span>
+    <b>智慧树助手</b>
+    <span class="ver">v${ZHS.version}</span>
     <div class="btns"><button class="fold" title="收起">—</button></div>
   </div>
   <div class="tabs">
@@ -5090,20 +5130,29 @@ window.__ZHS_BUILD__.version = "0.6.57";
         </ol>
         <button class="guide-ok">我知道了，开始用</button>
       </div>
-      <div class="kv"><span>运行状态</span><span class="s-run">—</span></div>
-      <div class="kv"><span>课程进度</span><span class="s-cprog">—</span></div>
-      <div class="cprog-bar"><i></i></div>
-      <div class="kv"><span>当前课时</span><span class="s-lesson">—</span></div>
-      <div class="kv"><span>视频进度</span><span class="s-vprog">—</span></div>
-      <div class="kv"><span>未看完</span><span class="s-undone">—</span></div>
-      <div class="kv"><span>未解锁</span><span class="s-locked">—</span></div>
-      <div class="kv"><span>本次完成</span><span class="s-done-run">0 节</span></div>
-      <div class="kv"><span>已答题数</span><span class="s-ans">0</span></div>
-      <div class="dlg-card s-dlg-none" id="zhs-dlg-card">
-        <span class="dlg-dot"></span><span class="s-dlg">弹题：空闲</span>
+      <div class="card">
+        <div class="card-h">播放状态</div>
+        <div class="kv"><span>运行状态</span><span class="s-run">—</span></div>
+        <div class="kv"><span>当前课时</span><span class="s-lesson">—</span></div>
+        <div class="kv"><span>视频进度</span><span class="s-vprog">—</span></div>
+        <div class="kv" id="zhs-humanpause-row" style="display:none"><span>拟人离座</span><span class="s-humanpause">—</span></div>
       </div>
-      <div class="kv"><span>本次运行</span><span class="s-uptime">—</span></div>
-      <div class="kv" id="zhs-humanpause-row" style="display:none"><span>拟人离座</span><span class="s-humanpause">—</span></div>
+      <div class="card">
+        <div class="card-h">课程进度</div>
+        <div class="kv"><span>课程进度</span><span class="s-cprog">—</span></div>
+        <div class="cprog-bar"><i></i></div>
+        <div class="kv"><span>未看完</span><span class="s-undone">—</span></div>
+        <div class="kv"><span>未解锁</span><span class="s-locked">—</span></div>
+        <div class="kv"><span>本次完成</span><span class="s-done-run">0 节</span></div>
+      </div>
+      <div class="card">
+        <div class="card-h">答题与统计</div>
+        <div class="kv"><span>已答题数</span><span class="s-ans">0</span></div>
+        <div class="dlg-card s-dlg-none" id="zhs-dlg-card">
+          <span class="dlg-dot"></span><span class="s-dlg">弹题：空闲</span>
+        </div>
+        <div class="kv"><span>本次运行</span><span class="s-uptime">—</span></div>
+      </div>
     </div>
     <div class="pane" data-pane="log">
       <div class="logs"></div>
@@ -5507,10 +5556,34 @@ window.__ZHS_BUILD__.version = "0.6.57";
         ZHS.Scheduler.start({ manual: true });
         this.alert('已启动：播放、跳课、答题全自动，无需再点任何按钮', 'info');
       };
-      $('.btn-stop').onclick = () => {
-        ZHS.Scheduler.stop();
-        this.alert('已停止', 'info');
-      };
+      // round-49：停止两步确认 —— stop 是破坏性操作，误触即中断全部进度，
+      // 首次点进入「确认」态（按钮变红 + 提示），3 秒窗口内再点才真停；超时自动复位。
+      const stopBtn = $('.btn-stop');
+      if (stopBtn) {
+        let stopArmed = false, stopTimer = null;
+        stopBtn.onclick = () => {
+          if (!stopArmed) {
+            stopArmed = true;
+            const orig = stopBtn.textContent;
+            stopBtn.textContent = '确认停止？';
+            stopBtn.classList.add('stop-armed');
+            this.alert('再点一次「确认停止」即中断全部进度；3 秒内不点自动取消', 'warn', 3200);
+            stopTimer = setTimeout(() => {
+              stopArmed = false;
+              stopBtn.textContent = orig;
+              stopBtn.classList.remove('stop-armed');
+              stopTimer = null;
+            }, 3000);
+            return;
+          }
+          if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
+          stopArmed = false;
+          stopBtn.textContent = '停止';
+          stopBtn.classList.remove('stop-armed');
+          ZHS.Scheduler.stop();
+          this.alert('已停止', 'info');
+        };
+      }
       $('.btn-next').onclick = () => withLoading($('.btn-next'), async () => {
         await ZHS.Scheduler.gotoNext('手动', { manual: true });
       });
@@ -5712,6 +5785,17 @@ window.__ZHS_BUILD__.version = "0.6.57";
           if (dlgText) dlgText.textContent = phaseText;
         }
       } catch (e) { ZHS.Log.debug('弹题状态卡刷新异常：' + (e && e.message)); }
+
+      // round-49：头部状态灯（放在最前，任何后续 Player/Catalog 异常都影响不到它）
+      try {
+        const dot = box.querySelector('#zhs-status-dot');
+        if (dot) {
+          const phase = ZHS.state.dialogPhase || 'none';
+          const busy = (phase === 'detected' || phase === 'answering' || phase === 'pending-human')
+            || !!(ZHS.Player && ZHS.Player.isHumanPausing && ZHS.Player.isHumanPausing());
+          dot.className = 'status-dot' + (ZHS.state.running ? (busy ? ' busy' : ' run') : '');
+        }
+      } catch (e) { ZHS.Log.debug('状态灯刷新异常：' + (e && e.message)); }
 
       // 日志页：切到该页时必须立刻有内容。
       // 【2026-10-20 真机实测修】_renderLogs 原本只在 onLog() 里被调用，

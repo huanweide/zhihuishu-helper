@@ -3205,7 +3205,68 @@ const _round47 = (async () => {
       }
     })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46, _round47, _round48]).then(async () => {
+    // ============================================================
+    // 第 49 组：面板美化 + 按钮做事自动化（round-49）
+    //   A. 头部状态灯跟随 running/dialogPhase
+    //   B. 状态页分组卡片结构（.card / card-h）+ 锚点保留
+    //   C. 停止两步确认：首次不停止、二次才停、按钮态正确
+    // ============================================================
+    const _round49 = (async () => {
+      const { win } = makeEnv('<html><body><div id="host"></div><video></video></body></html>',
+        'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=r49');
+      const Z = win.ZHS;
+      try { Z.panel.mount(); } catch (e) {}
+      const box = Z.panel._shadow;
+
+      // A. 状态灯（一眼看出脚本活着没）
+      const dot = box && box.querySelector('#zhs-status-dot');
+      ok('A1. 状态灯元素存在', !!dot);
+      if (dot) {
+        Z.state.running = true; Z.state.dialogPhase = 'none';
+        Z.panel.refresh();
+        ok('A2. 运行中→状态灯 run（呼吸绿）', dot.className.indexOf('run') >= 0 && dot.className.indexOf('busy') < 0);
+        Z.state.dialogPhase = 'answering';
+        Z.panel.refresh();
+        ok('A3. 作答中→状态灯 busy（呼吸橙）', dot.className.indexOf('busy') >= 0);
+        Z.state.running = false;
+        Z.panel.refresh();
+        ok('A4. 停止→状态灯熄灭（无 run/busy）', dot.className === 'status-dot');
+      }
+
+      // B. 分组卡片结构（模板层断言，不依赖挂载）
+      const html = Z.panel._html();
+      ok('B1. 状态页含分组卡片 .card', html.indexOf('class="card"') >= 0);
+      ok('B2. 分组卡片含「播放状态」标题', html.indexOf('播放状态') >= 0);
+      ok('B3. 分组卡片含「课程进度」标题', html.indexOf('课程进度') >= 0);
+      ok('B4. 分组卡片含「答题与统计」标题', html.indexOf('答题与统计') >= 0);
+      ok('B5. 分组后保留弹题状态卡锚点', html.indexOf('id="zhs-dlg-card"') >= 0);
+      ok('B6. 分组后保留拟人离座锚点', html.indexOf('id="zhs-humanpause-row"') >= 0);
+
+      // C. 停止两步确认（做事自动化增强：防误触破坏性操作）
+      const stopBtn = box && box.querySelector('.btn-stop');
+      ok('C1. 停止按钮存在', !!stopBtn);
+      if (stopBtn && Z.Scheduler) {
+        let stopCalls = 0;
+        const realStop = Z.Scheduler.stop;
+        Z.Scheduler.stop = () => { stopCalls++; };
+        try {
+          // 首次点击：进入确认态，不真停
+          stopBtn.onclick();
+          eq('C2. 首次点击不调用 Scheduler.stop', stopCalls, 0);
+          ok('C3. 首次点击按钮变「确认停止？」', stopBtn.textContent === '确认停止？');
+          ok('C4. 首次点击加 stop-armed 红色确认态', stopBtn.classList.contains('stop-armed'));
+          // 二次点击（3 秒窗口内）：真停
+          stopBtn.onclick();
+          eq('C5. 二次点击调用 Scheduler.stop 一次', stopCalls, 1);
+          ok('C6. 二次点击后按钮复位文案', stopBtn.textContent === '停止');
+          ok('C7. 二次点击后移除 stop-armed', !stopBtn.classList.contains('stop-armed'));
+        } finally {
+          Z.Scheduler.stop = realStop;
+        }
+      }
+    })();
+
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46, _round47, _round48, _round49]).then(async () => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');

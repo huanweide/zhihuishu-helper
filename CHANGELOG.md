@@ -4,6 +4,33 @@
 
 ---
 
+## [0.6.58] - 2026-10-22
+> round-49：**端到端前端深度美化 + 按钮做事自动化**（在成熟设计令牌系统上精准精致化，非推翻重来）+ 停止两步确认防误触
+
+### 本轮改动（前端精致化，零碰播放状态机）
+- **头部状态灯（status-dot）**：idle 灰 / run 呼吸绿 / busy 呼吸橙 三态，挂在面板头部一眼看出活没活；`_refreshInner` 把状态灯逻辑前置到弹题卡刷新之后（沿用 round-31「最前原则」，防后续异常静默早退）。busy 判定覆盖 `dialogPhase ∈ {detected,answering,pending-human}` 与拟人离座 `isHumanPausing()`。
+- **头部版本胶囊（ver 药丸）**：`<b>智慧树助手</b>` + `v{x}` 圆角胶囊，弱化版本号视觉权重。
+- **进度条渐变 + 过渡**：`.cprog-bar > i` 走 `linear-gradient(90deg, pri-500→pri-400)` + `transition width .6s cubic-bezier`，进度推进有丝滑动效。
+- **开关滑动动画**：`.sw::after` 加 `transition left`，`.sw.on` 加 3px 高亮环，切换有阻尼感。
+- **状态页卡片化分组**：原平铺 `.kv` 包进 3 张 `.card`（播放状态 / 课程进度 / 答题与统计），带左侧色条标题；**全部刷新锚点原位保留**（`#zhs-dlg-card` 仍在 `Catalog.stats()` 之前、`.s-*`、`.cprog-bar`、`#zhs-humanpause-row` 不动）——结构与契约双安全。
+- **动作按钮圆角 + 微交互**：`.foot button` 改 `border-radius: 999px` + `hover translateY(-1px)` 阴影上浮 + `active translateY(1px) scale(.97)` 回弹，方角变胶囊，点击有实体键感。
+- **面板切入淡入**：`.pane` 加 `zhs-fade` 动画（opacity+translateY 22ms ease），切页不突兀。
+- **停止两步确认（stop-armed）**：破坏性操作防误触——首次点「停止」变红「确认停止？」并 3 秒自动取消+轻量告警，二次点才真调 `Scheduler.stop()`；零风险不碰停止逻辑本身。
+
+### 本轮明确敢砍（留专门轮，不在此轮纠缠状态机）
+- 「立即暂停/恢复」「跳转未学章节」按钮：与拟人暂停 / `ensurePlaying` 状态机强耦合（r46/r47 刚理清），本期不做。
+- 「重扫目录」按钮：需先确认 Adapter 干净重扫入口，单独一轮。
+
+### 测试（`_round49` 新增 17 断言，全绿）
+- **A 节 状态灯**：A1 元素存在 / A2 运行中→run / A3 作答中→busy / A4 停止→熄灭
+- **B 节 卡片结构**：B1 `.card` 存在 / B2-B4 三标题 / B5 保留弹题状态卡锚点 / B6 保留拟人离座锚点（模板层断言）
+- **C 节 停止两步确认**：C1 按钮存在 / C2 首次不调用 stop / C3 文案变「确认停止？」/ C4 加 armed 红态 / C5 二次调用一次 / C6 复位文案 / C7 移除 armed（用 `Scheduler.stop` spy 验证，不依赖真停止副作用）
+
+### 门禁
+- `node build.js` v0.6.58 + `node test/run.js` **670 通过 / 0 失败**（上轮 653，+17 来自 `_round49`）+ `check-dist-fresh` 过（dist 与 src 一致，20 模块 v0.6.58）
+
+---
+
 ## [0.6.57] - 2026-10-22
 > round-48：**端到端对账第三轮收尾——8 方向 + 保活段全查无真 bug（r46/r47 已根治拟人暂停幽灵态、无回归）+ 2 处防御性加固**（syncToCatalog 暂停守卫 + 修正误导性注释）
 
