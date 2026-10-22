@@ -2913,6 +2913,11 @@ const _round45 = (async () => {
     const logs = [];
     const origInfo = ZHS.Log.info;
     ZHS.Log.info = (m) => { logs.push(String(m)); };
+    // round-46：到期播报守卫要求「视频确实处于暂停」——真机里 maybeHumanPause 的
+    // video.pause() 真的会暂停，本测试环境 jsdom 的 pause() 不改 paused 属性，
+    // 需手动置真才能走播报分支（否则命中 round-46 的假播报守卫，语义变为
+    // 「视频已在播 → 静默清零」——那是 round-46 组 A2 专门覆盖的场景）。
+    Object.defineProperty(v, 'paused', { value: true, configurable: true });
     P._humanPauseUntil = Date.now() - 1;
     const afterExpire = P.maybeHumanPause(v);
     ok('到期后退出暂停态', afterExpire === false && P.isHumanPausing() === false);
@@ -2930,6 +2935,8 @@ const _round45 = (async () => {
     const logs2 = [];
     ZHS.Log.info = (m) => { logs2.push(String(m)); };
     ZHS.setConfig({ humanPauseChance: 1 });
+    // round-46：上一段为贴合到期播报守卫把 paused 置了真，触发要求「播放中」，置回
+    Object.defineProperty(v, 'paused', { value: false, configurable: true });
     P.maybeHumanPause(v);
     ZHS.Log.info = origInfo;
     ok('触发暂停有明确日志', logs2.some((l) => l.includes('拟人化随机暂停')));
@@ -3013,7 +3020,88 @@ const _round45 = (async () => {
   }
 })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45]).then(async () => {
+const _round46 = (async () => {
+  // ---- A. 拟人暂停 × 弹题干预（round-46 端到端整合修复） ----
+  // 背景：round-45 的 maybeHumanPause 触发后若弹题插入，_handleDialog 恢复播放时
+  // _humanPauseUntil 未清除 → 到期假播报「离座结束」+ 到期前保活真空。
+  // 修复：_resumePlay/domAns 等恢复播放路径统一 resetHumanPause + 到期播报加 paused 守卫。
+  {
+    const { win } = makeEnv('<html><body><video></video></body></html>');
+    const ZHS = win.ZHS;
+    const P = ZHS.Player;
+    const A = ZHS.Answerer;
+    ok('Answerer 已挂载', !!A && typeof A._resumePlay === 'function');
+
+    const v = win.document.querySelector('video');
+    Object.defineProperty(v, 'paused', { value: false, configurable: true });
+    Object.defineProperty(v, 'ended', { value: false, configurable: true });
+    Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+    Object.defineProperty(v, 'currentTime', { value: 120, configurable: true });
+
+    // A1: 触发拟人暂停 → _resumePlay 恢复播放 → 拟人态必须立即清零
+    ZHS.setConfig({ humanPause: true, humanPauseChance: 1 });
+    ok('先触发拟人暂停', P.maybeHumanPause(v) === true && P.isHumanPausing() === true);
+    A._resumePlay();
+    ok('★ _resumePlay 后拟人暂停态立即清零（弹题干预=离座计划作废）',
+      P.isHumanPausing() === false && P._humanPauseUntil === 0);
+
+    // A2: 暂停未到期但视频已被弹题路径恢复（paused=false）→ 到期不播报（假播报守卫）
+    ok('再触发一次拟人暂停', P.maybeHumanPause(v) === true && P.isHumanPausing() === true);
+    Object.defineProperty(v, 'paused', { value: false, configurable: true });  // 模拟弹题恢复播放
+    const logs = [];
+    const origInfo = ZHS.Log.info;
+    ZHS.Log.info = (m) => { logs.push(String(m)); };
+    P._humanPauseUntil = Date.now() - 1;   // 手动推到到期
+    const r = P.maybeHumanPause(v);
+    ZHS.Log.info = origInfo;
+    ok('到期且视频已在播 → 静默清零不播报（假播报守卫）',
+      r === false && P.isHumanPausing() === false && logs.length === 0,
+      'logs=' + JSON.stringify(logs));
+
+    // A3: 到期且视频确实暂停 → 正常播报恰好一次（守卫不误伤正常路径）
+    P.resetHumanPause();
+    ok('第三次触发拟人暂停', P.maybeHumanPause(v) === true && P.isHumanPausing() === true);
+    Object.defineProperty(v, 'paused', { value: true, configurable: true });   // 仍在「离座」
+    const logs3 = [];
+    ZHS.Log.info = (m) => { logs3.push(String(m)); };
+    P._humanPauseUntil = Date.now() - 1;
+    P.maybeHumanPause(v);
+    ZHS.Log.info = origInfo;
+    eq('到期且视频暂停 → 「恢复播放」播报恰好一次',
+      logs3.filter((l) => l.includes('模拟离座结束')).length, 1);
+    P.resetHumanPause();
+
+    // A4: 入口级 —— _handleDialog 的 domAns 分支（答案内嵌弹窗）跑完后拟人态清零
+    // fixture：AI 小智式弹窗，答案直接写在 DOM 里（「正确答案：A」）
+    const html = '<html><body>'
+      + '<div class="el-dialog__wrapper">'
+      + '<div class="el-dialog" style="width:520px">'
+      + '<div class="el-dialog__header"><span class="el-dialog__title">课中答题</span>'
+      + '<button class="el-dialog__headerbtn"><i class="el-dialog__close"></i></button></div>'
+      + '<div class="el-dialog__body">'
+      + '<div class="question-topic">以下哪个选项是正确的说法</div>'
+      + '<div class="answer-in-dom">正确答案：A</div>'
+      + '</div></div></div>'
+      + '<video></video></body></html>';
+    const env2 = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=r46');
+    const Z2 = env2.win.ZHS;
+    const P2 = Z2.Player;
+    const v2 = env2.win.document.querySelector('video');
+    Object.defineProperty(v2, 'paused', { value: false, configurable: true });
+    Object.defineProperty(v2, 'ended', { value: false, configurable: true });
+    Object.defineProperty(v2, 'duration', { value: 600, configurable: true });
+    Object.defineProperty(v2, 'currentTime', { value: 200, configurable: true });
+    eq('domAns 能读到内嵌答案', Z2.Questions.Dialog.answerFromDom(), 'A');
+    Z2.setConfig({ humanPause: true, humanPauseChance: 1 });
+    ok('弹题前先触发拟人暂停', P2.maybeHumanPause(v2) === true && P2.isHumanPausing() === true);
+    await Z2.Scheduler._handleDialog();
+    ok('★ domAns 分支处理完弹窗后拟人暂停态清零（恢复播放路径收敛 reset）',
+      P2.isHumanPausing() === false && P2._humanPauseUntil === 0,
+      'until=' + P2._humanPauseUntil);
+  }
+})();
+
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46]).then(async () => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');

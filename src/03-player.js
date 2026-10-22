@@ -274,8 +274,16 @@
       const now = Date.now();
 
       // 暂停到期：播报一次「回来了」（实际恢复由 ensurePlaying 负责）
+      //
+      // 【round-46 修订】播报加「视频确实处于暂停」守卫。
+      // 端到端对账发现的交叉缺陷：暂停期内若弹题插入，_handleDialog 答完弹题后
+      // 会把视频恢复播放（video.play()），而 _humanPauseUntil 尚未到期。到期时
+      // 若无条件播报「模拟离座结束，恢复播放」，就是一条**假播报**——视频早就
+      // 在播了，「离座」期间实际在处理弹题，语义全错。因此只有视频确实还暂停着
+      // （即这次暂停真的是「模拟离座」造成的）才播报；视频已在播则静默清零状态。
+      // （弹题路径上的 resetHumanPause 是主修复，这里是双保险。）
       if (this._humanPauseUntil && now >= this._humanPauseUntil) {
-        if (!this._humanPauseResumeLogged) {
+        if (!this._humanPauseResumeLogged && video && video.paused) {
           this._humanPauseResumeLogged = true;
           ZHS.Log.info('模拟离座结束（暂停约 ' + Math.round(this._humanPauseLastMs / 1000) + ' 秒），恢复播放');
         }

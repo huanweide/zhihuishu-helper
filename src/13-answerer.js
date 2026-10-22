@@ -577,6 +577,9 @@
       ZHS.state.dialogActive = false;
       ZHS.state.dialogPhase = 'answered';
       if (video && video.paused && !video.ended) {
+        // round-46：AI 弹窗处理完恢复播放，同样 resetHumanPause（与 _resumePlay 同理，
+        // 弹题干预 = 「模拟离座」计划作废，避免跨干预继续计时导致到期假播报）
+        if (ZHS.Player && ZHS.Player.resetHumanPause) ZHS.Player.resetHumanPause();
         try { video.muted = true; const p = video.play(); if (p && p.catch) p.catch(() => {}); ZHS.Log.info('AI 随堂练习后已恢复播放'); } catch (e) {}
       }
     },
@@ -662,9 +665,20 @@
       }
     },
 
-    /** 恢复播放（弹题处理完后） */
+    /**
+     * 恢复播放（弹题处理完后）
+     *
+     * 【round-46 修订】开头先 resetHumanPause()。
+     * 端到端对账发现的交叉缺陷：拟人暂停触发后（video.pause() + _humanPauseUntil=T），
+     * 若弹题插入，本函数恢复播放时 _humanPauseUntil 未清除 → ① 到期假播报
+     * 「模拟离座结束，恢复播放」（视频早在弹题处理完就已恢复，语义全错）；
+     * ② 到期前 ensurePlaying 对视频的任何暂停都不恢复（最多 90 秒保活真空）。
+     * 弹题是「切课级」干预（round-45 已在 gotoNext reset，弹题漏了），
+     * 恢复播放即视为本轮「模拟离座」计划作废，重新掷骰。
+     */
     _resumePlay() {
       try {
+        if (ZHS.Player && ZHS.Player.resetHumanPause) ZHS.Player.resetHumanPause();
         const v = ZHS.Player && ZHS.Player.video();
         if (!v) return;
         const cfg = ZHS.config;

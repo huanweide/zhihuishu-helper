@@ -591,6 +591,10 @@
             } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
           }
           if (ZHS.Player) ZHS.Player.resetSync();
+          // round-46：本分支内联恢复播放（不走 Answerer._resumePlay），
+          // 同样要 resetHumanPause —— 否则「模拟离座」状态跨过弹题干预继续计时，
+          // 到期会假播报「离座结束」（详见 13-answerer._resumePlay 的注释）。
+          if (ZHS.Player) ZHS.Player.resetHumanPause();
           ZHS.state.dialogPhase = 'answered';   // 已答/已关
           return;
         }
@@ -664,6 +668,8 @@
             this._dialogHumanNotified = false;
             ZHS.state.dialogPhase = 'answered';
             if (video && video.paused) {
+              // round-46：同 domAns 分支，内联恢复播放也要 resetHumanPause
+              if (ZHS.Player) ZHS.Player.resetHumanPause();
               const p = video.play();
               if (p && p.catch) p.catch(() => {});
               ZHS.Log.info('弹题已关闭（未开启自动答题），恢复播放');

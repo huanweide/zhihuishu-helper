@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.54
+// @version      0.6.55
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.54";
+window.__ZHS_BUILD__.version = "0.6.55";
 
 /* ===== 00-config.js ===== */
 /**
@@ -2748,8 +2748,16 @@ window.__ZHS_BUILD__.version = "0.6.54";
       const now = Date.now();
 
       // 暂停到期：播报一次「回来了」（实际恢复由 ensurePlaying 负责）
+      //
+      // 【round-46 修订】播报加「视频确实处于暂停」守卫。
+      // 端到端对账发现的交叉缺陷：暂停期内若弹题插入，_handleDialog 答完弹题后
+      // 会把视频恢复播放（video.play()），而 _humanPauseUntil 尚未到期。到期时
+      // 若无条件播报「模拟离座结束，恢复播放」，就是一条**假播报**——视频早就
+      // 在播了，「离座」期间实际在处理弹题，语义全错。因此只有视频确实还暂停着
+      // （即这次暂停真的是「模拟离座」造成的）才播报；视频已在播则静默清零状态。
+      // （弹题路径上的 resetHumanPause 是主修复，这里是双保险。）
       if (this._humanPauseUntil && now >= this._humanPauseUntil) {
-        if (!this._humanPauseResumeLogged) {
+        if (!this._humanPauseResumeLogged && video && video.paused) {
           this._humanPauseResumeLogged = true;
           ZHS.Log.info('模拟离座结束（暂停约 ' + Math.round(this._humanPauseLastMs / 1000) + ' 秒），恢复播放');
         }
@@ -3692,6 +3700,10 @@ window.__ZHS_BUILD__.version = "0.6.54";
             } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
           }
           if (ZHS.Player) ZHS.Player.resetSync();
+          // round-46：本分支内联恢复播放（不走 Answerer._resumePlay），
+          // 同样要 resetHumanPause —— 否则「模拟离座」状态跨过弹题干预继续计时，
+          // 到期会假播报「离座结束」（详见 13-answerer._resumePlay 的注释）。
+          if (ZHS.Player) ZHS.Player.resetHumanPause();
           ZHS.state.dialogPhase = 'answered';   // 已答/已关
           return;
         }
@@ -3765,6 +3777,8 @@ window.__ZHS_BUILD__.version = "0.6.54";
             this._dialogHumanNotified = false;
             ZHS.state.dialogPhase = 'answered';
             if (video && video.paused) {
+              // round-46：同 domAns 分支，内联恢复播放也要 resetHumanPause
+              if (ZHS.Player) ZHS.Player.resetHumanPause();
               const p = video.play();
               if (p && p.catch) p.catch(() => {});
               ZHS.Log.info('弹题已关闭（未开启自动答题），恢复播放');
@@ -11183,6 +11197,9 @@ ${question}${optionText}
       ZHS.state.dialogActive = false;
       ZHS.state.dialogPhase = 'answered';
       if (video && video.paused && !video.ended) {
+        // round-46：AI 弹窗处理完恢复播放，同样 resetHumanPause（与 _resumePlay 同理，
+        // 弹题干预 = 「模拟离座」计划作废，避免跨干预继续计时导致到期假播报）
+        if (ZHS.Player && ZHS.Player.resetHumanPause) ZHS.Player.resetHumanPause();
         try { video.muted = true; const p = video.play(); if (p && p.catch) p.catch(() => {}); ZHS.Log.info('AI 随堂练习后已恢复播放'); } catch (e) {}
       }
     },
@@ -11268,9 +11285,20 @@ ${question}${optionText}
       }
     },
 
-    /** 恢复播放（弹题处理完后） */
+    /**
+     * 恢复播放（弹题处理完后）
+     *
+     * 【round-46 修订】开头先 resetHumanPause()。
+     * 端到端对账发现的交叉缺陷：拟人暂停触发后（video.pause() + _humanPauseUntil=T），
+     * 若弹题插入，本函数恢复播放时 _humanPauseUntil 未清除 → ① 到期假播报
+     * 「模拟离座结束，恢复播放」（视频早在弹题处理完就已恢复，语义全错）；
+     * ② 到期前 ensurePlaying 对视频的任何暂停都不恢复（最多 90 秒保活真空）。
+     * 弹题是「切课级」干预（round-45 已在 gotoNext reset，弹题漏了），
+     * 恢复播放即视为本轮「模拟离座」计划作废，重新掷骰。
+     */
     _resumePlay() {
       try {
+        if (ZHS.Player && ZHS.Player.resetHumanPause) ZHS.Player.resetHumanPause();
         const v = ZHS.Player && ZHS.Player.video();
         if (!v) return;
         const cfg = ZHS.config;
