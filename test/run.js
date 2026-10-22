@@ -3178,7 +3178,34 @@ const _round47 = (async () => {
   }
 })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46, _round47]).then(async () => {
+    // ---- round-48：syncToCatalog 暂停期防御守卫（强化 round-26 绝不 seek 铁律）----
+    const _round48 = (async () => {
+      const { win } = makeEnv('<html><body><video></video></body></html>');
+      const P = win.ZHS.Player;
+      const cat = win.ZHS.Catalog;
+      const origCurrent = cat.current;
+      const origProgress = cat.progressOf;
+      let progressOfCalls = 0;
+      try {
+        cat.current = () => ({ title: 'x' });
+        cat.progressOf = () => { progressOfCalls++; return 50; };
+        // 暂停期：应提前 return，绝不进入比对（不调 progressOf、不写 _syncedKey）
+        const v1 = { duration: 100, currentTime: 50, paused: true, ended: false };
+        const r1 = P.syncToCatalog(v1, 'r48-key-paused');
+        ok('★ 暂停期 syncToCatalog 提前 return 且不调 progressOf（暂停态不干预播放位置）',
+          progressOfCalls === 0 && r1 === false);
+        // 非暂停期对照：应正常进入比对（progressOf 被调用一次；currentTime=50 不超前故不告警）
+        progressOfCalls = 0;
+        const v2 = { duration: 100, currentTime: 50, paused: false, ended: false };
+        P.syncToCatalog(v2, 'r48-key-playing');
+        ok('★ 非暂停期 syncToCatalog 正常比对（progressOf 被调用）', progressOfCalls === 1);
+      } finally {
+        cat.current = origCurrent;
+        cat.progressOf = origProgress;
+      }
+    })();
+
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46, _round47, _round48]).then(async () => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');

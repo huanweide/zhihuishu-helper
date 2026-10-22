@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.56
+// @version      0.6.57
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.56";
+window.__ZHS_BUILD__.version = "0.6.57";
 
 /* ===== 00-config.js ===== */
 /**
@@ -2623,6 +2623,11 @@ window.__ZHS_BUILD__.version = "0.6.56";
     syncToCatalog(v, lessonKey) {
       if (!v || !lessonKey || this._syncedKey === lessonKey) return false;
       if (!Number.isFinite(v.duration) || v.duration <= 0) return false;
+      // round-48：暂停期（含拟人暂停 / 弹题暂停 / AI 随堂练习暂停）不比对进度。
+      // 契约：暂停态进度比对无意义，且可能埋下「将来有人加『落后也 seek 拉回』逻辑
+      // 却在暂停期触发 → 命中腾讯 Turing 滑块」的回归隐患（见本文件上方 round-26 铁律）。
+      // 提前 return 把「暂停期不干预播放位置」显式钉死，与 checkStall 的 paused 早退一致。
+      if (v.paused) return false;
       const cur = ZHS.Catalog && ZHS.Catalog.current ? ZHS.Catalog.current() : null;
       if (!cur) return false;
       const pct = ZHS.Catalog.progressOf(cur);
@@ -3628,8 +3633,11 @@ window.__ZHS_BUILD__.version = "0.6.56";
       // 只在自动播放模式下触发 —— 手动模式（autoPlay 关）是用户自己开车，
       // 脚本擅自暂停等于夺用户的方向盘。
       // 放在这里的原因：验证码/弹题/阻塞弹窗守卫都在上方已 return，能走到这里
-      // 说明页面是干净播放态；而切课冷却闸门在下方才判定 —— 冷却期内本方法
-      // 根本不会被执行到，天然满足「刚切完课不暂停」。
+      // 说明页面是干净播放态。关于「刚切完课不暂停」：本调用虽位于下方切课冷却闸门
+      // （L536 NAV_COOLDOWN_MS）之前、冷却期内仍会被执行，但 maybeHumanPause 内部有
+      // `currentTime < 10` 守卫（L296）——刚切课视频从头播、currentTime < 10s，
+      // 自然不触发；等播过 10s 再暂停已不算「刚切完」，语义正确。（注释于 round-48 修正，
+      // 原「冷却期内根本不执行」表述不准确。）
       if (cfg.autoPlay) ZHS.Player.maybeHumanPause(video);
 
       if (cfg.autoPlay) {

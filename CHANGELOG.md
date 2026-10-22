@@ -4,6 +4,33 @@
 
 ---
 
+## [0.6.57] - 2026-10-22
+> round-48：**端到端对账第三轮收尾——8 方向 + 保活段全查无真 bug（r46/r47 已根治拟人暂停幽灵态、无回归）+ 2 处防御性加固**（syncToCatalog 暂停守卫 + 修正误导性注释）
+
+### 本轮改动（验证安全后的契约加固，非 bug 修复）
+- **syncToCatalog 暂停期不比对进度**（`03-player.js`）：暂停态（含拟人暂停 / 弹题暂停 / AI 随堂练习暂停）提前 `return`，
+  把「暂停期不干预播放位置」显式钉死，与 checkStall 的 `paused` 早退一致；强化 round-26「绝不 seek」铁律在暂停态的贯彻
+  （防止未来有人在比对逻辑里加「落后也 seek 拉回」却在暂停期触发 → 命中腾讯 Turing 滑块）。配套 `_round48` 两条断言（暂停期不调 `progressOf` / 非暂停期正常比对）。
+- **修正一处误导性注释**（`05-scheduler.js` L521-523）：原注释称 maybeHumanPause「冷却期内根本不执行」与代码不符——
+  该方法位于切课冷却闸门（L536）**之前**、冷却期内仍会执行；真实不暂停靠 maybeHumanPause 内部的 `currentTime < 10` 守卫
+  （刚切课视频从头播故不触发）。注释已改为准确描述。
+
+### 端到端对账第三轮结论（8 方向 + 保活段，全部设计安全 / 已验证）
+1. 弹题 × 切课 gotoNext：安全（SPA 卸载弹窗 DOM + 主循环自愈 + L1030 `resetHumanPause`）
+2. 弹题 × 课程中心 pendingHop：安全（不同页面，跳课请求与播放页弹题不共存）
+3. 作业考试页 × 主调度器：**安全**（主调度器仅在有 `<video>` 时启动，作业/考试页无 video → 永不启动；06c-exam 独立轮询且 `autoExam!==true` 时啥也不做，两套循环天然分离，「守株待兔」铁律未被破）
+4. 防卡死看门狗 T2 × 拟人暂停：安全（拟人暂停 ≤90s < T1 4min，时序不重叠）
+5. AI 随堂练习 × 看门狗/拟人态：安全（`_handleAiExercise` 已 `resetHumanPause`）
+6. 目录识别 × resume：历史已修（lessonKey 写时机）
+7. 多弹题并发 abMultiDialog：已测（状态机防重入）
+8. 调度器重绑 × 进行中弹题：安全（SPA 卸载 + 主循环自愈）
+- 保活段深挖：checkStall（`if(v.paused)return` 早退）/ syncToCatalog（round-26 已删 seek，暂停期仅纯日志告警）/ ensurePlaying（`isHumanPausing` 早退）/ maybeHumanPause（到期播报加 `paused` 守卫）在拟人暂停期均安全，无 seek、无伪卡死、无学习时长真空。
+
+### 门禁
+- `node build.js` v0.6.57 + `node test/run.js` **653 通过 / 0 失败**（上轮 651，+2 来自 `_round48`）+ `check-dist-fresh` 过
+
+---
+
 ## [0.6.56] - 2026-10-22
 > round-47：**端到端对账第二轮——拟人暂停「幽灵态」跨上下文延续缺陷根治**（弹题转人工四分支 + 调度器 stop 全清理）+ 看门狗交叉点验证（安全）
 

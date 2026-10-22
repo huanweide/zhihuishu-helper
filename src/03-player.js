@@ -149,6 +149,11 @@
     syncToCatalog(v, lessonKey) {
       if (!v || !lessonKey || this._syncedKey === lessonKey) return false;
       if (!Number.isFinite(v.duration) || v.duration <= 0) return false;
+      // round-48：暂停期（含拟人暂停 / 弹题暂停 / AI 随堂练习暂停）不比对进度。
+      // 契约：暂停态进度比对无意义，且可能埋下「将来有人加『落后也 seek 拉回』逻辑
+      // 却在暂停期触发 → 命中腾讯 Turing 滑块」的回归隐患（见本文件上方 round-26 铁律）。
+      // 提前 return 把「暂停期不干预播放位置」显式钉死，与 checkStall 的 paused 早退一致。
+      if (v.paused) return false;
       const cur = ZHS.Catalog && ZHS.Catalog.current ? ZHS.Catalog.current() : null;
       if (!cur) return false;
       const pct = ZHS.Catalog.progressOf(cur);
