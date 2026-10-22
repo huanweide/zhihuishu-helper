@@ -3266,7 +3266,54 @@ const _round47 = (async () => {
       }
     })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46, _round47, _round48, _round49]).then(async () => {
+    // ============================================================
+    // _round50：重新探测目录按钮（做事自动化增强，安全恢复型）
+    //   R1. 按钮存在
+    //   R2. 点击调用 Catalog.redetect（重置适配器探测）
+    //   R3. 点击触发面板刷新
+    //   R4/R5. 点击不调用 Scheduler.stop / gotoNext（零碰状态机，安全边界）
+    //   R6/R7. withLoading 结束后按钮复位可用（不卡 loading）
+    // ============================================================
+    const _round50 = (async () => {
+      const { win } = makeEnv('<html><body><div id="host"></div><video></video></body></html>',
+        'https://studyvideoh5.zhihuishu.com/stuStudy?courseId=r50');
+      const Z = win.ZHS;
+      try { Z.panel.mount(); } catch (e) {}
+      const box = Z.panel._shadow;
+      const rescanBtn = box && box.querySelector('.btn-rescan');
+      ok('R1. 重新探测目录按钮存在', !!rescanBtn);
+      if (rescanBtn && Z.Catalog) {
+        let redetectCalls = 0, refreshCalls = 0, stopCalls = 0, gotoCalls = 0;
+        const realRedetect = Z.Catalog.redetect;
+        const realRefresh = Z.panel.refresh;
+        const realStop = Z.Scheduler && Z.Scheduler.stop;
+        const realGoto = Z.Scheduler && Z.Scheduler.gotoNext;
+        Z.Catalog.redetect = () => { redetectCalls++; return { name: 'auto' }; };
+        Z.panel.refresh = () => { refreshCalls++; };
+        if (realStop) Z.Scheduler.stop = () => { stopCalls++; };
+        if (realGoto) Z.Scheduler.gotoNext = () => { gotoCalls++; };
+        try {
+          // 守卫(02d-guard)与启动(07-main)也会独立调用 redetect，故只断言按钮点击“触发了”redetect 至少一次，
+          // 不卡死精确次数（避免与运行期其它 redetect 调用者耦合）。
+          const before = redetectCalls;
+          rescanBtn.onclick();
+          await new Promise((r) => setTimeout(r, 40));
+          ok('R2. 点击触发 Catalog.redetect（增量≥1）', redetectCalls - before >= 1);
+          ok('R3. 点击触发面板刷新', refreshCalls >= 1);
+          eq('R4. 点击不调用 Scheduler.stop（安全边界）', stopCalls, 0);
+          eq('R5. 点击不调用 Scheduler.gotoNext（安全边界）', gotoCalls, 0);
+          ok('R6. 操作后按钮未卡在 loading', !rescanBtn.classList.contains('loading'));
+          ok('R7. 操作后按钮恢复可用', rescanBtn.disabled === false);
+        } finally {
+          Z.Catalog.redetect = realRedetect;
+          Z.panel.refresh = realRefresh;
+          if (realStop) Z.Scheduler.stop = realStop;
+          if (realGoto) Z.Scheduler.gotoNext = realGoto;
+        }
+      }
+    })();
+
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46, _round47, _round48, _round49, _round50]).then(async () => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');

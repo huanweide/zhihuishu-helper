@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.58
+// @version      0.6.59
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.58";
+window.__ZHS_BUILD__.version = "0.6.59";
 
 /* ===== 00-config.js ===== */
 /**
@@ -4616,6 +4616,18 @@ window.__ZHS_BUILD__.version = "0.6.58";
   border: 2px solid rgba(255,255,255,.4); border-top-color: var(--zhs-n-0); animation: zhs-spin .7s linear infinite; }
 .foot button.loading.btn-plain::after { border-color: rgba(0,0,0,.15); border-top-color: var(--zhs-n-700); }
 @keyframes zhs-spin { to { transform: rotate(360deg); } }
+/* round-50：重新探测目录 —— 主操作区下方的次级恢复型按钮，全宽虚线幽灵态，与主四键视觉层级分明 */
+.foot2 { padding: 0 var(--zhs-s3) var(--zhs-s2); }
+.foot2 button { width: 100%; padding: var(--zhs-s2) 0; border: 1px dashed var(--zhs-line-strong);
+  border-radius: var(--zhs-r-sm); background: transparent; color: var(--zhs-n-600); cursor: pointer;
+  font-size: 11px; font-weight: 500; transition: background .15s, color .15s, border-color .15s, transform .08s; }
+.foot2 button:hover:not(:disabled) { border-color: var(--zhs-pri-400); color: var(--zhs-pri-600); background: var(--zhs-n-50); }
+.foot2 button:active:not(:disabled) { transform: scale(.98); }
+.foot2 button:disabled { opacity: .55; cursor: not-allowed; }
+.foot2 button.loading { position: relative; color: transparent !important; pointer-events: none; }
+.foot2 button.loading::after { content: ""; position: absolute; left: 50%; top: 50%;
+  width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+  border: 2px solid rgba(0,0,0,.15); border-top-color: var(--zhs-n-700); animation: zhs-spin .7s linear infinite; }
 
 .inp { width: 152px; max-width: 152px; font-size: 11px; padding: var(--zhs-s1) var(--zhs-s2); border: 1px solid var(--zhs-line-strong);
   border-radius: var(--zhs-r-sm); background: var(--zhs-n-0); color: var(--zhs-n-900); transition: border .12s, box-shadow .12s; }
@@ -5274,6 +5286,9 @@ window.__ZHS_BUILD__.version = "0.6.58";
     <button class="btn-next">下一节</button>
     <button class="btn-answer">答题</button>
   </div>
+  <div class="foot2">
+    <button class="btn-rescan" title="平台改版或切课后目录识别异常时，强制重新探测适配器并刷新目录（不刷新页面）">重新探测目录</button>
+  </div>
   <div class="about">
     <div class="about-head"><span class="retri">ReTri</span><span class="about-sub">智慧树助手 · 永久免费</span></div>
     <a class="about-link" href="https://github.com/huanweide/zhihuishu-helper" target="_blank" rel="noopener">⭐ 给作者点个 Star 支持一下</a>
@@ -5594,6 +5609,22 @@ window.__ZHS_BUILD__.version = "0.6.58";
         else await ZHS.Answerer.handleHomework({ manual: true });
         this.alert('已触发答题（场景：' + (scene || '未识别') + '）', 'info');
       });
+
+      // round-50：重新探测目录 —— 平台改版 / SPA 切课后适配器可能误判，
+      // 提供「不刷新页面」的安全重探测入口。仅重置 Catalog 适配器探测（redetect），
+      // 不碰播放状态机 / 调度器 / 进度，纯恢复型操作。
+      const rescanBtn = $('.btn-rescan');
+      if (rescanBtn) {
+        rescanBtn.onclick = () => withLoading(rescanBtn, async () => {
+          if (ZHS.Catalog && typeof ZHS.Catalog.redetect === 'function') ZHS.Catalog.redetect();
+          let n = 0;
+          try { n = (ZHS.Catalog.items && ZHS.Catalog.items().length) || 0; } catch (e) { /* 探测期 items 可能为空 */ }
+          this.refresh();
+          let adName = 'unknown';
+          try { adName = (ZHS.Catalog.adapter && ZHS.Catalog.adapter.name) || 'unknown'; } catch (e) { /* 适配器读取防御 */ }
+          this.alert('已重新探测目录：适配器=' + adName + '，识别到 ' + n + ' 个条目', 'info');
+        });
+      }
 
       // 停止条件
       const selStop = box.querySelector('.sel-stop');
