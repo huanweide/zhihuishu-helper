@@ -4,6 +4,24 @@
 
 ---
 
+## [0.6.56] - 2026-10-22
+> round-47：**端到端对账第二轮——拟人暂停「幽灵态」跨上下文延续缺陷根治**（弹题转人工四分支 + 调度器 stop 全清理）+ 看门狗交叉点验证（安全）
+
+### 本轮修复（同一类缺陷：round-46 只修了「弹题已答」路径，漏了其余「离座」幽灵态出口）
+- **弹题转人工四分支全加 `resetHumanPause()`**（`05-scheduler.js` L607/L628/L631/L657 对应四处 `pending-human` 分支）：
+  复现链——拟人暂停激活（video 真暂停）→ 恰在窗口内弹题出现并转人工 → 用户答完关弹窗后，主循环 `ensurePlaying` 被 `isHumanPausing()` 挡住 → **视频诡异冻住最多 90 秒后静默恢复**，平台还记录一段学习时长真空。根因与 round-46 同源（「离座」状态跨过弹题干预延续），只是出口不同。
+- **`stop()` 加 `resetHumanPause()`**（L245 后）：拟人暂停只在主循环活跃期有意义，停机残留的 `_humanPauseUntil` 会在重启后短暂挡住 `ensurePlaying`（同类冻住）。
+
+### 本轮验证（边做边查证）
+- **防卡死看门狗 × 拟人暂停交叉点：设计安全**。`checkStall` 有 `if (v.paused) return false` 早退，拟人暂停是 `video.pause()` 真暂停，`v.paused===true`，看门狗整段不执行，绝不会误触发 seek/重载（命中 Turing 滑块的死路）；暂停到期视频恢复后 `currentTime` 推进会重置 `_lastActiveAt`，不产生伪卡死。确认无需改代码。
+- **`resetHumanPause` 调用点现状**：弹题 domAns 分支 + 未开自动答题分支 + `_resumePlay` 收敛点 + `_handleAiExercise` + `gotoNext` + 弹题转人工四分支 + `stop()` = 全出口收敛，幽灵态不再有泄漏路径。
+
+### 门禁
+- 新增测试组 `_round47`（契约层 A + 端到端层 B + 生命周期层 C 共 6 断言）：A1 拟人暂停期 ensurePlaying 被挡（冻住根因）/A2 清态后恢复；B 驱动 `_handleDialog` 走转人工分支后幽灵态清零；C `stop()` 清态。
+- `node build.js` v0.6.56 + `node test/run.js` **651 通过 / 0 失败**（上轮基线 649，+2 来自 round-47 的新断言覆盖）+ `check-dist-fresh` 过。
+
+---
+
 ## [0.6.55] - 2026-10-22
 > round-46：**端到端对账第一轮——修复 round-45 引入的「拟人暂停 × 弹题干预」状态纠缠 + PROJECT_MAP 重写（v0.1.0 → v0.6.54 真实图景）**
 

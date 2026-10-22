@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.55
+// @version      0.6.56
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.55";
+window.__ZHS_BUILD__.version = "0.6.56";
 
 /* ===== 00-config.js ===== */
 /**
@@ -3351,6 +3351,9 @@ window.__ZHS_BUILD__.version = "0.6.55";
       ZHS.state.running = false;
       // round-34：主循环停止时同步停掉防卡死看门狗，避免残留定时器
       try { if (ZHS.Guard && ZHS.Guard.stop) ZHS.Guard.stop(); } catch (e) {}
+      // round-46 续修：停机即清「模拟离座」幽灵态。拟人暂停只在主循环活跃期有意义，
+      // 残留的 _humanPauseUntil 会在重启后短暂挡住 ensurePlaying（最多 90s 视频冻住）。
+      try { if (ZHS.Player && ZHS.Player.resetHumanPause) ZHS.Player.resetHumanPause(); } catch (e) {}
       const reason = why || 'user';
       this._haltReason = reason;
       // 只有「用户停 / 达标停」才彻底封死；瞬时故障停允许 tryResumeAfterTransientStop 救回
@@ -3713,6 +3716,9 @@ window.__ZHS_BUILD__.version = "0.6.55";
             // 待人工期：本题没答上/关不掉，用户正在手动作答。安静等待，
             // 不强关（平台会拒绝）、不告警刷屏。弹窗消失后下一轮自动复位。
             ZHS.Log.debug('弹题等待人工作答中，脚本保持暂停');
+            // round-46 续修：等待人工期间必须清「模拟离座」幽灵态，否则用户答完关弹窗后
+            // ensurePlaying 仍被 isHumanPausing() 挡住 → 视频冻住直到 _humanPauseUntil 静默过期。
+            if (ZHS.Player) ZHS.Player.resetHumanPause();
             ZHS.state.dialogPhase = 'pending-human';
           } else if (Date.now() < (ZHS.Answerer._cooldownUntil || 0)) {
             // 退避期内：不作答，直接关弹窗恢复播放，保证不卡死
@@ -3733,8 +3739,9 @@ window.__ZHS_BUILD__.version = "0.6.55";
             }
             if (ZHS.Answerer._pendingHuman) {
               // 转人工：等用户答完，不做任何关闭尝试
-              ZHS.Log.debug('弹题已转人工，等待作答');
-              ZHS.state.dialogPhase = 'pending-human';
+            ZHS.Log.debug('弹题已转人工，等待作答');
+            if (ZHS.Player) ZHS.Player.resetHumanPause();   // round-46 续修：同上，转人工即清幽灵态
+            ZHS.state.dialogPhase = 'pending-human';
             } else if (ZHS.Questions.Dialog.stillPresent()) {
               // 作答了但弹窗还在：给一次短观察窗，关不掉就计数告警（不硬关）
               await U.waitUntilHidden(QUESTION_SELECTORS, QUESTION_WAIT_MAX_MS);
@@ -3748,6 +3755,7 @@ window.__ZHS_BUILD__.version = "0.6.55";
                   }
                 }
                 ZHS.state.dialogPhase = 'pending-human';   // 关不掉 → 交人工
+                if (ZHS.Player) ZHS.Player.resetHumanPause();   // round-46 续修：同上
               } else {
                 this._dialogCloseFails = 0;
                 ZHS.state.dialogPhase = 'answered';
@@ -3764,6 +3772,7 @@ window.__ZHS_BUILD__.version = "0.6.55";
           await U.sleep(800);
           if (ZHS.Questions.Dialog.stillPresent()) {
             ZHS.state.dialogPhase = 'pending-human';
+            if (ZHS.Player) ZHS.Player.resetHumanPause();   // round-46 续修：同上
             if (!this._dialogHumanNotified) {
               this._dialogHumanNotified = true;
               ZHS.Log.warn('弹题需手动作答（未开启自动答题且平台不允许关闭未作答弹窗）');

@@ -3101,7 +3101,84 @@ const _round46 = (async () => {
   }
 })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46]).then(async () => {
+const _round47 = (async () => {
+  console.log('\n=== 47. 拟人暂停 × 弹题转人工 幽灵态清零（round-46 续修 · 端到端） ===');
+  // 背景：round-46 只修了「弹题已答」路径的 resetHumanPause，漏了「弹题转人工」四条分支。
+  // 复现：拟人暂停激活（video 真暂停）→ 恰在窗口内弹题出现并转人工 → 用户答完关弹窗后，
+  // 主循环 ensurePlaying 被 isHumanPausing() 挡住 → 视频冻住直到 _humanPauseUntil 静默过期（最长 90s）。
+  // 修复：四条 pending-human 分支统一 resetHumanPause（幂等，无幽灵态时为零操作）。
+
+  // ---- A. 契约层：拟人暂停期 ensurePlaying 被挡（视频冻住的根因），清态后恢复 ----
+  {
+    const { win } = makeEnv('<html><body><video></video></body></html>');
+    const Z = win.ZHS, P = Z.Player;
+    const v = win.document.querySelector('video');
+    Object.defineProperty(v, 'paused', { value: true, configurable: true });
+    Object.defineProperty(v, 'ended', { value: false, configurable: true });
+    Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+
+    P._humanPauseUntil = Date.now() + 100000;   // 模拟「离座」进行中
+    P._humanPauseResumeLogged = false;
+    ok('A. 拟人暂停激活（isHumanPausing=true）', P.isHumanPausing() === true);
+
+    const blocked = await P.ensurePlaying(v);
+    eq('★ A1. 拟人暂停期 ensurePlaying 拒绝恢复（用户答完关弹窗后视频冻住的根因）', blocked, false);
+
+    P.resetHumanPause();                        // 模拟「转人工分支」现在会做的清态
+    const resumed = await P.ensurePlaying(v);
+    ok('★ A2. 清幽灵态后 ensurePlaying 恢复播放（端到端修复契约）',
+      resumed === true && P.isHumanPausing() === false);
+  }
+
+  // ---- B. 端到端层：直接驱动 _handleDialog 走「未开启自动答题」分支（关不掉/转人工），断言幽灵态清零 ----
+  {
+    const html = '<html><body>'
+      + '<div class="el-dialog__wrapper"><div class="el-dialog"><div class="el-dialog__body">'
+      + '<div class="question-topic">下列说法是否正确：智慧树支持倍速播放。</div>'
+      + '<label class="el-radio"><span class="el-radio__label">A. 正确</span></label>'
+      + '<label class="el-radio"><span class="el-radio__label">B. 错误</span></label>'
+      + '</div></div></div>'
+      + '<video></video></body></html>';
+    const { win } = makeEnv(html, 'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=r47');
+    const Z = win.ZHS, P = Z.Player;
+    const v = win.document.querySelector('video');
+    Object.defineProperty(v, 'paused', { value: true, configurable: true });
+    Object.defineProperty(v, 'ended', { value: false, configurable: true });
+    Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+    Object.defineProperty(v, 'currentTime', { value: 200, configurable: true });
+
+    Z.setConfig({ autoAnswer: false, autoPlay: true, guardOverlays: true });
+    P._humanPauseUntil = Date.now() + 100000;   // 弹题恰在「离座」窗口内出现
+    P._humanPauseResumeLogged = false;
+    ok('B. 端到端：弹题前拟人暂停已激活', P.isHumanPausing() === true);
+
+    await Z.Scheduler._handleDialog();          // 走「未开启自动答题」分支（关不掉→转人工 / 关闭→已答）
+
+    ok('★ B1. 端到端：转人工/关闭分支跑完后拟人幽灵态清零（用户答完关弹窗后视频不再冻住）',
+      P.isHumanPausing() === false && P._humanPauseUntil === 0,
+      'until=' + P._humanPauseUntil);
+  }
+
+  // ---- C. 生命周期层：stop() 清理拟人暂停态，避免重启后短暂冻住最多 90s ----
+  {
+    const { win } = makeEnv('<html><body><video></video></body></html>');
+    const Z = win.ZHS, P = Z.Player;
+    const v = win.document.querySelector('video');
+    Object.defineProperty(v, 'paused', { value: true, configurable: true });
+    Object.defineProperty(v, 'ended', { value: false, configurable: true });
+    Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+
+    P._humanPauseUntil = Date.now() + 100000;   // 关脚本时正「离座」
+    P._humanPauseResumeLogged = false;
+    ok('C. 停机前拟人暂停激活', P.isHumanPausing() === true);
+
+    Z.Scheduler.stop('user');
+    ok('★ C1. stop() 清掉拟人幽灵态（重启后不会冻住最多 90s）',
+      P.isHumanPausing() === false && P._humanPauseUntil === 0);
+  }
+})();
+
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46, _round47]).then(async () => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');
