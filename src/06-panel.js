@@ -823,6 +823,7 @@
       <div class="hint">在课程中心自动进入未学完的课程</div>
 
       <div class="sec-title">AI 答题</div>
+      <div class="hint">听课遇到弹题：自动识别 → 题库/LLM 作答 → 提交 → 关闭弹窗 → 自动恢复播放，全程无需手动。答不出时按下方「兜底」策略处理（默认不瞎蒙，交人工）。</div>
       <div class="row"><label>自动答题</label><button class="sw" data-cfg="autoAnswer"></button></div>
       <div class="row"><label>课中弹题自动答</label><button class="sw" data-cfg="answerDialog"></button></div>
       <div class="row"><label>作业页自动答</label><button class="sw" data-cfg="answerHomework"></button></div>
@@ -842,9 +843,8 @@
       <div class="row"><label>答完自动关闭</label><button class="sw" data-cfg="autoCloseDialog"></button></div>
       <div class="row"><label>题库通道</label><button class="sw" data-cfg="bankEnabled"></button></div>
       <div class="row"><label>LLM 通道</label><button class="sw" data-cfg="llmEnabled"></button></div>
-      <div class="hint">默认是「不蒙」：没时可答题通道就留空不答（可事后手工作答）。<br>
-        勾选后才会在走投无路时随机选一个，保证流程不卡住。</div>
-      <div class="row"><label>无通道时随机兜底</label><button class="sw" data-cfg="gatedRandom"></button></div>
+      <div class="row"><label>答不出随机猜（逃生舱）</label><button class="sw" data-cfg="gatedRandom"></button></div>
+      <div class="hint">答题兜底三档：①题库/LLM 命中 → 直接用；②都没命中且「离线启发式」开着 → 用语言学规则推断（不瞎蒙）；③仍没有 → 本开关决定：<b>关（默认）</b>留空不答交人工，宁可漏答不瞎蒙；<b>开</b>才随机选一个保活。多数课程弹题计入平时分且不可回退，默认关更安全。</div>
       <div class="row"><label>离线启发式兜底</label><button class="sw" data-cfg="heuristicFallback"></button></div>
       <div class="hint">默认开启。查不到题库/没填 Key 时，用内置规则（对话标签、称谓等）推断答案，
         保证弹窗答得上、流程不卡死。关闭后这类题会转为「待人工」交给你手动作答。</div>

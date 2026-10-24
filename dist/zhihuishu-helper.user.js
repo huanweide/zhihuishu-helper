@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.61
+// @version      0.6.62
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.61";
+window.__ZHS_BUILD__.version = "0.6.62";
 
 /* ===== 00-config.js ===== */
 /**
@@ -3763,12 +3763,10 @@ window.__ZHS_BUILD__.version = "0.6.61";
           // 弹题关闭加随机延迟 —— 固定值是机器特征，随机才像人）
           await U.randomDelay(0.5, 1.5);
           if (video && video.paused && !video.ended) {
-            try {
-              video.muted = true;               // 静音兜底：部分浏览器拒绝非用户手势的 play()
-              const p = video.play();
-              if (p && p.catch) p.catch(() => {});
-              ZHS.Log.info('弹题已关闭，已恢复播放');
-            } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
+            // round-52：统一走 Answerer._resumePlay 闭环（点真实播放按钮 + 复检 + 再点），
+            // 不再裸 video.play() 不校验 —— 自定义播放器（prism/video.js/txp）会吞掉裸 play()，
+            // 导致「答案内嵌弹题」关掉后视频不接着放。闭环会复检是否真播、没播再点。
+            if (ZHS.Answerer && ZHS.Answerer._resumePlay) await ZHS.Answerer._resumePlay();
           }
           if (ZHS.Player) ZHS.Player.resetSync();
           // round-46：本分支内联恢复播放（不走 Answerer._resumePlay），
@@ -3854,11 +3852,8 @@ window.__ZHS_BUILD__.version = "0.6.61";
             this._dialogHumanNotified = false;
             ZHS.state.dialogPhase = 'answered';
             if (video && video.paused) {
-              // round-46：同 domAns 分支，内联恢复播放也要 resetHumanPause
-              if (ZHS.Player) ZHS.Player.resetHumanPause();
-              const p = video.play();
-              if (p && p.catch) p.catch(() => {});
-              ZHS.Log.info('弹题已关闭（未开启自动答题），恢复播放');
+              // round-52：统一走 Answerer._resumePlay 闭环（同上，避免自定义播放器吞裸 play()）
+              if (ZHS.Answerer && ZHS.Answerer._resumePlay) await ZHS.Answerer._resumePlay();
             }
           }
         }
@@ -5246,6 +5241,7 @@ window.__ZHS_BUILD__.version = "0.6.61";
       <div class="hint">在课程中心自动进入未学完的课程</div>
 
       <div class="sec-title">AI 答题</div>
+      <div class="hint">听课遇到弹题：自动识别 → 题库/LLM 作答 → 提交 → 关闭弹窗 → 自动恢复播放，全程无需手动。答不出时按下方「兜底」策略处理（默认不瞎蒙，交人工）。</div>
       <div class="row"><label>自动答题</label><button class="sw" data-cfg="autoAnswer"></button></div>
       <div class="row"><label>课中弹题自动答</label><button class="sw" data-cfg="answerDialog"></button></div>
       <div class="row"><label>作业页自动答</label><button class="sw" data-cfg="answerHomework"></button></div>
@@ -5265,9 +5261,8 @@ window.__ZHS_BUILD__.version = "0.6.61";
       <div class="row"><label>答完自动关闭</label><button class="sw" data-cfg="autoCloseDialog"></button></div>
       <div class="row"><label>题库通道</label><button class="sw" data-cfg="bankEnabled"></button></div>
       <div class="row"><label>LLM 通道</label><button class="sw" data-cfg="llmEnabled"></button></div>
-      <div class="hint">默认是「不蒙」：没时可答题通道就留空不答（可事后手工作答）。<br>
-        勾选后才会在走投无路时随机选一个，保证流程不卡住。</div>
-      <div class="row"><label>无通道时随机兜底</label><button class="sw" data-cfg="gatedRandom"></button></div>
+      <div class="row"><label>答不出随机猜（逃生舱）</label><button class="sw" data-cfg="gatedRandom"></button></div>
+      <div class="hint">答题兜底三档：①题库/LLM 命中 → 直接用；②都没命中且「离线启发式」开着 → 用语言学规则推断（不瞎蒙）；③仍没有 → 本开关决定：<b>关（默认）</b>留空不答交人工，宁可漏答不瞎蒙；<b>开</b>才随机选一个保活。多数课程弹题计入平时分且不可回退，默认关更安全。</div>
       <div class="row"><label>离线启发式兜底</label><button class="sw" data-cfg="heuristicFallback"></button></div>
       <div class="hint">默认开启。查不到题库/没填 Key 时，用内置规则（对话标签、称谓等）推断答案，
         保证弹窗答得上、流程不卡死。关闭后这类题会转为「待人工」交给你手动作答。</div>

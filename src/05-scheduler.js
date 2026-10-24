@@ -589,12 +589,10 @@
           // 弹题关闭加随机延迟 —— 固定值是机器特征，随机才像人）
           await U.randomDelay(0.5, 1.5);
           if (video && video.paused && !video.ended) {
-            try {
-              video.muted = true;               // 静音兜底：部分浏览器拒绝非用户手势的 play()
-              const p = video.play();
-              if (p && p.catch) p.catch(() => {});
-              ZHS.Log.info('弹题已关闭，已恢复播放');
-            } catch (e) { /* 恢复播放失败交给下一轮保活 */ }
+            // round-52：统一走 Answerer._resumePlay 闭环（点真实播放按钮 + 复检 + 再点），
+            // 不再裸 video.play() 不校验 —— 自定义播放器（prism/video.js/txp）会吞掉裸 play()，
+            // 导致「答案内嵌弹题」关掉后视频不接着放。闭环会复检是否真播、没播再点。
+            if (ZHS.Answerer && ZHS.Answerer._resumePlay) await ZHS.Answerer._resumePlay();
           }
           if (ZHS.Player) ZHS.Player.resetSync();
           // round-46：本分支内联恢复播放（不走 Answerer._resumePlay），
@@ -680,11 +678,8 @@
             this._dialogHumanNotified = false;
             ZHS.state.dialogPhase = 'answered';
             if (video && video.paused) {
-              // round-46：同 domAns 分支，内联恢复播放也要 resetHumanPause
-              if (ZHS.Player) ZHS.Player.resetHumanPause();
-              const p = video.play();
-              if (p && p.catch) p.catch(() => {});
-              ZHS.Log.info('弹题已关闭（未开启自动答题），恢复播放');
+              // round-52：统一走 Answerer._resumePlay 闭环（同上，避免自定义播放器吞裸 play()）
+              if (ZHS.Answerer && ZHS.Answerer._resumePlay) await ZHS.Answerer._resumePlay();
             }
           }
         }
