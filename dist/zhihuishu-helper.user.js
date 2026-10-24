@@ -9728,11 +9728,14 @@ ${question}${optionText}
   }
 
   // 单次 LLM 调用超时（毫秒）。
-  // 原来是 30 秒，配合 vote() 的最多 3 次重试 = 最坏 90 秒，
-  // 这段时间主循环（2 秒一轮）被 await 死死堵住 → 弹题一出现整个脚本就像卡死。
-  const CALL_TIMEOUT_MS = 15000;
+  // 旧值 15 秒，慢模型 / 高峰期 / 长题干常答不完就超时失败 → 直接 fallback 到启发式或跳过，
+  // 表现为「明明配了 Key 还是答不对」。用户明确要求「给出足够时间 LLM 答题、不超时、不瞎蒙」，
+  // 这里调到 45 秒，覆盖绝大多数慢响应；再配合下方总预算闸门，仍不会无限拖死主循环。
+  const CALL_TIMEOUT_MS = 45000;
   // 一道题的作答总预算（毫秒）。超时后放弃后续投票，用已有结果 or 直接认输。
-  const ANSWER_BUDGET_MS = 25000;
+  // 调到 70 秒：允许单次 45s 超时被截断后仍有余量再试一次（共约 2 次调用），
+  // 既不轻易认输瞎蒙，也不像旧版 90s 那样把主循环彻底堵死。
+  const ANSWER_BUDGET_MS = 70000;
 
   // 同类错误去重：投票最多 3 次，同一句诊断刷三遍纯属噪音，
   // 只在「文案发生变化」时才再打一条。
@@ -11115,7 +11118,20 @@ ${question}${optionText}
         return;
       }
 
-      // 随机打乱，逐个试（"ABCD 都来一次"）
+      // ★ 2026-10-24 修正：瞎蒙受 gatedRandom 统一控制（与 11-solver 频道 D 一致）。
+      // 用户要求「各种情况不要瞎选答案、不瞎蒙」——无答案时不再默认随机猜，
+      // 而是遵守「没答完不关」转人工，把选择权交还用户（瞎蒙错答会拉分，且部分课程不可回退）。
+      // 只有显式开启 gatedRandom（逃生舱，保证流程不卡死）才保留随机猜。
+      if (!ZHS.config.gatedRandom) {
+        ZHS.Log.warn('无通道兜底：按配置不瞎蒙，放弃随机猜，转人工保留弹窗');
+        if (this._giveUpSigs) this._giveUpSigs.add(sig);
+        this._pendingHuman = true;
+        if (ZHS.panel) ZHS.panel.alert('本题无可用答题通道，按「不瞎蒙」设置已跳过随机作答；请配置大模型密钥或手动选一个', 'warn', 12000);
+        this._resumePlay();
+        return;
+      }
+
+      // 随机打乱，逐个试（"ABCD 都来一次"，仅 gatedRandom 开启时）
       const orderIdx = opts.map((_, i) => i);
       for (let i = orderIdx.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const tmp = orderIdx[i]; orderIdx[i] = orderIdx[j]; orderIdx[j] = tmp; }
       let selected = false; let selectedIdx = -1;
@@ -11183,11 +11199,13 @@ ${question}${optionText}
         return false;
       }
 
-      // 排序：优先已求解答案索引，其余随机打乱（"ABCD 都来一次"）
+      // 排序：优先已求解答案索引；其余选项仅在 gatedRandom 开启时才纳入尝试序列，
+      // 否则只试已求解答案——没有正确答案绝不瞎蒙，统一转人工（遵守「没答完不关」）。
       const all = els.map((_, i) => i);
       const pref = (prefer || []).filter((i) => i >= 0 && i < els.length);
-      const rest = all.filter((i) => pref.indexOf(i) < 0);
-      for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = rest[i]; rest[i] = rest[j]; rest[j] = t; }
+      const rest = ZHS.config.gatedRandom
+        ? all.filter((i) => pref.indexOf(i) < 0)
+        : [];
       const seq = pref.concat(rest);
 
       for (const i of seq) {
