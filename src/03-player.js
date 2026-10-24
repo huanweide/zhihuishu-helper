@@ -109,6 +109,66 @@
       }
     },
 
+    /**
+     * 点击播放器的真实「播放」按钮（round-50，对应「再次选择播放」）。
+     *
+     * 为什么需要：智慧树部分课程用 prism-player / video.js / 腾讯云 txp 这类自定义播放器，
+     * 弹题关闭后直接调裸 video.play() 常被播放器内部状态拦截（或要求真实用户手势），
+     * 表现为「视频没真播起来、却已记成已恢复」。点击控件自身的播放按钮能绕开这个拦截，
+     * 让「检测在不在播放 → 没播就再点一次」闭环成立。
+     *
+     * 安全约束：
+     *   · 仅当 video 处于暂停态才点（播放按钮是切换键，已播放时点击反而暂停）；
+     *   · 全程防御性 try/catch + 存在性/可见性判断，找不到按钮就静默返回 false，
+     *     交给裸 video.play() 兜底，绝不让本函数抛错影响主流程；
+     *   · 跨域 iframe 内的播放按钮 querySelector 取不到，此时本函数自然返回 false，
+     *     由裸 video.play() 在同一 iframe 内兜底（跨域则无解，与旧行为一致）。
+     *
+     * @returns {boolean} 是否找到了可见播放按钮并点击
+     */
+    clickPlayButton(v) {
+      if (!v || !v.paused) return false;   // 已在播或非法 → 不点（避免切换成暂停）
+      try {
+        // 播放器容器优先级：video 的祖先播放器壳 > document
+        const host = (v.closest && v.closest(
+          '.prism-player, .video-js, .txp-wrapper, .txp-video-container, .player, .playBox, .video-container, .prism-player-wraper'
+        )) || document;
+        const SELS = [
+          '.prism-play-btn', '.prism-big-play-btn',                 // 阿里云 / Polyv prism
+          '.vjs-play-control', '.vjs-big-play-button',              // video.js
+          '.txp-button-play', '.txp_play',                          // 腾讯云 txp
+          '[class*="playBtn"]', '[class*="play-btn"]', '[class*="playButton"]',
+          'button[aria-label*="播放"]', 'button[title*="播放"]',
+          '.play-button', '.btn-play',                              // 通用
+        ];
+        for (const s of SELS) {
+          try {
+            const btns = host.querySelectorAll(s);
+            for (const b of btns) {
+              // 只点布局可见的按钮（big-play 在已播态常被隐藏，点了无效）
+              if (b && b.offsetParent !== null) {
+                b.click();
+                ZHS.Log.debug('已点击播放器播放按钮：' + s);
+                return true;
+              }
+            }
+          } catch (e) { /* 单选择器失败不影响其它 */ }
+        }
+        // 文本兜底：容器内唯一的「播放 / 开始 / ▶」按钮
+        try {
+          const txt = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, '');
+          const byText = Array.from(host.querySelectorAll(
+            'button, [role="button"], .el-button, .btn, [class*="play"]'
+          )).find((b) => /^(播放|开始|▶|►)$/.test(txt(b)) && b.offsetParent !== null);
+          if (byText) { byText.click(); ZHS.Log.debug('已点击播放按钮（文本匹配）'); return true; }
+        } catch (e) { /* 忽略 */ }
+        return false;
+      } catch (e) {
+        ZHS.Log.debug('clickPlayButton 异常：' + e.message);
+        return false;
+      }
+    },
+
     /** 检查是否卡死（currentTime 长时间不推进） */
     checkStall(v) {
       if (!v) return false;

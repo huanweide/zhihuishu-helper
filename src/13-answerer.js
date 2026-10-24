@@ -636,6 +636,10 @@
       // round-39（ocsjs 原厂实现）：AI 助教弹窗流程是「选完选项 → 先点提交 → 再关」。
       // 漏了提交，平台会以「未提交答案」拒绝关闭 → 关不掉死循环（这正是用户实测的根因之一）。
       await this._clickSubmitIfAny();
+      // round-50：给出时间 —— 答完题后平台需要一点时间登记作答，太早点 X 关闭
+      // 会被平台以「未作答」拒绝（关不掉又回到死循环）。提交（若有）后先 settle 再关，
+      // 对应用户在听课页要求的「给出时间 → 点击 X → 继续听课」顺序。
+      await U.sleep(400);
       const Q = ZHS.Questions.Dialog;
       for (let attempt = 1; attempt <= 3; attempt++) {
         const ok = Q.close();
@@ -681,17 +685,19 @@
     },
 
     /**
-     * 恢复播放（弹题处理完后）
+     * 恢复播放（弹题处理完后）—— round-50 强化为「检测 → 播放 → 复检 → 没播就再点」闭环。
      *
-     * 【round-46 修订】开头先 resetHumanPause()。
-     * 端到端对账发现的交叉缺陷：拟人暂停触发后（video.pause() + _humanPauseUntil=T），
-     * 若弹题插入，本函数恢复播放时 _humanPauseUntil 未清除 → ① 到期假播报
-     * 「模拟离座结束，恢复播放」（视频早在弹题处理完就已恢复，语义全错）；
-     * ② 到期前 ensurePlaying 对视频的任何暂停都不恢复（最多 90 秒保活真空）。
-     * 弹题是「切课级」干预（round-45 已在 gotoNext reset，弹题漏了），
-     * 恢复播放即视为本轮「模拟离座」计划作废，重新掷骰。
+     * 旧实现只做 `if (v.paused) v.play()` 且 play() 的 reject 被静默吞掉，
+     * 视频没真播起来却被记成「已恢复播放」，表现就是用户报的「答完题、关掉弹窗，
+     * 视频不接着放」。现改为严格顺序：
+     *   ① resetHumanPause（弹题 = 切课级干预，幽灵态清掉，避免 ensurePlaying 被挡）
+     *   ② 静音 + 倍速（平台会重置 muted，先静音绕过自动播放策略）
+     *   ③ 给出时间：弹窗刚关，播放器 UI 与 video 状态需短暂同步，先 settle
+     *   ④ 检测在不在播放：尝试「点真实播放按钮 + 裸 video.play() 兜底」，等一下再读 v.paused 复检
+     *   ⑤ 没真播起来 → 按用户要求「再次选择播放」并复检，最多重试 3 次
+     *   ⑥ 只有确认 !v.paused 才记「已恢复播放」；多次仍不行则交主循环 ensurePlaying 保活，不假报。
      */
-    _resumePlay() {
+    async _resumePlay() {
       try {
         if (ZHS.Player && ZHS.Player.resetHumanPause) ZHS.Player.resetHumanPause();
         const v = ZHS.Player && ZHS.Player.video();
@@ -699,11 +705,38 @@
         const cfg = ZHS.config;
         if (cfg.mute) ZHS.Player.mute(v);
         ZHS.Player.setSpeed(v, cfg.speed);
-        if (v.paused) {
-          const p = v.play();
-          if (p && p.catch) p.catch(() => { /* 自动播放策略拦截，忽略 */ });
-          ZHS.Log.info('弹题关闭后已恢复播放');
+        if (v.ended) { ZHS.Log.debug('弹题关闭后视频已结束，跳过恢复播放'); return; }
+
+        // ③ 给出时间：弹窗刚关闭，播放器 UI 与 video 状态需要一点时间同步。
+        //    立刻读 v.paused / 调 play() 可能仍停在弹题暂停态，或播放器内部状态拦截 play()。
+        const tryResumeOnce = async () => {
+          if (!v.paused) return true;                  // 已在播，无需动作
+          // 先点真实播放按钮（自定义播放器常忽略裸 video.play()）
+          if (ZHS.Player && ZHS.Player.clickPlayButton) ZHS.Player.clickPlayButton(v);
+          // 再补一次裸 video.play() 兜底（已静音，绕过自动播放策略）
+          if (v.paused) {
+            const p = v.play();
+            if (p && typeof p.catch === 'function') {
+              try { await p; } catch (e) { ZHS.Log.debug('video.play() 被拒绝：' + e.message); }
+            }
+          }
+          await U.sleep(700);
+          return !v.paused;                            // ④ 复检：真的播起来才算
+        };
+
+        // ③ 先 settle，让播放器 UI 同步
+        await U.sleep(300);
+
+        // 第一轮
+        if (await tryResumeOnce()) { ZHS.Log.info('弹题关闭后已恢复播放'); return; }
+
+        // ⑤ 没真播起来 → 按用户要求「再次选择播放」并复检，最多重试 3 次
+        for (let i = 1; i <= 3; i++) {
+          ZHS.Log.warn('弹题关闭后视频未真正播放（第 ' + i + ' 次重试），再次点击播放');
+          if (await tryResumeOnce()) { ZHS.Log.info('弹题关闭后经重试已恢复播放'); return; }
         }
+        // ⑥ 多次仍不行：不假报「已恢复」，交主循环 ensurePlaying 保活（每 2 秒一轮）
+        ZHS.Log.warn('弹题关闭后多次尝试仍未能恢复播放，交由主循环保活');
       } catch (e) {
         ZHS.Log.debug('恢复播放异常：' + e.message);
       }
