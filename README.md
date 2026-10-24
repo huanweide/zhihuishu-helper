@@ -5,19 +5,23 @@
 [![Stars](https://img.shields.io/github/stars/huanweide/zhihuishu-helper)](https://github.com/huanweide/zhihuishu-helper/stargazers)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/huanweide/zhihuishu-helper/pulls)
 
-> 目标：在**智慧树（zhihuishu.com / 知到）**平台上实现
-> ① 自动播放 ② 断点续播 ③ AI 自动答题
->
-> 仅限个人学习研究使用，禁止商用与传播。使用风险自负。
+> **一句话定位**：一个 **Tampermonkey 油猴脚本**，让你在 **智慧树 / 知到** 上 **自动播放、断点续播、AI 自动答题（不瞎蒙）** —— 装好即用，全程在你的浏览器里跑，账号不交给任何第三方。
 
----
+**适合谁用**：被智慧树网课折磨的大学生；想挂课 / 刷课又想保住学习记录、但不愿把账号交给云端自动化脚本的人。
 
-> **📦 便携性速览**
->
-> - 油猴脚本形态：**零部署**，装 Tampermonkey 后一个 `user.js` 即跑，用户随时开关。
-> - 自动播放 / 断点续播无需任何外部服务；AI 答题可选接本地题库或自备 LLM Key。
-> - 仅限个人学习研究，目标平台 zhihuishu.com / 知到。
+**3 步装好（需 Node 环境构建一次）**：① 装 [Tampermonkey](https://www.tampermonkey.net/) 浏览器插件 → ② `git clone` 后 `node build.js` 生成 `dist/zhihuishu-helper.user.js` → ③ 用 Tampermonkey 打开该文件即装。完整图文见 [安装说明](docs/20-使用说明.md)。
 
+**三条主线能力**
+
+| 能力 | 说明 | 本项目独有亮点 |
+|------|------|----------------|
+| 🎬 自动播放 | 自动静音 + 倍速 + 防暂停 + 自动下一节/章 | 关掉页面也不丢进度 |
+| ⏯ 断点续播 | 关页面 / 浏览器 / 断网后重开，自动从上次位置继续 | 跨课、跨 iframe 持久化（ocsjs / cxmooc-tools 都没有） |
+| 🤖 AI 自动答题 | 课中弹题 + 章节测试 + 作业：题库优先 → LLM 兜底 → 自动回填 | **不瞎蒙**：无可靠答案转人工，绝不随机勾；LLM 超时给足 45s/70s |
+
+**为什么不直接用 ocsjs / cxmooc-tools？** 它们适配更广，但本项目多三件你大概率用得上的事：① **断点续播**（它们没有）；② **故障可诊断**（超时 / 断网 / HTTP / HTML 四类分层提示 + 解决建议）；③ **通道健康检测**（一键点检题库 + 模型两条通道，逐条给原因）。完整对比看下方 [能力 Benchmark](#72-与参考项目的能力-benchmark)。
+
+> ⚠️ 仅限个人学习研究使用，禁止商用与传播；使用风险自负。下方是按"开发者笔记"组织的完整内容（能力矩阵 / 技术方案 / 测试门禁 / 踩坑记录），想先上手直接看 [安装说明](docs/20-使用说明.md)。
 
 ## 一、项目目标（三条主线）
 
