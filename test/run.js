@@ -171,7 +171,7 @@ console.log('\n=== 4. 适配层（legacy 版） ===');
   <i class="time_icofinish"></i>
 </div>
 <div class="clearfix video">
-  <span id="lessonOrder">第2讲 方法论</span>
+  <span class="catalogue_title">第2讲 方法论</span>
   <span class="progress-num">30%</span>
 </div>
 <video></video>
