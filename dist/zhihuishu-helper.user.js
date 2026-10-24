@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.62
+// @version      0.6.63
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.62";
+window.__ZHS_BUILD__.version = "0.6.63";
 
 /* ===== 00-config.js ===== */
 /**
@@ -5235,7 +5235,7 @@ window.__ZHS_BUILD__.version = "0.6.62";
       <div class="hint">默认开启。播放中偶尔（平均二十多分钟一次）像真人一样暂停几十秒再继续，
         这是平台官方客户端自身的节奏，能进一步降低「机器挂机」特征。暂停期间不计学习时长。</div>
 
-      <div class="row"><label>自动跳课</label><button class="sw" data-cfg="autoCourseHop"></button></div>
+      <div class="row"><label>学完自动进下一门</label><button class="sw" data-cfg="autoCourseHop"></button></div>
       <div class="hint">本课学完自动去课程中心找下一门</div>
       <div class="row"><label>自动选课</label><button class="sw" data-cfg="autoCoursePick"></button></div>
       <div class="hint">在课程中心自动进入未学完的课程</div>
@@ -5277,7 +5277,8 @@ window.__ZHS_BUILD__.version = "0.6.62";
         </select>
       </div>
       <div class="row"><label>题库地址</label><input type="text" class="in-bank inp" placeholder="http://localhost:8060"></div>
-      <div class="row"><label>投票次数</label><input type="number" class="in-vote inp" min="1" max="5" style="width:60px"></div>
+      <div class="row"><label>LLM 复验次数</label><input type="number" class="in-vote inp" min="1" max="5" style="width:60px"></div>
+      <div class="hint">默认 3。同一题让模型独立答多次取多数，降低偶发答错（次数越多越费 Token）。</div>
 
       <div class="sec-title">模型接口（OpenAI 兼容）</div>
       <div class="hint">填 Key 后可用任意兼容接口：DeepSeek / 通义 / Kimi / 本地 Ollama 等</div>
@@ -5300,7 +5301,7 @@ window.__ZHS_BUILD__.version = "0.6.62";
       <div class="hint s-keymsg"></div>
 
       <div class="sec-title">通道健康检测</div>
-      <div class="hint">一次点检两条答题通道是否正常，异常时直接给出原因和处理建议</div>
+      <div class="hint">一次检测两条答题通道是否正常，异常时直接给出原因和处理建议</div>
       <div class="row"><label></label>
         <span><button class="mini-btn btn-health">立即检测</button></span>
       </div>
@@ -5488,7 +5489,7 @@ window.__ZHS_BUILD__.version = "0.6.62";
         };
       }
 
-      // 通道健康检测（M8）：一次点检题库 + 模型两条通道
+      // 通道健康检测（M8）：一次检测题库 + 模型两条通道
       const btnHealth = box.querySelector('.btn-health');
       if (btnHealth) {
         btnHealth.onclick = async () => {
@@ -5533,7 +5534,7 @@ window.__ZHS_BUILD__.version = "0.6.62";
           // 习惯分进度：平台按「每天学满 30 分钟得 1 分」计，这里显示已得与还差多久
           const remainMin = Math.ceil((s.todayHabitRemainMs || 0) / 60000);
           const line1 = '今日：答题 ' + s.today.answered + ' 题'
-            + '（题库 ' + s.today.bank + ' / 模型 ' + s.today.llm + ' / 跳过 ' + s.today.skipped + '）';
+            + '（题库 ' + s.today.bank + ' / 模型 ' + s.today.llm + ' / 漏答 ' + s.today.skipped + '）';
           const line2 = '今日学习 ' + min + ' 分钟｜习惯分已得 ' + s.todayHabitDone
             + ' 分，下一分还差约 ' + remainMin + ' 分钟';
           const line3 = '累计答题 ' + s.totalAnswered + ' 题，活跃 ' + s.activeDays + ' 天';
