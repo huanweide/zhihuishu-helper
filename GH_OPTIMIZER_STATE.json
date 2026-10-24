@@ -1,18 +1,24 @@
 {
   "lastOptimized": "2026-10-24",
-  "round": 1,
+  "round": 2,
   "status": "optimized",
-  "direction": "star 获取引擎深化（S1-S5）",
+  "direction": "star 呈现层深度重构（落地页 L1-L10）",
   "improvements": [
     "S1 描述突出不瞎蒙差异点",
     "S2 topics 补 zhihuishu/zhida/course-assistant 至11个",
     "S3 补英文 README + 既有 badge/数据化",
-    "S4 mermaid 能力矩阵已具"
+    "S4 mermaid 能力矩阵已具",
+    "README 落地页重构：品类主张首行 + 受众首屏 + 3步装 + 诚实对比(ocsjs/cxmooc-tools)"
   ],
   "decisionLog": [
     "star 引擎样板轮：description/topics/英文README 三处呈现层杠杆最可见",
-    "topics 走专用 /topics 端点整体替换（主端点 PATCH 不处理 topics）"
+    "topics 走专用 /topics 端点整体替换（主端点 PATCH 不处理 topics）",
+    "深度 pass：原 README 开场是开发者侦察/技术方案笔记，落地页四要素缺失；按高 star 研究(AFFiNE 60k COO/codetalenthub/gingiris)重构首屏",
+    "保留下方开发者笔记(能力矩阵/技术方案/测试门禁/踩坑)作为详细文档，落地块指向它，兼顾转化与深度",
+    "引擎方法论 workflow.md 新增 L1-L10 深度呈现层清单，夜间 maxloop 永久变深"
   ],
-  "selfErrors": [],
+  "selfErrors": [
+    "此前把开发者笔记当落地页，访客 3 秒流失；已纠正为转换页结构"
+  ],
   "pr": "https://github.com/huanweide/zhihuishu-helper"
 }
