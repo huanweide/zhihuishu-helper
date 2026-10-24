@@ -1,5 +1,10 @@
 # 智慧树网课助手（zhihuishu-helper）
 
+[![License](https://img.shields.io/github/license/huanweide/zhihuishu-helper)](LICENSE)
+[![Version](https://img.shields.io/github/package-json/v/huanweide/zhihuishu-helper?label=version)](https://github.com/huanweide/zhihuishu-helper/releases)
+[![Stars](https://img.shields.io/github/stars/huanweide/zhihuishu-helper)](https://github.com/huanweide/zhihuishu-helper/stargazers)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/huanweide/zhihuishu-helper/pulls)
+
 > 目标：在**智慧树（zhihuishu.com / 知到）**平台上实现
 > ① 自动播放 ② 断点续播 ③ AI 自动答题
 >
@@ -179,6 +184,8 @@ storage 必须写在**顶层 window**（`window.top.localStorage`）才能跨课
 - 判断题：按文本匹配"对/错"定位
 - 填空题：写 `textarea.value` + 触发 `input` 事件
 
+**不瞎蒙原则（v0.6.60 起）**：所有「无答案时随机猜 ABCD」的兜底路径统一受 `gatedRandom` 开关管制，**默认关闭**——没有可靠答案（题库 / LLM 都没给）时，放弃随机勾选、保留弹窗交由用户人工作答；仅当用户主动开启 `gatedRandom` 逃生舱时才允许随机兜底（防流程卡死）。同时 LLM 超时从 15s / 25s 放宽到 **45s / 70s**，给模型足够作答时间，从源头减少「答不上→瞎蒙」。
+
 ### 4.4 反检测注意事项（实测踩坑）
 
 1. **不要最小化浏览器** —— 会导致 `requestAnimationFrame` 停摆、脚本卡死
@@ -204,9 +211,9 @@ zhihuishu-helper/
 │   ├── 11-测试报告.md      # 两层测试体系 + 断言明细
 │   ├── 20-使用说明.md      # 安装、面板、控制台 API、排障手册
 │   └── 90-快照与回溯.md    # 三层快照机制
-├── src/                   # 正式源码（17 模块，按序拼装）
+├── src/                   # 正式源码（20 模块，按序拼装）
 ├── test/                  # 测试：逻辑单测 + 截屏测试 + 真实站点测试
-│   ├── run.js             #   逻辑单测 458 项（jsdom + vm 模块注入）
+│   ├── run.js             #   逻辑单测 676 项（jsdom + vm 模块注入）
 │   ├── screenshot.js      #   截屏测试 70 项（puppeteer-core + Chrome）
 │   ├── live-run.js        #   真实站点测试入口（login/recon/e2e）
 │   ├── fixture-media.js   #   媒体打桩（解决 duration=Infinity）
@@ -224,7 +231,7 @@ zhihuishu-helper/
 
 ```bash
 node build.js                                    # 构建
-node test/run.js                                 # 逻辑单测（458 项）
+node test/run.js                                 # 逻辑单测（676 项）
 node test/screenshot.js                          # 截屏测试（70 项）
 node test/live-run.js login                      # 真实站点：人工登录
 node test/live-run.js e2e                        # 真实站点：端到端测试
@@ -250,8 +257,9 @@ node test/live-run.js e2e                        # 真实站点：端到端测�
 - [x] **v0.6.29 M8 学习记录：答题来源分布 + 学习时长累计 + 习惯分统计，9 条判别性测试，458 项逻辑单测全绿（累计 528 项）**
 - [ ] M7 真实站点端到端验证（需登录态）
 - [x] M8 面板打磨：通道健康检测、答题记录页、习惯分统计（核心三块完成）
+- [x] **v0.6.60 答题不瞎蒙 + 超时给足（round-51）**：`gatedRandom` 默认关（无可靠答案转人工，不瞎蒙）、LLM 超时 15s/25s→45s/70s；测试 676 通过 / 1 失败（历史遗留，章节名解析）
 
-**测试门禁**：逻辑单测 458/458 + 截屏测试 70/70 = **528 项全绿**
+**测试门禁**：逻辑单测 **676 通过 / 1 失败**（失败项属章节名解析，历史遗留，与答题逻辑无关）；截屏测试 **70 项**（puppeteer-core + Chrome，需本地环境运行）。
 
 ### M6 补充说明：为什么是「守株待兔」而不是「主动出击」
 
@@ -283,8 +291,6 @@ node test/live-run.js e2e                        # 真实站点：端到端测�
 
 ---
 
-## 七、免责声明
-
 ## 七、质量度量与能力矩阵
 
 ### 7.1 测试门禁演进（逻辑单测回归曲线）
@@ -297,6 +303,7 @@ node test/live-run.js e2e                        # 真实站点：端到端测�
 | v0.6.27 | 444 | 70 | 514 | ✓ | 网络失败分层诊断（round-24） |
 | **v0.6.28** | **449** | **70** | **519** | ✓ | 求解层诊断贯通 + 通道健康检测（round-25） |
 | **v0.6.29** | **458** | **70** | **528** | ✓ | M8 学习记录 + 习惯分统计（round-25 续） |
+| **v0.6.60** | **676** | **70** | **746** | 676/677 | 答题不瞎蒙（gatedRandom 默认关）+ LLM 超时给足（45s/70s），round-51 |
 
 > **测试方法学（判别性测试）**：每轮修复都配套「先红后绿」证据——先 `git stash` 回滚源码、确认旧代码上该测试**必红**，再恢复确认**必绿**。
 > 本轮（round-24）新增 23 条第 32 组用例，实测 **Baseline 23 条全红 / Candidate 444 全绿**，无任何一条「新旧代码都绿」的假判据。这是「修好了没有」从自评改为机器判据的硬约束来源。
@@ -319,7 +326,7 @@ node test/live-run.js e2e                        # 真实站点：端到端测�
 
 ```mermaid
 graph TD
-    A[智慧树助手 v0.6.29] --> B[F1 自动播放]
+    A[智慧树助手 v0.6.60] --> B[F1 自动播放]
     A --> C[F2 断点续播]
     A --> D[F3 AI 自动答题]
     A --> E[工程化保障]
@@ -340,7 +347,7 @@ graph TD
     D --> D5[通道健康检测<br/>一键点检题库+模型]
     D --> D6[学习记录 / 习惯分<br/>来源分布+时长+习惯分]
 
-    E --> E1[17 模块 / 458 单测]
+    E --> E1[20 模块 / 676 单测]
     E --> E2[截屏 70 项]
     E --> E3[判别性测试<br/>先红后绿]
     E --> E4[抗改版兜底扫描]
