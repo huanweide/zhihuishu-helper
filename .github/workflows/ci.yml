@@ -20,7 +20,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
+          # 不开 cache：本仓库没有 package-lock.json（依赖仅 jsdom + puppeteer-core，
+          # install 本就几秒），setup-node 的 cache:npm 会因找不到 lock 文件直接报错。
 
       - name: 安装依赖
         run: npm install
