@@ -1,8 +1,15 @@
 # zhihuishu-helper · Smart Course Assistant for Zhihuishu/Zhida
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Current Version](https://img.shields.io/badge/version-v0.6.64-green.svg)](CHANGELOG.md) [![Stars](https://img.shields.io/github/stars/huanweide/zhihuishu-helper?style=social)](https://github.com/huanweide/zhihuishu-helper/stargazers)
+[![License](https://img.shields.io/github/license/huanweide/zhihuishu-helper)](LICENSE)
+[![CI](https://github.com/huanweide/zhihuishu-helper/actions/workflows/ci.yml/badge.svg)](https://github.com/huanweide/zhihuishu-helper/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/package-json/v/huanweide/zhihuishu-helper?label=version)](https://github.com/huanweide/zhihuishu-helper/releases)
+[![Stars](https://img.shields.io/github/stars/huanweide/zhihuishu-helper)](https://github.com/huanweide/zhihuishu-helper/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/huanweide/zhihuishu-helper)](https://github.com/huanweide/zhihuishu-helper/commits/master)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 > A **Tampermonkey userscript** that automates the tedious parts of the Zhihuishu / Zhida (智慧树 / 知到) online-course platform — autoplay, breakpoint resume, and AI-assisted answering — while **never blindly guessing** when it can't be sure.
+
+![zhihuishu-helper panel — real runtime screenshot](docs/screenshots/panel.png)
 
 ---
 
@@ -19,7 +26,7 @@ The key principle that separates it from other "auto-answer" scripts:
 - **Autoplay + breakpoint resume** — keeps videos playing and recovers exactly where you left off, even after an in-video quiz dialog.
 - **Fully-automatic learning engine (on by default)** — `autoLearn` master switch defaults on: entering the course hub auto-picks unfinished lessons and resumes, and hops to the next course when one finishes. Jump to any lesson via `zhs.gotoLesson(n | title)`, or the panel's "jump to lesson / find next course" controls.
 - **AI auto-answer** — resolves quiz questions via a local question bank and/or an LLM channel (SiliconFlow / DeepSeek / OpenAI / custom), with multi-vote cross-checking.
-- **Higher answer accuracy, never blind-guess** — reasoning-guided + few-shot prompts, low temperature (0.1) for MCQs; a **confidence gate** tags split votes as low and routes them to manual review instead of forcing an answer; an offline-heuristic cross-check promotes only mutually-confirmed answers. The no-blind-guess fallback stays exactly as before.
+- **Higher answer accuracy** — reasoning-guided + few-shot prompts, low temperature (0.1) for MCQs; a **confidence gate** tags split votes as low and routes them to manual review instead of forcing an answer; an offline-heuristic cross-check promotes only mutually-confirmed answers.
 - **No-blind-guess fallback (3 tiers)** — ① bank/LLM hit → use directly; ② no hit but offline heuristic on → linguistic inference (**not a guess**); ③ still nothing → a single toggle decides: **off (default) = leave blank for manual review**, on = random pick as a last-resort escape hatch.
 - **Humanized playback** — randomized pauses / "away" simulation to avoid crude detection patterns.
 - **Study records + habit-score stats** — per-day bank/LLM/skipped counts, persisted locally.
@@ -62,8 +69,23 @@ Click the floating assistant button to open the settings panel:
 ```bash
 node build.js                 # bundle src/*.js → dist/zhihuishu-helper.user.js
 node tools/check-dist-fresh.js # verify dist matches src (20 modules)
-node test/run.js              # logic tests (677 pass, 0 fail)
+node test/run.js              # logic tests (706 pass, 0 fail)
 ```
+
+All four gates also run in CI on every push — see the CI badge above.
+
+## Docs
+
+| Document | What's inside |
+|---|---|
+| [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md) | Module map (20 modules) + gate commands |
+| [docs/20-使用说明.md](docs/20-使用说明.md) | Full usage guide (Chinese) |
+| [docs/30-自动学习引擎方案.md](docs/30-自动学习引擎方案.md) | Auto-learning engine design (Chinese) |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
+
+## Contributing
+
+Issues and PRs are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) — it covers the module layout, the four gates, and the four red lines this project never crosses (no auto-jumping into exam pages, no `seek` on video, and so on).
 
 ## Disclaimer
 
