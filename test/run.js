@@ -3966,6 +3966,113 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
   })();
   await _g71;
 
+  // ==================================================
+  // v0.6.64 自动学习引擎 + 测验正确率 新功能单测
+  // 守两条框架约定：① async IIFE；② 在本 .then 内 await（在汇总打印前跑完，防假绿）。
+  // ==================================================
+  const _v64 = (async () => {
+    // ---- A. autoLearn 默认开启 + 脏值归一化（保守侧） ----
+    {
+      const { win } = makeEnv('<html><body></body></html>');
+      const ZHS = win.ZHS;
+      eq('A1 autoLearn 默认开启', ZHS.config.autoLearn, true);
+      ZHS.setConfig({ autoLearn: 'false' });
+      eq('A2 autoLearn 脏字符串归一化为 false（不偷偷开）', ZHS.config.autoLearn, false);
+      ZHS.setConfig({ autoLearn: true });
+      eq('A3 autoLearn 可再置 true', ZHS.config.autoLearn, true);
+      stopAllTimers();
+    }
+
+    // ---- B. buildPrompt 强化（推理引导 + 题型标签 + few-shot + 最终答案锚点） ----
+    {
+      const { win } = makeEnv('<html><body></body></html>');
+      const L = win.ZHS.LLM;
+      const p1 = L.buildPrompt('人体最大的器官是？', ['心脏', '皮肤', '肝脏'], 'single');
+      ok('B1 单选 Prompt 含题型标签', p1.includes('单选题'));
+      ok('B2 单选 Prompt 含推理引导（排除/逐一）', /排除|逐一/.test(p1));
+      ok('B3 单选 Prompt 含最终答案锚点', p1.includes('最终答案'));
+      ok('B4 单选 Prompt 含 few-shot 例题', p1.includes('例题'));
+      const pj = L.buildPrompt('水沸点 100 度', ['对', '错'], 'judgement');
+      ok('B5 判断 Prompt 含题型标签', pj.includes('判断题'));
+      // 温度按题型：选择题/判断题低温（果断、少分裂），主观题中温
+      eq('B6 选择题温度 0.1', L.tempFor('single'), 0.1);
+      eq('B7 判断题温度 0.1', L.tempFor('judgement'), 0.1);
+      eq('B8 填空题温度 0.3', L.tempFor('completion'), 0.3);
+      stopAllTimers();
+    }
+
+    // ---- C. LLM 投票置信追踪（getLastVoteMeta，返回值契约不变） ----
+    {
+      const { win } = makeEnv('<html><body></body></html>');
+      const ZHS = win.ZHS;
+      // 注意：vote 内部调用的是模块词法作用域的 callOnce，而非 ZHS.LLM.callOnce，
+      // 故无法直接 mock 后者来驱动 vote。这里改 mock 网络层（request + parseJsonOrThrow），
+      // 让真实 callOnce 跑通但拿到受控的返回内容；同时 setConfig 一个 dummy key 避免抛「未配置 Key」。
+      ZHS.setConfig({ llmKey: 'test-key', llmModel: 'deepseek-chat', llmBaseUrl: 'https://api.deepseek.com' });
+      ZHS.Bank.request = async () => ({ ok: true });
+      // 全票一致 → high + unanimous
+      const seq1 = ['B', 'B', 'B'];
+      let k = 0;
+      ZHS.Bank.parseJsonOrThrow = () => ({ choices: [{ message: { content: seq1[k++ % seq1.length] } }] });
+      const a1 = await ZHS.LLM.vote('题', ['甲', '乙', '丙'], 'single', 3);
+      let meta = ZHS.LLM.getLastVoteMeta();
+      ok('C1 全票一致返回非空答案', !!a1);
+      eq('C2 全票一致置信 high', meta.confidence, 'high');
+      ok('C3 全票一致标记 unanimous', meta.unanimous === true);
+      // 持续分裂（4 个都不同，含破平局补投仍无过半）→ low
+      const seq2 = ['A', 'B', 'C', 'D'];
+      let j = 0;
+      ZHS.Bank.parseJsonOrThrow = () => ({ choices: [{ message: { content: seq2[j++ % seq2.length] } }] });
+      const a2 = await ZHS.LLM.vote('题2', ['甲', '乙', '丙', '丁'], 'single', 3);
+      meta = ZHS.LLM.getLastVoteMeta();
+      ok('C4 分裂票仍返回一个答案（不返回空、不崩）', !!a2);
+      eq('C5 分裂票置信 low（没把握不当高置信）', meta.confidence, 'low');
+      ok('C6 票型分布已记录', Array.isArray(meta.distribution) && meta.distribution.length >= 2,
+        'distribution=' + JSON.stringify(meta.distribution));
+      stopAllTimers();
+    }
+
+    // ---- D. 求解层低置信交叉验证（LLM 分裂 + 启发式一致 → 提升 medium） ----
+    {
+      const { win } = makeEnv('<html><body></body></html>');
+      const ZHS = win.ZHS;
+      ZHS.setConfig({
+        answerMode: 'llm', llmEnabled: true, llmKey: 'k', bankEnabled: false,
+        heuristicFallback: true, gatedRandom: false,
+      });
+      ZHS.LLM.vote = async () => 'A';
+      ZHS.LLM.getLastVoteMeta = () => ({
+        confidence: 'low',
+        distribution: [{ answer: 'A', votes: 1 }, { answer: 'B', votes: 1 }, { answer: 'C', votes: 1 }],
+        unanimous: false, n: 3, answer: 'A',
+      });
+      ZHS.Heuristic.solve = () => ({ answer: 'A', from: 'heuristic', confidence: 0.5, reason: 'test' });
+      const r1 = await ZHS.Solver.solve({ title: '交叉验证一致题', options: ['甲', '乙', '丙'], type: 'single' });
+      ok('D1 低置信但启发式一致 → 采用并提升 medium',
+        !!(r1 && r1.answer && r1.confidence === 'medium'), JSON.stringify(r1));
+      stopAllTimers();
+    }
+
+    // ---- E. _resolveLessonTarget 目标解析（序号/标题/越界/空） ----
+    {
+      const { win } = makeEnv('<html><body></body></html>');
+      const ZHS = win.ZHS;
+      const fakeItems = [{ _t: '第1节' }, { _t: '第2节' }, { _t: '第三章' }];
+      ZHS.Catalog.items = () => fakeItems;
+      ZHS.Catalog.itemTitle = (el) => el._t;
+      const S = ZHS.Scheduler;
+      eq('E1 数字 2 → 第 2 个元素', S._resolveLessonTarget(2), fakeItems[1]);
+      eq('E2 数字串 "3" → 第 3 个元素', S._resolveLessonTarget('3'), fakeItems[2]);
+      eq('E3 标题精确匹配', S._resolveLessonTarget('第1节'), fakeItems[0]);
+      eq('E4 标题子串匹配', S._resolveLessonTarget('第三'), fakeItems[2]);
+      eq('E5 越界数字返回 null', S._resolveLessonTarget(9), null);
+      eq('E6 空 target 返回 null', S._resolveLessonTarget(''), null);
+      eq('E7 匹配不到返回 null', S._resolveLessonTarget('不存在'), null);
+      stopAllTimers();
+    }
+  })();
+  await _v64;
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {

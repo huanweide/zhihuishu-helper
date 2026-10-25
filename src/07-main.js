@@ -249,6 +249,14 @@
     stop: () => ZHS.Scheduler.stop(),
     config: (p) => ZHS.setConfig(p),
     next: () => ZHS.Scheduler.gotoNext('手动', { manual: true }),
+    // v0.6.64：手动跳到指定课时。target = 第 N 节（数字/数字串）或标题子串。
+    gotoLesson: (target) => ZHS.Scheduler.gotoLesson(target, { manual: true }),
+    // v0.6.64：在课程中心页手动触发「自动学习」——立即选一门未学完的课进入。
+    // 与面板「找下一门课」按钮同源；autoLearn 开着时进课程中心本就会自动跑，此处供手动/控制台补触。
+    learn: async () => {
+      if (ZHS.CourseHub && ZHS.CourseHub.triggerManual) return ZHS.CourseHub.triggerManual();
+      return false;
+    },
     clearResume: () => ZHS.Resume.clear(ZHS.state.courseId),
     logs: () => ZHS.Log.all(),
     stats: () => ZHS.Catalog.stats(),

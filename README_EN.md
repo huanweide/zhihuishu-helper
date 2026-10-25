@@ -1,6 +1,6 @@
 # zhihuishu-helper · Smart Course Assistant for Zhihuishu/Zhida
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Current Version](https://img.shields.io/badge/version-v0.6.63-green.svg)](CHANGELOG.md) [![Stars](https://img.shields.io/github/stars/huanweide/zhihuishu-helper?style=social)](https://github.com/huanweide/zhihuishu-helper/stargazers)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Current Version](https://img.shields.io/badge/version-v0.6.64-green.svg)](CHANGELOG.md) [![Stars](https://img.shields.io/github/stars/huanweide/zhihuishu-helper?style=social)](https://github.com/huanweide/zhihuishu-helper/stargazers)
 
 > A **Tampermonkey userscript** that automates the tedious parts of the Zhihuishu / Zhida (智慧树 / 知到) online-course platform — autoplay, breakpoint resume, and AI-assisted answering — while **never blindly guessing** when it can't be sure.
 
@@ -17,11 +17,13 @@ The key principle that separates it from other "auto-answer" scripts:
 ## Features
 
 - **Autoplay + breakpoint resume** — keeps videos playing and recovers exactly where you left off, even after an in-video quiz dialog.
+- **Fully-automatic learning engine (on by default)** — `autoLearn` master switch defaults on: entering the course hub auto-picks unfinished lessons and resumes, and hops to the next course when one finishes. Jump to any lesson via `zhs.gotoLesson(n | title)`, or the panel's "jump to lesson / find next course" controls.
 - **AI auto-answer** — resolves quiz questions via a local question bank and/or an LLM channel (SiliconFlow / DeepSeek / OpenAI / custom), with multi-vote cross-checking.
+- **Higher answer accuracy, never blind-guess** — reasoning-guided + few-shot prompts, low temperature (0.1) for MCQs; a **confidence gate** tags split votes as low and routes them to manual review instead of forcing an answer; an offline-heuristic cross-check promotes only mutually-confirmed answers. The no-blind-guess fallback stays exactly as before.
 - **No-blind-guess fallback (3 tiers)** — ① bank/LLM hit → use directly; ② no hit but offline heuristic on → linguistic inference (**not a guess**); ③ still nothing → a single toggle decides: **off (default) = leave blank for manual review**, on = random pick as a last-resort escape hatch.
 - **Humanized playback** — randomized pauses / "away" simulation to avoid crude detection patterns.
 - **Study records + habit-score stats** — per-day bank/LLM/skipped counts, persisted locally.
-- **Zero backend** — pure JavaScript userscript, ~20 modules, **677 logic tests**, MIT licensed.
+- **Zero backend** — pure JavaScript userscript, 20 modules, **702 logic tests**, MIT licensed.
 
 ## Install
 

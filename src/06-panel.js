@@ -266,6 +266,19 @@
   width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
   border: 2px solid rgba(0,0,0,.15); border-top-color: var(--zhs-n-700); animation: zhs-spin .7s linear infinite; }
 
+/* v0.6.64 跳到指定课时：输入框 + 按钮一行 */
+.foot-jump { display: flex; gap: var(--zhs-s2); padding: 0 var(--zhs-s3) var(--zhs-s2); align-items: center; }
+.foot-jump .btn-gotolesson { flex: 0 0 auto; padding: var(--zhs-s1) var(--zhs-s3); font-size: 11px; font-weight: 500;
+  border: 1px solid var(--zhs-line-strong); border-radius: var(--zhs-r-sm); background: var(--zhs-n-0);
+  color: var(--zhs-n-700); cursor: pointer; transition: background .15s, color .15s, border-color .15s, transform .08s; }
+.foot-jump .btn-gotolesson:hover:not(:disabled) { border-color: var(--zhs-pri-400); color: var(--zhs-pri-600); background: var(--zhs-n-50); }
+.foot-jump .btn-gotolesson:active:not(:disabled) { transform: scale(.97); }
+.foot-jump .btn-gotolesson:disabled { opacity: .55; cursor: not-allowed; }
+.foot-jump .btn-gotolesson.loading { position: relative; color: transparent !important; pointer-events: none; }
+.foot-jump .btn-gotolesson.loading::after { content: ""; position: absolute; left: 50%; top: 50%;
+  width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+  border: 2px solid rgba(0,0,0,.15); border-top-color: var(--zhs-n-700); animation: zhs-spin .7s linear infinite; }
+
 .inp { width: 152px; max-width: 152px; font-size: 11px; padding: var(--zhs-s1) var(--zhs-s2); border: 1px solid var(--zhs-line-strong);
   border-radius: var(--zhs-r-sm); background: var(--zhs-n-0); color: var(--zhs-n-900); transition: border .12s, box-shadow .12s; }
 .inp:focus { outline: none; border-color: var(--zhs-pri-600); box-shadow: 0 0 0 2px rgba(30,111,191,.15); }
@@ -821,6 +834,9 @@
       <div class="hint">本课学完自动去课程中心找下一门</div>
       <div class="row"><label>自动选课</label><button class="sw" data-cfg="autoCoursePick"></button></div>
       <div class="hint">在课程中心自动进入未学完的课程</div>
+      <div class="row"><label>自动学习</label><button class="sw" data-cfg="autoLearn"></button></div>
+      <div class="hint">默认开启。打开课程中心即自动进入未学完的课程开始听，当前课听完自动退出并找下一门（断点续播）。<br>
+        关闭则只在「学完自动进下一门」链里自动选课，你手动打开课程中心时不会自动点课。</div>
 
       <div class="sec-title">AI 答题</div>
       <div class="hint">听课遇到弹题：自动识别 → 题库/LLM 作答 → 提交 → 关闭弹窗 → 自动恢复播放，全程无需手动。答不出时按下方「兜底」策略处理（默认不瞎蒙，交人工）。</div>
@@ -926,6 +942,13 @@
   </div>
   <div class="foot2">
     <button class="btn-rescan" title="平台改版或切课后目录识别异常时，强制重新探测适配器并刷新目录（不刷新页面）">重新探测目录</button>
+  </div>
+  <div class="foot2">
+    <button class="btn-findcourse" title="在课程中心页手动触发：立即选一门未学完的课进入（autoLearn 开启时进课程中心本就会自动跑）">🎯 找下一门课</button>
+  </div>
+  <div class="foot-jump">
+    <input type="text" class="inp in-gotolesson" placeholder="课时序号或标题，如 3 / 第三章" style="flex:1;min-width:0;width:auto;max-width:none">
+    <button class="btn-gotolesson" title="跳到指定课时：填目录序号（从 1 起）或标题片段">跳到课时</button>
   </div>
   <div class="about">
     <div class="about-head"><span class="retri">ReTri</span><span class="about-sub">智慧树助手 · 永久免费</span></div>
@@ -1264,6 +1287,36 @@
         });
       }
 
+      // v0.6.64：找下一门课 —— 在课程中心页手动触发「立即选一门未学完的课进入」。
+      // autoLearn 开启时进课程中心本就会自动跑；此按钮供手动补触 / 当前不在自动链时用。
+      const findCourseBtn = $('.btn-findcourse');
+      if (findCourseBtn) {
+        findCourseBtn.onclick = () => withLoading(findCourseBtn, async () => {
+          if (ZHS.CourseHub && typeof ZHS.CourseHub.triggerManual === 'function') {
+            await ZHS.CourseHub.triggerManual();
+          } else {
+            this.alert('课程中心调度模块不可用', 'warn');
+          }
+        });
+      }
+
+      // v0.6.64：跳到指定课时 —— 输入目录序号（1 起）或标题片段，手动切到该节。
+      // 复用 Scheduler.gotoLesson（内部走 Nav 策略链 + 穷举兜底 + rebind，失败自动回滚）。
+      const gotoBtn = $('.btn-gotolesson');
+      const gotoInput = $('.in-gotolesson');
+      if (gotoBtn && gotoInput) {
+        const doJump = () => withLoading(gotoBtn, async () => {
+          const raw = String(gotoInput.value || '').trim();
+          if (!raw) { this.alert('请先填课时序号或标题', 'warn'); return; }
+          // 纯数字按索引，其余按标题子串
+          const target = /^\d+$/.test(raw) ? Number(raw) : raw;
+          const r = await ZHS.Scheduler.gotoLesson(target, { manual: true });
+          this.alert(r && r.ok ? ('已跳到：' + (r.title || raw)) : ('未能跳到：' + raw), r && r.ok ? 'info' : 'warn');
+        });
+        gotoBtn.onclick = doJump;
+        gotoInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doJump(); });
+      }
+
       // 停止条件
       const selStop = box.querySelector('.sel-stop');
       if (selStop) {
@@ -1271,8 +1324,7 @@
           ZHS.setConfig({ stopMode: selStop.value });
           ZHS.Log.info('停止条件 = ' + selStop.value);
         };
-      }
-      const inStopMin = box.querySelector('.in-stopmin');
+      }      const inStopMin = box.querySelector('.in-stopmin');
       if (inStopMin) {
         inStopMin.onchange = () => {
           ZHS.setConfig({ stopMinutes: Math.max(1, Number(inStopMin.value) || 120) });

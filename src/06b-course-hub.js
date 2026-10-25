@@ -666,8 +666,8 @@
       const store = readStore();
       ZHS.Log.info('[课程中心] 所有课程已无未看完项，本次调度结束'
         + '（已记录完成 ' + (store.doneCourses || []).length + ' 门）');
-      // 只在「自动跳课链」里才提示，避免用户随手打开页面就被弹窗打扰
-      if (via === 'auto-hop' && ZHS.panel) {
+      // 只在「自动跳课链 / 自动学习」里才提示，避免用户随手打开页面就被弹窗打扰
+      if ((via === 'auto-hop' || via === 'auto-learn') && ZHS.panel) {
         ZHS.panel.alert('课程中心：没有找到未看完的课程，已停止自动选课', 'info', 8000);
       }
       return false;
@@ -717,6 +717,34 @@
     listDone() { return readStore().doneCourses || []; },
     listFailed() { return readStore().failedCourses || []; },
     stats() { return readStore().stats || { hopped: 0, failed: 0 }; },
+
+    /**
+     * v0.6.64 资源遍历：扫描课程中心全部卡片，汇总「还剩多少门未学」。
+     * 供面板「剩余未学课程」展示与 zhs.learn() 决策使用。
+     * 口径与 pickNext 完全一致：finished / 已 done / 已 failed 都不算「未学」。
+     * @returns {Promise<{total:number, unfinished:number, finished:number, doneCount:number, failedCount:number}>}
+     */
+    async summary() {
+      const cards = await collectCards();
+      const store = readStore();
+      const done = store.doneCourses || [];
+      const failed = store.failedCourses || [];
+      let unfinished = 0;
+      let finished = 0;
+      for (const c of cards) {
+        if (c.finished) { finished++; continue; }
+        const id = cardIdentity(c.el) || c.name;
+        if (id && (done.includes(id) || failed.includes(id))) continue;
+        unfinished++;
+      }
+      return {
+        total: cards.length,
+        unfinished,
+        finished,
+        doneCount: done.length,
+        failedCount: failed.length,
+      };
+    },
 
     // 意图
     setIntent,
@@ -788,6 +816,18 @@
         if (!ZHS.config.autoCoursePick) {
           // 用 info：这是用户「为什么没自动选课」的直接答案，必须留在面板可见。
           ZHS.Log.info('[课程中心] 自动选课开关关闭，不动作（已消费跳转意图，避免残留）');
+          return;
+        }
+
+        // v0.6.64 自动学习总开关：开启则「一进课程中心就自动开始学」，
+        // 不再只依赖 auto-hop 链（旧行为：只有上一门课由本脚本学完跳回时才自动选课）。
+        // 这是用户明确要的「设置默认开启」——开启即全自动。为不静默劫持，
+        // 首次自动选课打 info 日志 + 面板提示，让用户看得见脚本在做什么。
+        // 红线不受影响：只作用于听课链，绝不碰作业/考试页（06c-exam FORBIDDEN）。
+        if (ZHS.config.autoLearn) {
+          ZHS.Log.info('[课程中心] 自动学习已开启，正在选择未学完课程开始学习');
+          if (ZHS.panel) ZHS.panel.alert('自动学习：正在进入未学完的课程…', 'info', 4000);
+          await runOnHub('auto-learn');
           return;
         }
 

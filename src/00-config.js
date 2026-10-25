@@ -110,6 +110,14 @@
     // 课程中心调度
     autoCourseHop: true,  // 自动跳课：本课学完 → 回课程中心选下一门
     autoCoursePick: true, // 自动选课：在课程中心自动点进未看完的课
+    // 自动学习总开关（v0.6.64 新增）：默认开启。
+    // 开启后，打开课程中心即自动进入「进度未达 100%」的课程开始听，
+    // 当前课听完自动退出并寻找下一门未看完的课（断点续播由 resume 负责）。
+    // 与 autoCourseHop/Pick 的关系：后两者是「学完自动跳下一门」的链，
+    // autoLearn 是「一进课程中心就自动开始学」的总授权；关闭则完全维持旧行为
+    // （只在 auto-hop 链里自动选课，手动打开课程中心不自动点，防劫持）。
+    // 红线不受影响：本开关只作用于听课链，绝不自动跳转作业/考试页（见 06c-exam FORBIDDEN）。
+    autoLearn: true,
 
     // 自动停止（用户需求 1）
     stopMode: 'none',    // none 不限 | minutes 按累计观看时长 | lessons 按完成节数
@@ -136,6 +144,7 @@
   const BOOL_KEYS = [
     'autoPlay', 'autoNext', 'skipFinished', 'mute', 'resume',
     'autoExam', 'examSubmit', 'examSubjective', 'autoCourseHop', 'autoCoursePick',
+    'autoLearn',
     'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
     'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
     'heuristicFallback', 'humanPause', 'fuzzyCache',
@@ -175,12 +184,13 @@
    * 导致「代码改了默认但用户端不生效」。
    * 每次重要默认值变更就把 CONFIG_REV +1，并把变更项写进 FORCE_UPGRADE。
    */
-  const CONFIG_REV = 5;
+  const CONFIG_REV = 6;
   const FORCE_UPGRADE = {
     autoAnswer: true,     // v0.3.0：全自动要求，默认开启
     gatedRandom: false,   // v0.3.1：默认不再随机蒙答案（蒙错不可逆），宁漏勿错
     autoCourseHop: true,  // v0.5.x：课程中心调度新功能，默认开，老用户也强制升级拿到
     autoCoursePick: true, // v0.5.x：同上
+    autoLearn: true,      // v0.6.64：自动学习总开关默认开启（一进课程中心即自动学未完成课）
     // 注意：autoExam 故意【不】放进 FORCE_UPGRADE。
     // 它的承诺是「默认关闭」，强推会把老用户的 configRev 升级顺便改成 true，
     // 等于偷偷打开了自动答题 —— 破坏承诺，也会让用户在不知情下被代答。

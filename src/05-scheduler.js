@@ -1236,6 +1236,98 @@
       }
       ZHS.Log.info('已切换并重新绑定：' + lessonKey);
     },
+
+    /**
+     * v0.6.64 手动选择指定课时（面板「跳到指定课时」/ zhs.gotoLesson 走这里）。
+     *
+     * target：数字 = 目录第 N 节（1 起）；字符串 = 标题子串匹配（也认纯数字串按索引）。
+     *
+     * 设计要点：
+     *   · 复用 Nav.jumpTo + _exhaustiveSwitch + _rebindAfterNav 全套稳健切换执行体，
+     *     只换「目标怎么来」，绝不简化切换逻辑——简化会重新引入 round-14~39c 踩平的
+     *     「点了没反应 / 记错节」老 bug。
+     *   · allowNativeNext 传 false：任意目标课时若走平台「下一节」按钮会跳到错误的节，
+     *     只有 gotoNext（目标本就是下一节）才允许 nativeNext。
+     *   · 失败一律回滚 lessonKey，绝不让进度记到错的节上（round-14 P1 铁律）。
+     * @returns {Promise<{ok:boolean, title:string}>}
+     */
+    async gotoLesson(target, opts) {
+      const cat = ZHS.Catalog;
+      const U2 = ZHS.Util;
+      if (this._navigating) {
+        ZHS.Log.warn('正在切换课时中，请稍候');
+        if (ZHS.panel) ZHS.panel.alert('正在切换课时中，请稍候', 'warn');
+        return { ok: false, title: '' };
+      }
+      this._navigating = true;
+      const _prevKey = ZHS.state.lessonKey;
+      try {
+        if (cat.ensureCatalogLoadedAsync) await cat.ensureCatalogLoadedAsync();
+        const el = this._resolveLessonTarget(target);
+        if (!el) {
+          ZHS.Log.warn('找不到目标课时：' + String(target).slice(0, 30));
+          if (ZHS.panel) ZHS.panel.alert('找不到目标课时：' + String(target).slice(0, 30), 'warn', 6000);
+          return { ok: false, title: '' };
+        }
+        const targetKey = cat.itemTitle(el);
+        if (targetKey && targetKey === _prevKey) {
+          ZHS.Log.info('已在目标课时：' + targetKey);
+          return { ok: true, title: targetKey };
+        }
+        ZHS.Log.info('手动跳到指定课时：' + targetKey);
+        let switched = await ZHS.Nav.jumpTo(el, { timeout: 3000, fromKey: _prevKey, allowNativeNext: false });
+        if (!switched) switched = await this._exhaustiveSwitch(el, targetKey, _prevKey);
+        if (!switched) {
+          ZHS.state.lessonKey = _prevKey;   // 回滚，绝不记错节
+          ZHS.Log.warn('跳转「' + targetKey + '」未生效，已回滚课时标识');
+          if (ZHS.panel) ZHS.panel.alert('跳转「' + targetKey + '」未生效', 'warn', 6000);
+          return { ok: false, title: targetKey };
+        }
+        // 确认切换成功后才写新课时标识（此时记进度才是对的）
+        ZHS.state.lessonKey = targetKey;
+        this._navFailCount = 0;
+        this._navFailTotal = 0;
+        this._navFailKey = null;
+        // 与 gotoNext 成功分支一致的状态重置
+        ZHS.Player.resetRetry();
+        ZHS.Player.resetHumanPause();
+        ZHS.Resume.reset();
+        if (ZHS.Answerer) ZHS.Answerer.reset();
+        ZHS.state.videoEl = null;
+        await U2.sleep(1500);
+        await this._rebindAfterNav();
+        return { ok: true, title: targetKey };
+      } catch (e) {
+        ZHS.state.lessonKey = _prevKey;
+        ZHS.Log.warn('gotoLesson 异常：' + (e && e.message));
+        return { ok: false, title: '' };
+      } finally {
+        this._navigating = false;
+      }
+    },
+
+    /** v0.6.64：把 target（数字索引 1 起 / 标题子串 / 纯数字串）解析成目录元素 */
+    _resolveLessonTarget(target) {
+      const cat = ZHS.Catalog;
+      let items = [];
+      try { items = cat.items() || []; } catch (e) { return null; }
+      if (!items.length) return null;
+      if (typeof target === 'number' && Number.isFinite(target)) {
+        const idx = Math.floor(target) - 1;
+        return (idx >= 0 && idx < items.length) ? items[idx] : null;
+      }
+      const s = String(target == null ? '' : target).trim();
+      if (!s) return null;
+      if (/^\d+$/.test(s)) {
+        const idx = Number(s) - 1;
+        if (idx >= 0 && idx < items.length) return items[idx];
+      }
+      let hit = null;
+      try { hit = items.find((el) => cat.itemTitle(el) === s) || null; } catch (e) { /* 忽略 */ }
+      if (hit) return hit;
+      try { hit = items.find((el) => (cat.itemTitle(el) || '').includes(s)) || null; } catch (e) { /* 忽略 */ }
+      return hit;
+    },
   };
 
   ZHS.Scheduler = Scheduler;

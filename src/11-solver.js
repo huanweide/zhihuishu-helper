@@ -95,6 +95,22 @@
     return null;
   }
 
+  /**
+   * v0.6.64：比较两个答案是否「一致」。答案可能是字母（A / A,C）或判定词（对/错）。
+   * 用于 LLM 低置信时与离线启发式做第二意见交叉验证。
+   * 字母答案按集合比较（A,C 与 C,A 视为一致）。
+   */
+  function _sameAnswer(a, b) {
+    const norm = (s) => String(s == null ? '' : s).replace(/[\s,，、;；]/g, '').toUpperCase();
+    const na = norm(a);
+    const nb = norm(b);
+    if (!na || !nb) return false;
+    if (na === nb) return true;
+    const sa = na.split('').sort().join('');
+    const sb = nb.split('').sort().join('');
+    return sa === sb;
+  }
+
   const Solver = {
     stats: { bank: 0, llm: 0, cache: 0, fuzzy: 0, heuristic: 0, random: 0, skipped: 0, fail: 0 },
 
@@ -170,7 +186,32 @@
             ? await ZHS.LLM.ask(question, type)
             : await ZHS.LLM.vote(question, options, type, cfg.voteTimes);
           if (ans) {
-            result = { answer: ans, from: 'llm', confidence: 'medium' };
+            // v0.6.64：读投票置信（全票一致=high / 过半=medium / 分裂=low）。
+            // 桩替换 vote() 时（单测）_lastMeta 不会被更新，置信停在 'none'——
+            // 此时保持旧的 'medium' 默认，保证测试与既有调用方行为不变。
+            const meta = (!isSubjective && ZHS.LLM.getLastVoteMeta) ? ZHS.LLM.getLastVoteMeta() : null;
+            let confidence = (meta && meta.confidence && meta.confidence !== 'none')
+              ? meta.confidence
+              : 'medium';
+            // 低置信交叉验证：LLM 票型分裂（没把握）时，用离线启发式做第二意见。
+            //   · 两者一致 → 提升为 medium（两个独立信号互相印证，比单边分裂票可信）。
+            //   · 不一致 → 仍采用 LLM（它是有依据的推理，不是瞎选），但保持 low 并告警，
+            //     提醒用户提交前复核。
+            // 关键：绝不因此引入随机兜底——「永不瞎选」由 gatedRandom(默认关) 把守，此处不动。
+            if (meta && confidence === 'low' && options.length
+              && ZHS.Heuristic && cfg.heuristicFallback !== false) {
+              try {
+                const h = ZHS.Heuristic.solve({ title: question, options, type });
+                if (h && h.answer && _sameAnswer(h.answer, ans)) {
+                  confidence = 'medium';
+                  ZHS.Log.info('LLM 低置信但与离线启发式结论一致，置信提升为 medium：' + ans);
+                } else if (h && h.answer) {
+                  ZHS.Log.warn('LLM 低置信（票型分裂）且与启发式不一致（LLM=' + ans
+                    + ' / 启发式=' + h.answer + '），仍采用 LLM，请提交前复核');
+                }
+              } catch (e) { /* 交叉验证失败不影响主流程 */ }
+            }
+            result = { answer: ans, from: 'llm', confidence, voteMeta: meta || null };
             this.stats.llm++;
           }
         } catch (e) {

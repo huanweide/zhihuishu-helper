@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.63
+// @version      0.6.64
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.63";
+window.__ZHS_BUILD__.version = "0.6.64";
 
 /* ===== 00-config.js ===== */
 /**
@@ -153,6 +153,14 @@ window.__ZHS_BUILD__.version = "0.6.63";
     // 课程中心调度
     autoCourseHop: true,  // 自动跳课：本课学完 → 回课程中心选下一门
     autoCoursePick: true, // 自动选课：在课程中心自动点进未看完的课
+    // 自动学习总开关（v0.6.64 新增）：默认开启。
+    // 开启后，打开课程中心即自动进入「进度未达 100%」的课程开始听，
+    // 当前课听完自动退出并寻找下一门未看完的课（断点续播由 resume 负责）。
+    // 与 autoCourseHop/Pick 的关系：后两者是「学完自动跳下一门」的链，
+    // autoLearn 是「一进课程中心就自动开始学」的总授权；关闭则完全维持旧行为
+    // （只在 auto-hop 链里自动选课，手动打开课程中心不自动点，防劫持）。
+    // 红线不受影响：本开关只作用于听课链，绝不自动跳转作业/考试页（见 06c-exam FORBIDDEN）。
+    autoLearn: true,
 
     // 自动停止（用户需求 1）
     stopMode: 'none',    // none 不限 | minutes 按累计观看时长 | lessons 按完成节数
@@ -179,6 +187,7 @@ window.__ZHS_BUILD__.version = "0.6.63";
   const BOOL_KEYS = [
     'autoPlay', 'autoNext', 'skipFinished', 'mute', 'resume',
     'autoExam', 'examSubmit', 'examSubjective', 'autoCourseHop', 'autoCoursePick',
+    'autoLearn',
     'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
     'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
     'heuristicFallback', 'humanPause', 'fuzzyCache',
@@ -218,12 +227,13 @@ window.__ZHS_BUILD__.version = "0.6.63";
    * 导致「代码改了默认但用户端不生效」。
    * 每次重要默认值变更就把 CONFIG_REV +1，并把变更项写进 FORCE_UPGRADE。
    */
-  const CONFIG_REV = 5;
+  const CONFIG_REV = 6;
   const FORCE_UPGRADE = {
     autoAnswer: true,     // v0.3.0：全自动要求，默认开启
     gatedRandom: false,   // v0.3.1：默认不再随机蒙答案（蒙错不可逆），宁漏勿错
     autoCourseHop: true,  // v0.5.x：课程中心调度新功能，默认开，老用户也强制升级拿到
     autoCoursePick: true, // v0.5.x：同上
+    autoLearn: true,      // v0.6.64：自动学习总开关默认开启（一进课程中心即自动学未完成课）
     // 注意：autoExam 故意【不】放进 FORCE_UPGRADE。
     // 它的承诺是「默认关闭」，强推会把老用户的 configRev 升级顺便改成 true，
     // 等于偷偷打开了自动答题 —— 破坏承诺，也会让用户在不知情下被代答。
@@ -4410,6 +4420,98 @@ window.__ZHS_BUILD__.version = "0.6.63";
       }
       ZHS.Log.info('已切换并重新绑定：' + lessonKey);
     },
+
+    /**
+     * v0.6.64 手动选择指定课时（面板「跳到指定课时」/ zhs.gotoLesson 走这里）。
+     *
+     * target：数字 = 目录第 N 节（1 起）；字符串 = 标题子串匹配（也认纯数字串按索引）。
+     *
+     * 设计要点：
+     *   · 复用 Nav.jumpTo + _exhaustiveSwitch + _rebindAfterNav 全套稳健切换执行体，
+     *     只换「目标怎么来」，绝不简化切换逻辑——简化会重新引入 round-14~39c 踩平的
+     *     「点了没反应 / 记错节」老 bug。
+     *   · allowNativeNext 传 false：任意目标课时若走平台「下一节」按钮会跳到错误的节，
+     *     只有 gotoNext（目标本就是下一节）才允许 nativeNext。
+     *   · 失败一律回滚 lessonKey，绝不让进度记到错的节上（round-14 P1 铁律）。
+     * @returns {Promise<{ok:boolean, title:string}>}
+     */
+    async gotoLesson(target, opts) {
+      const cat = ZHS.Catalog;
+      const U2 = ZHS.Util;
+      if (this._navigating) {
+        ZHS.Log.warn('正在切换课时中，请稍候');
+        if (ZHS.panel) ZHS.panel.alert('正在切换课时中，请稍候', 'warn');
+        return { ok: false, title: '' };
+      }
+      this._navigating = true;
+      const _prevKey = ZHS.state.lessonKey;
+      try {
+        if (cat.ensureCatalogLoadedAsync) await cat.ensureCatalogLoadedAsync();
+        const el = this._resolveLessonTarget(target);
+        if (!el) {
+          ZHS.Log.warn('找不到目标课时：' + String(target).slice(0, 30));
+          if (ZHS.panel) ZHS.panel.alert('找不到目标课时：' + String(target).slice(0, 30), 'warn', 6000);
+          return { ok: false, title: '' };
+        }
+        const targetKey = cat.itemTitle(el);
+        if (targetKey && targetKey === _prevKey) {
+          ZHS.Log.info('已在目标课时：' + targetKey);
+          return { ok: true, title: targetKey };
+        }
+        ZHS.Log.info('手动跳到指定课时：' + targetKey);
+        let switched = await ZHS.Nav.jumpTo(el, { timeout: 3000, fromKey: _prevKey, allowNativeNext: false });
+        if (!switched) switched = await this._exhaustiveSwitch(el, targetKey, _prevKey);
+        if (!switched) {
+          ZHS.state.lessonKey = _prevKey;   // 回滚，绝不记错节
+          ZHS.Log.warn('跳转「' + targetKey + '」未生效，已回滚课时标识');
+          if (ZHS.panel) ZHS.panel.alert('跳转「' + targetKey + '」未生效', 'warn', 6000);
+          return { ok: false, title: targetKey };
+        }
+        // 确认切换成功后才写新课时标识（此时记进度才是对的）
+        ZHS.state.lessonKey = targetKey;
+        this._navFailCount = 0;
+        this._navFailTotal = 0;
+        this._navFailKey = null;
+        // 与 gotoNext 成功分支一致的状态重置
+        ZHS.Player.resetRetry();
+        ZHS.Player.resetHumanPause();
+        ZHS.Resume.reset();
+        if (ZHS.Answerer) ZHS.Answerer.reset();
+        ZHS.state.videoEl = null;
+        await U2.sleep(1500);
+        await this._rebindAfterNav();
+        return { ok: true, title: targetKey };
+      } catch (e) {
+        ZHS.state.lessonKey = _prevKey;
+        ZHS.Log.warn('gotoLesson 异常：' + (e && e.message));
+        return { ok: false, title: '' };
+      } finally {
+        this._navigating = false;
+      }
+    },
+
+    /** v0.6.64：把 target（数字索引 1 起 / 标题子串 / 纯数字串）解析成目录元素 */
+    _resolveLessonTarget(target) {
+      const cat = ZHS.Catalog;
+      let items = [];
+      try { items = cat.items() || []; } catch (e) { return null; }
+      if (!items.length) return null;
+      if (typeof target === 'number' && Number.isFinite(target)) {
+        const idx = Math.floor(target) - 1;
+        return (idx >= 0 && idx < items.length) ? items[idx] : null;
+      }
+      const s = String(target == null ? '' : target).trim();
+      if (!s) return null;
+      if (/^\d+$/.test(s)) {
+        const idx = Number(s) - 1;
+        if (idx >= 0 && idx < items.length) return items[idx];
+      }
+      let hit = null;
+      try { hit = items.find((el) => cat.itemTitle(el) === s) || null; } catch (e) { /* 忽略 */ }
+      if (hit) return hit;
+      try { hit = items.find((el) => (cat.itemTitle(el) || '').includes(s)) || null; } catch (e) { /* 忽略 */ }
+      return hit;
+    },
   };
 
   ZHS.Scheduler = Scheduler;
@@ -4681,6 +4783,19 @@ window.__ZHS_BUILD__.version = "0.6.63";
 .foot2 button:disabled { opacity: .55; cursor: not-allowed; }
 .foot2 button.loading { position: relative; color: transparent !important; pointer-events: none; }
 .foot2 button.loading::after { content: ""; position: absolute; left: 50%; top: 50%;
+  width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+  border: 2px solid rgba(0,0,0,.15); border-top-color: var(--zhs-n-700); animation: zhs-spin .7s linear infinite; }
+
+/* v0.6.64 跳到指定课时：输入框 + 按钮一行 */
+.foot-jump { display: flex; gap: var(--zhs-s2); padding: 0 var(--zhs-s3) var(--zhs-s2); align-items: center; }
+.foot-jump .btn-gotolesson { flex: 0 0 auto; padding: var(--zhs-s1) var(--zhs-s3); font-size: 11px; font-weight: 500;
+  border: 1px solid var(--zhs-line-strong); border-radius: var(--zhs-r-sm); background: var(--zhs-n-0);
+  color: var(--zhs-n-700); cursor: pointer; transition: background .15s, color .15s, border-color .15s, transform .08s; }
+.foot-jump .btn-gotolesson:hover:not(:disabled) { border-color: var(--zhs-pri-400); color: var(--zhs-pri-600); background: var(--zhs-n-50); }
+.foot-jump .btn-gotolesson:active:not(:disabled) { transform: scale(.97); }
+.foot-jump .btn-gotolesson:disabled { opacity: .55; cursor: not-allowed; }
+.foot-jump .btn-gotolesson.loading { position: relative; color: transparent !important; pointer-events: none; }
+.foot-jump .btn-gotolesson.loading::after { content: ""; position: absolute; left: 50%; top: 50%;
   width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
   border: 2px solid rgba(0,0,0,.15); border-top-color: var(--zhs-n-700); animation: zhs-spin .7s linear infinite; }
 
@@ -5239,6 +5354,9 @@ window.__ZHS_BUILD__.version = "0.6.63";
       <div class="hint">本课学完自动去课程中心找下一门</div>
       <div class="row"><label>自动选课</label><button class="sw" data-cfg="autoCoursePick"></button></div>
       <div class="hint">在课程中心自动进入未学完的课程</div>
+      <div class="row"><label>自动学习</label><button class="sw" data-cfg="autoLearn"></button></div>
+      <div class="hint">默认开启。打开课程中心即自动进入未学完的课程开始听，当前课听完自动退出并找下一门（断点续播）。<br>
+        关闭则只在「学完自动进下一门」链里自动选课，你手动打开课程中心时不会自动点课。</div>
 
       <div class="sec-title">AI 答题</div>
       <div class="hint">听课遇到弹题：自动识别 → 题库/LLM 作答 → 提交 → 关闭弹窗 → 自动恢复播放，全程无需手动。答不出时按下方「兜底」策略处理（默认不瞎蒙，交人工）。</div>
@@ -5344,6 +5462,13 @@ window.__ZHS_BUILD__.version = "0.6.63";
   </div>
   <div class="foot2">
     <button class="btn-rescan" title="平台改版或切课后目录识别异常时，强制重新探测适配器并刷新目录（不刷新页面）">重新探测目录</button>
+  </div>
+  <div class="foot2">
+    <button class="btn-findcourse" title="在课程中心页手动触发：立即选一门未学完的课进入（autoLearn 开启时进课程中心本就会自动跑）">🎯 找下一门课</button>
+  </div>
+  <div class="foot-jump">
+    <input type="text" class="inp in-gotolesson" placeholder="课时序号或标题，如 3 / 第三章" style="flex:1;min-width:0;width:auto;max-width:none">
+    <button class="btn-gotolesson" title="跳到指定课时：填目录序号（从 1 起）或标题片段">跳到课时</button>
   </div>
   <div class="about">
     <div class="about-head"><span class="retri">ReTri</span><span class="about-sub">智慧树助手 · 永久免费</span></div>
@@ -5682,6 +5807,36 @@ window.__ZHS_BUILD__.version = "0.6.63";
         });
       }
 
+      // v0.6.64：找下一门课 —— 在课程中心页手动触发「立即选一门未学完的课进入」。
+      // autoLearn 开启时进课程中心本就会自动跑；此按钮供手动补触 / 当前不在自动链时用。
+      const findCourseBtn = $('.btn-findcourse');
+      if (findCourseBtn) {
+        findCourseBtn.onclick = () => withLoading(findCourseBtn, async () => {
+          if (ZHS.CourseHub && typeof ZHS.CourseHub.triggerManual === 'function') {
+            await ZHS.CourseHub.triggerManual();
+          } else {
+            this.alert('课程中心调度模块不可用', 'warn');
+          }
+        });
+      }
+
+      // v0.6.64：跳到指定课时 —— 输入目录序号（1 起）或标题片段，手动切到该节。
+      // 复用 Scheduler.gotoLesson（内部走 Nav 策略链 + 穷举兜底 + rebind，失败自动回滚）。
+      const gotoBtn = $('.btn-gotolesson');
+      const gotoInput = $('.in-gotolesson');
+      if (gotoBtn && gotoInput) {
+        const doJump = () => withLoading(gotoBtn, async () => {
+          const raw = String(gotoInput.value || '').trim();
+          if (!raw) { this.alert('请先填课时序号或标题', 'warn'); return; }
+          // 纯数字按索引，其余按标题子串
+          const target = /^\d+$/.test(raw) ? Number(raw) : raw;
+          const r = await ZHS.Scheduler.gotoLesson(target, { manual: true });
+          this.alert(r && r.ok ? ('已跳到：' + (r.title || raw)) : ('未能跳到：' + raw), r && r.ok ? 'info' : 'warn');
+        });
+        gotoBtn.onclick = doJump;
+        gotoInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doJump(); });
+      }
+
       // 停止条件
       const selStop = box.querySelector('.sel-stop');
       if (selStop) {
@@ -5689,8 +5844,7 @@ window.__ZHS_BUILD__.version = "0.6.63";
           ZHS.setConfig({ stopMode: selStop.value });
           ZHS.Log.info('停止条件 = ' + selStop.value);
         };
-      }
-      const inStopMin = box.querySelector('.in-stopmin');
+      }      const inStopMin = box.querySelector('.in-stopmin');
       if (inStopMin) {
         inStopMin.onchange = () => {
           ZHS.setConfig({ stopMinutes: Math.max(1, Number(inStopMin.value) || 120) });
@@ -6780,8 +6934,8 @@ window.__ZHS_BUILD__.version = "0.6.63";
       const store = readStore();
       ZHS.Log.info('[课程中心] 所有课程已无未看完项，本次调度结束'
         + '（已记录完成 ' + (store.doneCourses || []).length + ' 门）');
-      // 只在「自动跳课链」里才提示，避免用户随手打开页面就被弹窗打扰
-      if (via === 'auto-hop' && ZHS.panel) {
+      // 只在「自动跳课链 / 自动学习」里才提示，避免用户随手打开页面就被弹窗打扰
+      if ((via === 'auto-hop' || via === 'auto-learn') && ZHS.panel) {
         ZHS.panel.alert('课程中心：没有找到未看完的课程，已停止自动选课', 'info', 8000);
       }
       return false;
@@ -6831,6 +6985,34 @@ window.__ZHS_BUILD__.version = "0.6.63";
     listDone() { return readStore().doneCourses || []; },
     listFailed() { return readStore().failedCourses || []; },
     stats() { return readStore().stats || { hopped: 0, failed: 0 }; },
+
+    /**
+     * v0.6.64 资源遍历：扫描课程中心全部卡片，汇总「还剩多少门未学」。
+     * 供面板「剩余未学课程」展示与 zhs.learn() 决策使用。
+     * 口径与 pickNext 完全一致：finished / 已 done / 已 failed 都不算「未学」。
+     * @returns {Promise<{total:number, unfinished:number, finished:number, doneCount:number, failedCount:number}>}
+     */
+    async summary() {
+      const cards = await collectCards();
+      const store = readStore();
+      const done = store.doneCourses || [];
+      const failed = store.failedCourses || [];
+      let unfinished = 0;
+      let finished = 0;
+      for (const c of cards) {
+        if (c.finished) { finished++; continue; }
+        const id = cardIdentity(c.el) || c.name;
+        if (id && (done.includes(id) || failed.includes(id))) continue;
+        unfinished++;
+      }
+      return {
+        total: cards.length,
+        unfinished,
+        finished,
+        doneCount: done.length,
+        failedCount: failed.length,
+      };
+    },
 
     // 意图
     setIntent,
@@ -6902,6 +7084,18 @@ window.__ZHS_BUILD__.version = "0.6.63";
         if (!ZHS.config.autoCoursePick) {
           // 用 info：这是用户「为什么没自动选课」的直接答案，必须留在面板可见。
           ZHS.Log.info('[课程中心] 自动选课开关关闭，不动作（已消费跳转意图，避免残留）');
+          return;
+        }
+
+        // v0.6.64 自动学习总开关：开启则「一进课程中心就自动开始学」，
+        // 不再只依赖 auto-hop 链（旧行为：只有上一门课由本脚本学完跳回时才自动选课）。
+        // 这是用户明确要的「设置默认开启」——开启即全自动。为不静默劫持，
+        // 首次自动选课打 info 日志 + 面板提示，让用户看得见脚本在做什么。
+        // 红线不受影响：只作用于听课链，绝不碰作业/考试页（06c-exam FORBIDDEN）。
+        if (ZHS.config.autoLearn) {
+          ZHS.Log.info('[课程中心] 自动学习已开启，正在选择未学完课程开始学习');
+          if (ZHS.panel) ZHS.panel.alert('自动学习：正在进入未学完的课程…', 'info', 4000);
+          await runOnHub('auto-learn');
           return;
         }
 
@@ -8052,6 +8246,14 @@ window.__ZHS_BUILD__.version = "0.6.63";
     stop: () => ZHS.Scheduler.stop(),
     config: (p) => ZHS.setConfig(p),
     next: () => ZHS.Scheduler.gotoNext('手动', { manual: true }),
+    // v0.6.64：手动跳到指定课时。target = 第 N 节（数字/数字串）或标题子串。
+    gotoLesson: (target) => ZHS.Scheduler.gotoLesson(target, { manual: true }),
+    // v0.6.64：在课程中心页手动触发「自动学习」——立即选一门未学完的课进入。
+    // 与面板「找下一门课」按钮同源；autoLearn 开着时进课程中心本就会自动跑，此处供手动/控制台补触。
+    learn: async () => {
+      if (ZHS.CourseHub && ZHS.CourseHub.triggerManual) return ZHS.CourseHub.triggerManual();
+      return false;
+    },
     clearResume: () => ZHS.Resume.clear(ZHS.state.courseId),
     logs: () => ZHS.Log.all(),
     stats: () => ZHS.Catalog.stats(),
@@ -9757,30 +9959,92 @@ window.__ZHS_BUILD__.version = "0.6.63";
   ZHS.__mod10_llm = true;
   const U = ZHS.Util;
 
-  /** 构建答题 Prompt（来自已验证有效的实践，稍作强化） */
+  /**
+   * v0.6.64 重写答题 Prompt：逐步推理 + 排除法 + few-shot + 严格单Token输出。
+   *
+   * 设计目标（用户诉求「提高 LLM 选择正确性、永远不瞎选」）：
+   *   · 让模型「先想后答」——要求它依据知识点逐一判断选项对错、排除明显错误项，
+   *     再给最终答案。大量实验与本次生态调研都表明：模型被显式要求逐步推理时，
+   *     选择题正确率显著高于「直接给答案」。
+   *   · 但最终仍只输出答案本身——保 Bank.normalize 可解析（这是硬约束，
+   *     一旦模型输出大段分析，normalize 取不到字母就会整题作废）。
+   *     所以指令是「先在内心推理，再只输出答案」，思考与输出格式分离。
+   *   · few-shot 给一个「输入→输出」样板，进一步锚定输出格式，降低模型自由发挥。
+   *
+   * 反模式规避：不在 Prompt 里让它「解释为什么」，那会诱发长输出、破坏解析。
+   */
   function buildPrompt(question, options, type) {
-    const typeHint = {
-      single: '如果题目为单选题，请从选项中选择一个正确的答案，并仅输出该选项（A、B、C或D），不提供任何额外解释。',
-      multiple: '如果题目为多选题，请选择所有正确的选项，并仅输出所有正确选项的字母，用\',\'分隔（如A,C），按字母顺序排列，不提供任何额外解释。',
-      judgement: '如果题目为判断题，请分析题目并仅输出 "对" 或 "错"，不提供任何额外解释。',
-      completion: '如果题目为填空题，请仅输出填空的答案内容，不提供任何额外解释。',
-      qa: '如果题目为简答题，请简洁作答，不提供额外解释。',
-      unknown: '请判断题目的类型（单选/多选/判断/填空），按对应规则仅输出答案（单选如B、多选如A,C、判断输出对或错），不提供任何额外解释。',
-    }[type] || '请仅输出答案，不提供任何额外解释。';
-
     const optionText = (options && options.length)
       ? '\n\n选项：\n' + options.map((o, i) => String.fromCharCode(65 + i) + '. ' + o).join('\n')
       : '';
 
-    return `请仔细阅读以下题目并思考分析，根据题目类型，严格按照以下要求作答：
+    // 题型专属：label=题型名（进 Prompt，供识别与测试锚定），think=推理引导，out=输出硬格式，ex=few-shot 样板。
+    const rules = {
+      single: {
+        label: '单选题',
+        think: '先依据题目涉及的知识点，逐一分析每个选项的对错，排除明显错误或与题干无关的项，再在剩余项中确定唯一正确的答案。',
+        out: '最终只输出这一个选项的字母（如 B），严禁输出选项内容、分析过程或任何标点。',
+        ex: '例题——题目：下列哪一项是人体最大的器官？\n选项：\nA. 心脏\nB. 皮肤\nC. 肝脏\nD. 肺\n答案：B',
+      },
+      multiple: {
+        label: '多选题',
+        think: '逐一判断每个选项是否正确，把所有正确项全部选出（漏选和多选都扣分，拿不准的项要结合题干依据决定，不要全选）。',
+        out: '最终只输出所有正确选项的字母，用英文逗号分隔并按字母顺序排列（如 A,C），严禁输出选项内容或分析过程。',
+        ex: '例题——题目：以下哪些属于可再生能源？\n选项：\nA. 太阳能\nB. 煤炭\nC. 风能\nD. 石油\n答案：A,C',
+      },
+      judgement: {
+        label: '判断题',
+        think: '判断该陈述是否正确，特别注意题干里的绝对化用词（如"一定""所有""完全""唯一"）——这类表述往往是错误信号。',
+        out: '最终只输出"对"或"错"两个字之一，严禁输出其他任何内容。',
+        ex: '例题——题目：在标准大气压下，纯水的沸点是 100 摄氏度。\n答案：对',
+      },
+      completion: {
+        label: '填空题',
+        think: '根据题干与对应知识点，给出填空处最准确、最简洁的答案。',
+        out: '最终只输出填空的答案内容本身，不要输出完整句子或分析过程。',
+        ex: '',
+      },
+      qa: {
+        label: '简答题',
+        think: '根据题干简明扼要地作答，抓住核心要点，不必展开。',
+        out: '最终只输出简短的答案内容，不要输出分析过程。',
+        ex: '',
+      },
+      unknown: {
+        label: '',
+        think: '先判断题型（单选/多选/判断/填空），再按对应规则思考。',
+        out: '最终只输出答案：单选输出一个字母（如 B），多选输出逗号分隔字母（如 A,C），判断输出"对"或"错"。严禁输出分析过程。',
+        ex: '',
+      },
+    }[type] || {
+      label: '',
+      think: '仔细分析题目，依据相关知识点给出最准确的答案。',
+      out: '最终只输出答案本身，不要输出分析过程。',
+      ex: '',
+    };
 
-${typeHint}
-请遵循以上规则直接给出你的答案。
+    const fewShot = rules.ex ? '\n\n' + rules.ex + '\n' : '';
+    const labelLine = rules.label ? '题型：' + rules.label + '\n' : '';
+
+    return `你是一位严谨的学科答题专家，请回答下面这道题。
+
+${labelLine}作答要求：
+1. ${rules.think}
+2. ${rules.out}${fewShot}
+请先在内心完成上述推理，然后严格按输出要求，只给出最终答案（不要带"答案"字样）。
 
 题目：
 ${question}${optionText}
 
-你的答案：`;
+最终答案：`;
+  }
+
+  /**
+   * v0.6.64：按题型给温度。选择题/判断题要「果断」，低温减少无谓的意见分裂
+   * （票型越集中，置信越高）；主观题保留一定创造性，用中温。
+   */
+  function tempFor(type) {
+    return (type === 'completion' || type === 'qa') ? 0.3 : 0.1;
   }
 
   // 单次 LLM 调用超时（毫秒）。
@@ -9817,7 +10081,7 @@ ${question}${optionText}
     const payload = {
       model: cfg.llmModel || 'deepseek-chat',
       messages: [{ role: 'user', content: buildPrompt(question, options, type) }],
-      temperature: 0.3,
+      temperature: tempFor(type),
       max_tokens: 200,
     };
 
@@ -9851,9 +10115,39 @@ ${question}${optionText}
     return String(content).trim();
   }
 
+  // v0.6.64：最近一次投票的置信元数据（求解层读它做「低置信交叉验证 / 标注请人工检查」）。
+  // 为什么用模块属性而非改 vote() 返回值：vote() 的返回契约是「答案字符串」，
+  // 单测与多处调用方都依赖它（例如测试里 vote = async () => 'B' 的桩）；
+  // 改返回类型会破坏它们。故另开一个只读通道暴露置信。
+  const _lastMeta = { confidence: 'none', distribution: [], unanimous: false, n: 0, answer: '' };
+
+  /** 由票型算置信：全票一致=high；过半多数=medium；分裂无多数=low */
+  function _confidenceOf(entries, n) {
+    if (!entries.length) return 'none';
+    const top = entries[0][1];
+    if (entries.length === 1) return 'high';
+    if (top >= Math.ceil(n / 2)) return 'medium';
+    return 'low';
+  }
+
+  function _recordMeta(ans, entries, n) {
+    _lastMeta.answer = ans || '';
+    _lastMeta.distribution = entries.map((e) => ({ answer: e[0], votes: e[1] }));
+    _lastMeta.unanimous = entries.length === 1;
+    _lastMeta.n = n;
+    _lastMeta.confidence = _confidenceOf(entries, n);
+    return _lastMeta;
+  }
+
   /**
    * 多次生成投票取众数
-   * 提前收敛：某答案出现 2 次就返回
+   * 提前收敛：某答案出现过半就返回
+   *
+   * v0.6.64：新增「置信追踪 + 分裂破平局」——
+   *   · 旧实现不看票型，1:1:1 三票分裂也照样返回最高票，等于把「没把握」当「有答案」。
+   *   · 现在：记录票型置信（high/medium/low）到 _lastMeta；分裂且还有预算时补投一次，
+   *     给模型又一次收敛机会，尽量把硬币翻转转成有依据的多数。
+   *   · 返回值仍是答案字符串（契约不变，测试桩可用）。
    */
   async function vote(question, options, type, times) {
     const n = Math.max(1, Math.min(Number(times) || 3, 5));
@@ -9863,6 +10157,13 @@ ${question}${optionText}
     // 这段时间主循环是被 await 堵死的。到点就收工，用已有票或直接认输。
     const deadline = Date.now() + ANSWER_BUDGET_MS;
 
+    const tally = (raw) => {
+      const ans = ZHS.Bank.normalize(raw);
+      if (!ans) return null;
+      votes[ans] = (votes[ans] || 0) + 1;
+      return ans;
+    };
+
     for (let i = 0; i < n; i++) {
       if (Date.now() >= deadline && i > 0) {
         ZHS.Log.warn('LLM 作答超出总预算 ' + ANSWER_BUDGET_MS + 'ms，停止后续投票');
@@ -9870,14 +10171,15 @@ ${question}${optionText}
       }
       try {
         const raw = await callOnce(question, options, type);
-        const ans = ZHS.Bank.normalize(raw);
-        if (!ans) continue;
-        votes[ans] = (votes[ans] || 0) + 1;
-        ZHS.Log.debug('LLM 第 ' + (i + 1) + ' 次输出：' + raw.slice(0, 40) + ' → ' + ans);
+        const ans = tally(raw);
+        ZHS.Log.debug('LLM 第 ' + (i + 1) + ' 次输出：' + String(raw).slice(0, 40) + (ans ? ' → ' + ans : ''));
 
         // 提前收敛：已过半
-        if (votes[ans] >= Math.ceil(n / 2)) {
-          ZHS.Log.info('LLM 投票收敛于第 ' + (i + 1) + ' 次：' + ans);
+        if (ans && votes[ans] >= Math.ceil(n / 2)) {
+          const entries = Object.entries(votes).sort((a, b) => b[1] - a[1]);
+          _recordMeta(ans, entries, n);
+          ZHS.Log.info('LLM 投票收敛于第 ' + (i + 1) + ' 次：' + ans
+            + '（置信 ' + _lastMeta.confidence + '）');
           return ans;
         }
       } catch (e) {
@@ -9896,20 +10198,47 @@ ${question}${optionText}
       if (i >= 1 && Object.keys(votes).length === 0 && lastErr) break;
     }
 
-    const entries = Object.entries(votes);
+    let entries = Object.entries(votes);
     if (!entries.length) {
+      _recordMeta('', [], n);
       if (lastErr) throw lastErr;
       return '';
     }
     entries.sort((a, b) => b[1] - a[1]);
-    ZHS.Log.info('LLM 投票结果：' + entries[0][0] + '（' + entries[0][1] + '/' + n + ' 票）');
-    return entries[0][0];
+
+    // v0.6.64 破平局：票型分裂（无过半多数）且预算仍充裕 → 补投一次，再给一次收敛机会。
+    const topCount = entries[0][1];
+    if (topCount < Math.ceil(n / 2) && Date.now() < deadline - 4000) {
+      try {
+        ZHS.Log.info('LLM 投票分裂（' + entries.map((e) => e[0] + '×' + e[1]).join(' / ')
+          + '），补投一次尝试收敛');
+        const raw = await callOnce(question, options, type);
+        const ans = tally(raw);
+        if (ans) entries = Object.entries(votes).sort((a, b) => b[1] - a[1]);
+      } catch (e) {
+        lastErr = e;
+        const key = 'llm-tie-' + (e.code || 'err');
+        if (_llmDiagAt[key] !== e.message) {
+          _llmDiagAt[key] = e.message;
+          ZHS.Log.warn('破平局补投失败：' + e.message + (e.hint ? '｜建议：' + e.hint : ''));
+        }
+      }
+    }
+
+    const finalAns = entries[0][0];
+    const meta = _recordMeta(finalAns, entries, n);
+    ZHS.Log.info('LLM 投票结果：' + finalAns + '（' + entries[0][1] + '/' + n + ' 票，置信 '
+      + meta.confidence + (meta.unanimous ? '，全票一致' : '') + '）');
+    return finalAns;
   }
 
   const LLM = {
     buildPrompt,
     callOnce,
     vote,
+    tempFor,
+    /** v0.6.64：读最近一次投票的置信元数据（求解层低置信交叉验证用） */
+    getLastVoteMeta() { return _lastMeta; },
 
     /**
      * round-44：主观题（填空/问答）单次生成——不投票。
@@ -10051,6 +10380,22 @@ ${question}${optionText}
     return null;
   }
 
+  /**
+   * v0.6.64：比较两个答案是否「一致」。答案可能是字母（A / A,C）或判定词（对/错）。
+   * 用于 LLM 低置信时与离线启发式做第二意见交叉验证。
+   * 字母答案按集合比较（A,C 与 C,A 视为一致）。
+   */
+  function _sameAnswer(a, b) {
+    const norm = (s) => String(s == null ? '' : s).replace(/[\s,，、;；]/g, '').toUpperCase();
+    const na = norm(a);
+    const nb = norm(b);
+    if (!na || !nb) return false;
+    if (na === nb) return true;
+    const sa = na.split('').sort().join('');
+    const sb = nb.split('').sort().join('');
+    return sa === sb;
+  }
+
   const Solver = {
     stats: { bank: 0, llm: 0, cache: 0, fuzzy: 0, heuristic: 0, random: 0, skipped: 0, fail: 0 },
 
@@ -10126,7 +10471,32 @@ ${question}${optionText}
             ? await ZHS.LLM.ask(question, type)
             : await ZHS.LLM.vote(question, options, type, cfg.voteTimes);
           if (ans) {
-            result = { answer: ans, from: 'llm', confidence: 'medium' };
+            // v0.6.64：读投票置信（全票一致=high / 过半=medium / 分裂=low）。
+            // 桩替换 vote() 时（单测）_lastMeta 不会被更新，置信停在 'none'——
+            // 此时保持旧的 'medium' 默认，保证测试与既有调用方行为不变。
+            const meta = (!isSubjective && ZHS.LLM.getLastVoteMeta) ? ZHS.LLM.getLastVoteMeta() : null;
+            let confidence = (meta && meta.confidence && meta.confidence !== 'none')
+              ? meta.confidence
+              : 'medium';
+            // 低置信交叉验证：LLM 票型分裂（没把握）时，用离线启发式做第二意见。
+            //   · 两者一致 → 提升为 medium（两个独立信号互相印证，比单边分裂票可信）。
+            //   · 不一致 → 仍采用 LLM（它是有依据的推理，不是瞎选），但保持 low 并告警，
+            //     提醒用户提交前复核。
+            // 关键：绝不因此引入随机兜底——「永不瞎选」由 gatedRandom(默认关) 把守，此处不动。
+            if (meta && confidence === 'low' && options.length
+              && ZHS.Heuristic && cfg.heuristicFallback !== false) {
+              try {
+                const h = ZHS.Heuristic.solve({ title: question, options, type });
+                if (h && h.answer && _sameAnswer(h.answer, ans)) {
+                  confidence = 'medium';
+                  ZHS.Log.info('LLM 低置信但与离线启发式结论一致，置信提升为 medium：' + ans);
+                } else if (h && h.answer) {
+                  ZHS.Log.warn('LLM 低置信（票型分裂）且与启发式不一致（LLM=' + ans
+                    + ' / 启发式=' + h.answer + '），仍采用 LLM，请提交前复核');
+                }
+              } catch (e) { /* 交叉验证失败不影响主流程 */ }
+            }
+            result = { answer: ans, from: 'llm', confidence, voteMeta: meta || null };
             this.stats.llm++;
           }
         } catch (e) {
