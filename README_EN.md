@@ -81,6 +81,7 @@ All four gates also run in CI on every push — see the CI badge above.
 | [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md) | Module map (20 modules) + gate commands |
 | [docs/20-使用说明.md](docs/20-使用说明.md) | Full usage guide (Chinese) |
 | [docs/30-自动学习引擎方案.md](docs/30-自动学习引擎方案.md) | Auto-learning engine design (Chinese) |
+| [docs/40-开发者笔记.md](docs/40-开发者笔记.md) | Developer notes (Chinese): platform recon — selectors for 5 page variants, reference-project survey, architecture, milestones, capability benchmark |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ## Contributing
