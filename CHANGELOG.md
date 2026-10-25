@@ -4,6 +4,39 @@
 
 ---
 
+## [0.6.65] - 2026-10-25
+> round-56：**仓库呈现与工程规范补齐**（MaxLoop v4.2 模式A 一轮：外部学习 → 发现真问题 → 修复 → Oracle 复检）
+
+本轮**不改脚本逻辑**，修的是「把一个成熟项目摆到 GitHub 上该有的东西」——
+经外部调研（60k+ stars 项目的 README 实证规则）与 `gh repo view` 实测比对后收敛出的 4 条真缺陷：
+
+### 修复（每条都有外部判据，非拍脑袋）
+- **补 `LICENSE`（MIT）**：此前 `package.json` 声明 MIT、README 徽章也指向 `LICENSE`，**但文件根本不存在**——
+  `gh repo view` 实测 `licenseInfo: null`（GitHub 判定「无许可证」），徽章是断链。现已补全，并在文末附免责声明。
+- **新增 `CONTRIBUTING.md`**：README 挂着 "PRs Welcome" 徽章，但点进去是空的 PR 列表、无贡献指南，
+  贡献链路断。现已写明模块结构、四条门禁命令、加模块的重入守卫写法、**四条不可触碰的红线**、提 issue 要带什么。
+- **修正 topics**：实测发现混进了 `bilibili`（与智慧树毫无关系，属错误分类，会引来无关流量且显不专业）——已删除，
+  并补 `mooc` / `online-course` / `auto-answer` / `study-helper`（现 14 个，上限 20）。
+- **新增 `assets/social-preview.png`（1280×640）**：GitHub 社交分享预览图。调研里明确点名这是
+  「多数项目跳过的低成本高回报优化」——无自定义预览时分享出去是信息量不足的默认卡片。
+  （该文件需在仓库 Settings → Social preview 手动上传，API 不支持设置。）
+
+### 增强
+- **新增 GitHub Actions CI**（`.github/workflows/ci.yml`）：把本地四条门禁搬进 CI（build → check-dist → 706 项单测），
+  让 README 的 Build 徽章有真实依据，也让 PR 自动过门禁。截屏测试需真机浏览器，仍保留本地手动执行。
+- **README 徽章补质量信号**：新增 `CI`（质量信号）与 `Last commit`（活跃维护信号），
+  并把 `PRs Welcome` 徽章改指新加的 CONTRIBUTING.md。徽章总数 6 个，控制在「不超过 8–10 个」的实证安全区内。
+- **README 新增「📚 文档」「🤝 参与贡献」两区**：把散落的 docs 收成一张表，贡献入口与红线前置。
+
+### 门禁
+- `node build.js` v0.6.65 构建通过；dist 与 src 一致（`check-dist-fresh` 过，20 模块 v0.6.65）。
+- `test/run.js`：**706 通过 / 0 失败（全绿）**，本轮未改脚本逻辑，零回归。
+- 代码层评审结论（诚实记录）：无 TODO/FIXME 残留、无裸 `console` 调试残留、空 `catch` 均为 DOM 防御性写法；
+  端到端入口经核验已铺满 3 处面板入口 + 2 个运行时 API。**未发现值得改的代码层缺陷，故本轮不动代码**——
+  不为凑数硬找问题。
+
+---
+
 ## [0.6.64] - 2026-10-25
 > round-55：**全自动学习引擎（M2）+ LLM 作答正确率拉升（M3）**
 
@@ -20,7 +53,7 @@
 
 ### 门禁
 - `node build.js` v0.6.64 构建通过；dist 与 src 一致（`check-dist-fresh` 过，20 模块 v0.6.64）。
-- `test/run.js`：**702 通过 / 0 失败（全绿）**，新增 25 条单测（autoLearn 默认、Prompt 强化、投票置信、低置信交叉验证、选节目标解析），零回归。
+- `test/run.js`：**706 通过 / 0 失败（全绿）**，新增 25 条单测（autoLearn 默认、Prompt 强化、投票置信、低置信交叉验证、选节目标解析），零回归。
 
 ---
 

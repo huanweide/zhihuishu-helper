@@ -1,9 +1,11 @@
 # 智慧树网课助手（zhihuishu-helper）
 
 [![License](https://img.shields.io/github/license/huanweide/zhihuishu-helper)](LICENSE)
+[![CI](https://github.com/huanweide/zhihuishu-helper/actions/workflows/ci.yml/badge.svg)](https://github.com/huanweide/zhihuishu-helper/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/package-json/v/huanweide/zhihuishu-helper?label=version)](https://github.com/huanweide/zhihuishu-helper/releases)
 [![Stars](https://img.shields.io/github/stars/huanweide/zhihuishu-helper)](https://github.com/huanweide/zhihuishu-helper/stargazers)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/huanweide/zhihuishu-helper/pulls)
+[![Last commit](https://img.shields.io/github/last-commit/huanweide/zhihuishu-helper)](https://github.com/huanweide/zhihuishu-helper/commits/master)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 > **一句话定位**：一个 **Tampermonkey 油猴脚本**，让你在 **智慧树 / 知到** 上 **自动播放、断点续播、AI 自动答题（不瞎蒙）** —— 装好即用，全程在你的浏览器里跑，账号不交给任何第三方。
 
@@ -370,6 +372,27 @@ graph TD
 本项目仅供**个人学习与技术研究**，用于理解浏览器自动化、DOM 操作、LLM 应用集成。
 使用者应遵守智慧树平台服务条款及其所在学校规定。因使用本项目产生的任何后果，
 由使用者自行承担。
+
+---
+
+## 📚 文档
+
+| 文档 | 内容 |
+|------|------|
+| [安装与使用说明](docs/20-使用说明.md) | 3 步装好、配置说明、常见问题 |
+| [自动学习引擎方案](docs/30-自动学习引擎方案.md) | 全自动学习链路设计与红线边界 |
+| [平台侦察报告](docs/01-侦察报告.md) | 4 套页面结构、选择器、实测结论 |
+| [技术方案](docs/02-技术方案.md) | 模块架构、三条主线设计 |
+| [踩坑记录](docs/03-踩坑记录.md) | 真机问题与排查顺序 |
+| [GitHub 生态调研](docs/06-GitHub生态全景调研.md) | 同类项目横向对比 |
+| [更新日志](CHANGELOG.md) | 每个版本改了什么、为什么 |
+
+## 🤝 参与贡献
+
+欢迎 PR 与 issue。开工前请先读 [贡献指南](CONTRIBUTING.md)——里面写了模块结构、四条门禁命令、
+以及**四条不可触碰的红线**（尤其"绝不自动跳考试页"与"绝不替用户瞎蒙答案"）。
+
+提 bug 请附上脚本版本号、页面版本代号（wisdom / fusion / hike / legacy）和面板日志页内容。
 
 ---
 

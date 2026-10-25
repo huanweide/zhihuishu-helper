@@ -1,0 +1,35 @@
+name: CI
+
+# 门禁自动化：把本地四条命令搬进 CI，让 README 的 Build 徽章有真实依据。
+# 注意：截屏测试（test/screenshot.js）需要真机浏览器，CI 里不跑——
+# 它的定位是「真机视觉验证」，不是门禁，放到本地手动执行。
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm install
+
+      - name: ① 构建（拼装 dist）
+        run: node build.js
+
+      - name: ② 校验 dist 与 src 一致（漏 build 会被这条挡下）
+        run: node tools/check-dist-fresh.js
+
+      - name: ③ 逻辑单测
+        run: node test/run.js

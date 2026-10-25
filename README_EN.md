@@ -23,7 +23,7 @@ The key principle that separates it from other "auto-answer" scripts:
 - **No-blind-guess fallback (3 tiers)** — ① bank/LLM hit → use directly; ② no hit but offline heuristic on → linguistic inference (**not a guess**); ③ still nothing → a single toggle decides: **off (default) = leave blank for manual review**, on = random pick as a last-resort escape hatch.
 - **Humanized playback** — randomized pauses / "away" simulation to avoid crude detection patterns.
 - **Study records + habit-score stats** — per-day bank/LLM/skipped counts, persisted locally.
-- **Zero backend** — pure JavaScript userscript, 20 modules, **702 logic tests**, MIT licensed.
+- **Zero backend** — pure JavaScript userscript, 20 modules, **706 logic tests**, MIT licensed.
 
 ## Install
 
