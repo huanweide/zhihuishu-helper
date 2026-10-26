@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="智慧树助手 zhihuishu-helper">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08131c"/>
+      <stop offset="0.55" stop-color="#0d2033"/>
+      <stop offset="1" stop-color="#05080e"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="320" fill="url(#bg)"/>
+  <g transform="translate(160,160)" fill="none" stroke="url(#ring)" stroke-width="15" stroke-linecap="round">
+    <path d="M -52 -28 A 60 60 0 1 1 -21 52"/>
+    <path d="M -21 79 L -21 52 L -48 52"/>
+  </g>
+  <path transform="translate(160,160)" d="M -12 -24 L 26 0 L -12 24 Z" fill="url(#ring)"/>
+  <text x="300" y="150" fill="#e8f2ff" font-family="Microsoft YaHei, Segoe UI, Helvetica, Arial, sans-serif" font-size="76" font-weight="800">智慧树<tspan fill="#4ade80">助手</tspan></text>
+  <text x="304" y="204" fill="#b9cde4" font-family="Microsoft YaHei, Segoe UI, Helvetica, Arial, sans-serif" font-size="27">自动播放 → 断点续播 → AI 答题（不瞎蒙）</text>
+  <g font-family="Microsoft YaHei, Segoe UI, Helvetica, Arial, sans-serif" font-size="21" fill="#a5d8ff">
+    <rect x="304" y="234" width="252" height="44" rx="22" fill="#38bdf81a" stroke="#2b5170"/>
+    <text x="322" y="262">断点续播 · 跨 iframe</text>
+    <rect x="576" y="234" width="258" height="44" rx="22" fill="#38bdf81a" stroke="#2b5170"/>
+    <text x="594" y="262">题库 → LLM 双通道</text>
+    <rect x="854" y="234" width="232" height="44" rx="22" fill="#38bdf81a" stroke="#2b5170"/>
+    <text x="872" y="262">706 项单测守门</text>
+  </g>
+</svg>
