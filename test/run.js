@@ -3313,7 +3313,11 @@ const _round47 = (async () => {
       }
     })();
 
-Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46, _round47, _round48, _round49, _round50]).then(async () => {
+// 这 6 组（_nonvideo / _sync / _syncNoPct / _verifyHold / _fusionCatalog / _aiExercise）
+// 此前一直没登记：它们定义在文件前段、内部无宏任务等待，靠「跑得比汇总打印早」侥幸计入。
+// 但这是时序巧合不是设计保证 —— 哪天组内加一个 await sleep 就会变成漏计 + 失败静默（假绿）。
+// tools/check-test-registry.js 把它们扫出来了，这里补齐登记。
+Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _dupname, _abDialog, _abDedupe, _abSig, _abGuard, _abSolveReachable, _abMultiDialog, _abSigWithOptions, _abWrapperHidden, _abEmptyLabel, _abEntryForms, _abAutoSiblings, _solverDiag, _statsM8, _exam37, _round45, _round46, _round47, _round48, _round49, _round50, _nonvideo, _sync, _syncNoPct, _verifyHold, _fusionCatalog, _aiExercise]).then(async () => {
   const distPath = path.join(__dirname, '..', 'dist', 'zhihuishu-helper.user.js');
   if (fs.existsSync(distPath)) {
     const src = fs.readFileSync(distPath, 'utf8');
@@ -3541,6 +3545,11 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
     ok('0% 不硬撑（交给 0% 停滞守卫）',
       (await P.retryFromPlatformProgress(video, 0)) === false, 'false');
   })();
+  // 本组是后加的，定义在末尾 Promise.all 之后 —— 不显式 await 的话，
+  // 这 4 条断言会在汇总打印之后才跑完：数字随机器调度漂移（本地 721 / CI 717），
+  // 更糟的是失败也不进 fail 计数、exit code 不变红（假绿）。
+  // 它测的是红线「补播绝不 seek」，绝不能是假绿 —— 必须等。
+  await _retryNoSeek;
 
   console.log('\n=== 64. legacy 切集：点击必须落在标题 .catalogue_title 上 ===');
   {

@@ -43,6 +43,23 @@
 - **发布首个 GitHub Release v0.6.66**（含 `dist/zhihuishu-helper.user.js` 附件 + 安装说明 + 四条红线）。
   此前 `latestRelease` 为 null，仓库没有稳定版下载入口。
 
+### 修复（真 bug：异步测试组漏登记 = 红线断言假绿）
+- **根因**：`test/run.js` 的 `_retryNoSeek` 组（第 3521 行）既不在末尾 `Promise.all` 里、也没有就地 `await` ——
+  它在 `Promise.all(...).then()` 回调内部才定义，根本进不去那个列表。后果有两层：
+  ① 断言在汇总打印之后才跑完 → 通过数随机器调度漂移（**本地 721 / CI 717**，差的就是这 4 条）；
+  ② 更严重：失败也不进 `fail` 计数、exit code 不变红 → **假绿**。
+  而这一组测的正是项目四大红线之一的「**补播绝不 seek**」——等于这条红线从来没被门禁真正验证过。
+  现已就地 `await _retryNoSeek;`。
+- **顺带揪出 6 个侥幸组**：`_nonvideo` / `_sync` / `_syncNoPct` / `_verifyHold` / `_fusionCatalog` / `_aiExercise`
+  一直没登记，靠「定义在文件前段、内部无宏任务 → 跑得比汇总打印早」侥幸计入。这是时序巧合不是设计保证，
+  哪天组内加一个 `await sleep` 就会重演假绿。现已全部补进 `Promise.all`。
+- **新增第 ③ 条门禁 `tools/check-test-registry.js`**：静态扫 `test/run.js`，提取所有 `const _xxx = (async ...`，
+  逐个核对是否进了 `Promise.all` 或就地 `await`，漏一个就红。已做判别验证：
+  对修复前的版本跑必红（报出 7 个），修复后 40/40 全绿。
+- **门禁编号统一为六条**（README / CONTRIBUTING / PR 模板 / ci.yml 四处口径一致）：
+  ① build → ② check-dist-fresh → ③ check-test-registry → ④ test/run.js → ⑤ check-docs-consistency → ⑥ 截屏测试（本地）。
+  CI 跑 ①~⑤。
+
 ---
 
 ## [0.6.65] - 2026-10-25

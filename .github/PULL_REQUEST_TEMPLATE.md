@@ -15,7 +15,8 @@
 ```bash
 node build.js                  # 拼装 dist
 node tools/check-dist-fresh.js # dist 与 src 一致
-node test/run.js               # 逻辑单测（当前基线：721 通过 / 0 失败）
+node tools/check-test-registry.js    # 异步测试组登记检查（漏 await = 假绿）
+node test/run.js                     # 逻辑单测（当前基线：721 通过 / 0 失败）
 node tools/check-docs-consistency.js --tests 721   # 文档一致性（CI 强制）
 git diff --cached              # 确认无密钥 / token 进暂存区
 ```

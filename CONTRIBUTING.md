@@ -48,8 +48,9 @@ docs/         侦察报告、技术方案、踩坑记录、使用说明
 ```bash
 node build.js                  # ① 拼装 dist
 node tools/check-dist-fresh.js # ② 校验 dist 与 src 一致（漏 build 会被挡下）
-node test/run.js               # ③ 逻辑单测必须全绿（当前 721 通过 / 0 失败）
-node tools/check-docs-consistency.js --tests 721   # ④ 文档一致性（CI 强制）
+node tools/check-test-registry.js    # ③ 异步测试组登记检查（漏 await = 假绿）
+node test/run.js                     # ④ 逻辑单测必须全绿（当前 721 通过 / 0 失败）
+node tools/check-docs-consistency.js --tests 721   # ⑤ 文档一致性（CI 强制）
 node test/screenshot.js        # ④ 可选：真机截屏（需本机浏览器）
 ```
 

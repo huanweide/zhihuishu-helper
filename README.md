@@ -129,11 +129,12 @@ node build.js
 ### 自检（改完代码必跑的门禁）
 
 ```bash
-node build.js                    # ① 构建：src/*.js 按序拼装 → dist/*.user.js
-node tools/check-dist-fresh.js   # ② 校验 dist 与 src 一致（漏 build 会被挡下）
-node test/run.js                 # ③ 逻辑单测（jsdom + vm 模块注入）
-node test/screenshot.js          # ④ 截屏测试（需真机 Chrome，本地手动跑）
-node tools/check-docs-consistency.js --tests 721   # ⑤ 文档一致性（版本号/测试数不漂移，CI 强制）
+node build.js                      # ① 构建：src/*.js 按序拼装 → dist/*.user.js
+node tools/check-dist-fresh.js     # ② 校验 dist 与 src 一致（漏 build 会被挡下）
+node tools/check-test-registry.js  # ③ 测试组登记检查（异步组漏 await = 假绿）
+node test/run.js                   # ④ 逻辑单测（jsdom + vm 模块注入）
+node tools/check-docs-consistency.js --tests 721  # ⑤ 文档一致性（版本号/测试数不漂移）
+node test/screenshot.js            # ⑥ 截屏测试（需真机 Chrome，本地手动跑）
 ```
 
 ```bash
@@ -146,7 +147,10 @@ $ node test/run.js
 全部通过 ✓
 ```
 
-> 第 ④ 条依赖真机浏览器，因此**不在 CI 里跑**；它的定位是「真机视觉验证」，不是门禁。CI 跑 ①②③⑤——第 ⑤ 条会用实跑出来的通过数校验 README 上的数字，杜绝「版本升了、文档还写上一版」的漂移（实测已犯过两次）。这也是 CI 徽章的真实依据。
+> 第 ⑥ 条依赖真机浏览器，因此**不在 CI 里跑**；它的定位是「真机视觉验证」，不是门禁。CI 跑 ①~⑤：
+> 第 ③ 条静态扫出「没被 await 的异步测试组」（漏 await = 断言漏计 + 失败不变红 = 假绿，实测抓出过 7 个）；
+> 第 ⑤ 条拿第 ④ 条实跑出的通过数校验 README 上的数字，杜绝「版本升了、文档还写上一版」的漂移（实测已犯过两次）。
+> 这也是 CI 徽章的真实依据。
 
 ---
 

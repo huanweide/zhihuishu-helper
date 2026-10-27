@@ -1,6 +1,6 @@
 name: CI
 
-# 门禁自动化：把本地四条命令搬进 CI，再追加第 ⑤ 条文档一致性检查，
+# 门禁自动化：把本地四条命令搬进 CI，再追加第 ⑤ 条文档一致性、第 ③ 条测试组登记检查，
 # 让 README 的 Build 徽章有真实依据。
 # 注意：截屏测试（test/screenshot.js）需要真机浏览器，CI 里不跑——
 # 它的定位是「真机视觉验证」，不是门禁，放到本地手动执行。
@@ -33,7 +33,10 @@ jobs:
       - name: ② 校验 dist 与 src 一致（漏 build 会被这条挡下）
         run: node tools/check-dist-fresh.js
 
-      - name: ③ 逻辑单测
+      - name: ③ 测试组登记检查（异步组漏 await = 假绿，先静态拦一道）
+        run: node tools/check-test-registry.js
+
+      - name: ④ 逻辑单测
         # 把实跑出的通过数抓出来，喂给第 ④ 条：README 上的数字从此由机器兜底，
         # 不会再出现「版本升了、文档还写着上一版测试数」的漂移。
         run: |
@@ -46,5 +49,5 @@ jobs:
           echo "实跑通过数：$TESTS"
           echo "TESTS=$TESTS" >> "$GITHUB_ENV"
 
-      - name: ④ 文档一致性（版本号四件套 + 测试数不漂移）
+      - name: ⑤ 文档一致性（版本号四件套 + 测试数不漂移）
         run: node tools/check-docs-consistency.js --tests "$TESTS"
