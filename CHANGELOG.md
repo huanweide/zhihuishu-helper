@@ -4,6 +4,31 @@
 
 ---
 
+## [0.6.66] - 2026-10-27
+> round-57：**代码层专业度 — 端到端接线闭环**（清掉 M2 遗留的半成品 + 补判别测试）
+
+### 修复（真问题：上一轮 M2 引入但未接线的 dead code / 半成品）
+- **`CourseHub.summary()` 接线落地**：该函数 v0.6.64 就已写好（课程中心资源遍历，统计「还剩多少门未学完」），
+  但**全库零调用**——面板实际用的是 `ZHS.Stats.summary()`（学习行为统计，二者口径不重叠）。
+  本轮在面板新增「课程中心（剩余课程）」展示区，`renderHub()` 仅在课程中心页调 `summary()` 展示剩余课程，
+  否则降级提示；并加「刷新」按钮。M2 宣称的「面板展示剩余未学课程数」能力终于端到端闭环。
+- **`summary()` 改调 `this.collectCards()`**（原调闭包局部 `collectCards`）：既符合对象内方法调用规范，
+  又让其可被测试注入驱动（判别测试不再依赖真实 DOM 扫描）。
+
+### 增强
+- **`CourseHub` 新增 `isHubPage` / `getSummary` 导出**：`isHubPage` 供面板判断当前是否课程中心页（决定是否扫描）；
+  `getSummary` 返回最近一次 `summary()` 的同步快照，面板刷新无需重复扫 DOM。
+- **`summary()` 内部缓存**：调用后把结果存到 `this._lastSummary`，`getSummary()` 直接读，避免重复遍历卡片。
+
+### 测试
+- 新增 `test/run.js` **N 组 15 条**判别测试（v0.6.66）：覆盖 summary 统计口径（finished 计数、done/failed 排除）、
+  getSummary 缓存、isHubPage/getSummary 导出契约。修复前 `summary()` 与面板无关联（零调用），现已端到端可证。
+
+### 门禁
+- `node build.js` → 20 模块 v0.6.66；`node tools/check-dist-fresh.js` 一致；`node test/run.js` → **721 通过 / 0 失败**（连跑稳定，非 flaky）
+
+---
+
 ## [0.6.65] - 2026-10-25
 > round-56：**仓库呈现与工程规范补齐**（MaxLoop v4.2 模式A 一轮：外部学习 → 发现真问题 → 修复 → Oracle 复检）
 

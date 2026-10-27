@@ -725,7 +725,7 @@
      * @returns {Promise<{total:number, unfinished:number, finished:number, doneCount:number, failedCount:number}>}
      */
     async summary() {
-      const cards = await collectCards();
+      const cards = await this.collectCards();
       const store = readStore();
       const done = store.doneCourses || [];
       const failed = store.failedCourses || [];
@@ -737,14 +737,19 @@
         if (id && (done.includes(id) || failed.includes(id))) continue;
         unfinished++;
       }
-      return {
+      const result = {
         total: cards.length,
         unfinished,
         finished,
         doneCount: done.length,
         failedCount: failed.length,
       };
+      this._lastSummary = result; // 缓存，供面板秒显，避免每次刷新重复扫描 DOM
+      return result;
     },
+
+    /** 最近一次 summary() 的同步快照（可能为 null，表示尚未在课程中心页扫描过） */
+    getSummary() { return this._lastSummary || null; },
 
     // 意图
     setIntent,
@@ -754,6 +759,7 @@
     // 卡片
     collectCards,
     parseCard,
+    isHubPage,
 
     // 流程
     pickNext,

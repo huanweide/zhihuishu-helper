@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.65
+// @version      0.6.66
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.65";
+window.__ZHS_BUILD__.version = "0.6.66";
 
 /* ===== 00-config.js ===== */
 /**
@@ -5435,6 +5435,15 @@ window.__ZHS_BUILD__.version = "0.6.65";
         </span>
       </div>
 
+      <div class="sec-title">课程中心（剩余课程）</div>
+      <div class="hint">进入课程中心页后，可查看还有多少门课未学完</div>
+      <div class="hint s-hub"></div>
+      <div class="row"><label></label>
+        <span>
+          <button class="mini-btn btn-refreshhub">刷新</button>
+        </span>
+      </div>
+
       <div class="sec-title">自动停止（达标自动结束并弹总结）</div>
       <div class="row"><label>停止条件</label>
         <select class="sel-stop sel-inp inp">
@@ -5685,6 +5694,29 @@ window.__ZHS_BUILD__.version = "0.6.65";
           ZHS.Log.info('学习记录已清空');
         };
       }
+
+      // 课程中心剩余课程（v0.6.66）：summary() 提供「还剩多少门未学」，仅课程中心页有效
+      const hubBox = box.querySelector('.s-hub');
+      const renderHub = async () => {
+        if (!hubBox) return;
+        if (!ZHS.CourseHub || !ZHS.CourseHub.isHubPage) { hubBox.textContent = '课程中心模块未加载'; return; }
+        if (!ZHS.CourseHub.isHubPage()) {
+          hubBox.textContent = '进入课程中心页后可查看剩余未学课程数';
+          return;
+        }
+        try {
+          const s = await ZHS.CourseHub.summary();
+          hubBox.textContent = '共 ' + s.total + ' 门｜剩余 ' + s.unfinished + ' 门未学完'
+            + (s.finished ? '｜已修完 ' + s.finished + ' 门' : '');
+          hubBox.title = '剩余未学：' + s.unfinished + ' 门\n已修完：' + s.finished + ' 门\n已放弃：' + s.failedCount + ' 门';
+        } catch (e) {
+          hubBox.textContent = '课程中心读取失败：' + e.message;
+        }
+      };
+      renderHub();
+
+      const btnRefreshHub = box.querySelector('.btn-refreshhub');
+      if (btnRefreshHub) btnRefreshHub.onclick = () => renderHub();
 
       // 保存 Key
       const btnSave = box.querySelector('.btn-savekey');
@@ -6993,7 +7025,7 @@ window.__ZHS_BUILD__.version = "0.6.65";
      * @returns {Promise<{total:number, unfinished:number, finished:number, doneCount:number, failedCount:number}>}
      */
     async summary() {
-      const cards = await collectCards();
+      const cards = await this.collectCards();
       const store = readStore();
       const done = store.doneCourses || [];
       const failed = store.failedCourses || [];
@@ -7005,14 +7037,19 @@ window.__ZHS_BUILD__.version = "0.6.65";
         if (id && (done.includes(id) || failed.includes(id))) continue;
         unfinished++;
       }
-      return {
+      const result = {
         total: cards.length,
         unfinished,
         finished,
         doneCount: done.length,
         failedCount: failed.length,
       };
+      this._lastSummary = result; // 缓存，供面板秒显，避免每次刷新重复扫描 DOM
+      return result;
     },
+
+    /** 最近一次 summary() 的同步快照（可能为 null，表示尚未在课程中心页扫描过） */
+    getSummary() { return this._lastSummary || null; },
 
     // 意图
     setIntent,
@@ -7022,6 +7059,7 @@ window.__ZHS_BUILD__.version = "0.6.65";
     // 卡片
     collectCards,
     parseCard,
+    isHubPage,
 
     // 流程
     pickNext,

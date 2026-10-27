@@ -4073,6 +4073,45 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
   })();
   await _v64;
 
+  const _v66 = (async () => {
+    console.log('\n=== N. 课程中心剩余课程 summary() 接线修复（v0.6.66）===');
+    {
+      const { win } = makeEnv('<html><body></body></html>');
+      const ZHS = win.ZHS;
+      ok('N1 CourseHub 已挂载', !!ZHS.CourseHub);
+      ok('N2 summary 已暴露', typeof ZHS.CourseHub.summary === 'function');
+      ok('N3 getSummary 已暴露', typeof ZHS.CourseHub.getSummary === 'function');
+      ok('N4 isHubPage 已暴露（面板判定是否课程中心页）', typeof ZHS.CourseHub.isHubPage === 'function');
+
+      // summary 现调 this.collectCards()，可被测试注入驱动
+      const mk = (name, finished) => ({ el: null, name, finished: !!finished });
+      ZHS.CourseHub.collectCards = async () => [mk('A'), mk('B', true), mk('C'), mk('D', true)];
+
+      // 默认 store 空（无 done/failed）：unfinished = 非finished = A,C = 2
+      const s1 = await ZHS.CourseHub.summary();
+      eq('N5 total=4', s1.total, 4);
+      eq('N6 finished=2（B、D 已修完）', s1.finished, 2);
+      eq('N7 unfinished=2（默认无 done/failed 时不排除）', s1.unfinished, 2);
+      eq('N8 doneCount=0', s1.doneCount, 0);
+      eq('N9 failedCount=0', s1.failedCount, 0);
+
+      // 预设 done/failed：A 已 done、C 已 failed → 都被排除，unfinished=0
+      win.GM_setValue('zhs-helper-hub', JSON.stringify({ rev: 1, intent: null, doneCourses: ['A'], failedCourses: ['C'], stats: { hopped: 0, failed: 0 } }));
+      const s2 = await ZHS.CourseHub.summary();
+      eq('N10 预设后 total 仍=4', s2.total, 4);
+      eq('N11 预设后 finished 仍=2', s2.finished, 2);
+      eq('N12 预设后 unfinished=0（A done、C failed 均排除）', s2.unfinished, 0);
+      eq('N13 doneCount=1', s2.doneCount, 1);
+      eq('N14 failedCount=1', s2.failedCount, 1);
+
+      // getSummary 缓存：summary 调用后同步可取到快照，面板无需重复扫 DOM
+      const snap = ZHS.CourseHub.getSummary();
+      ok('N15 getSummary 返回最近一次 summary 快照', snap && snap.total === 4 && snap.unfinished === 0);
+      stopAllTimers();
+    }
+  })();
+  await _v66;
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {

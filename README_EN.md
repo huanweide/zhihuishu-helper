@@ -136,7 +136,7 @@ $ node tools/check-dist-fresh.js
 
 $ node test/run.js
 ==================================================
-passed 706 / failed 0
+passed 717 / failed 0
 all passed ✓
 ```
 
@@ -260,7 +260,7 @@ ZHS.Solver.channels.push({
 - [x] Breakpoint resume (cross-iframe / cross-page / survives network loss)
 - [x] Dual-channel answering (bank + LLM) + offline heuristic third tier
 - [x] Fully-automatic learning engine (auto-pick courses, auto-hop when one finishes)
-- [x] 706 logic tests + 70 screenshot tests
+- [x] 717 logic tests + 70 screenshot tests
 - [x] 5 page-version adapters + structural fallback scan
 - [ ] More question-bank protocols (currently only the `TikuAdapter` standard protocol)
 - [ ] Panel themes / custom color schemes

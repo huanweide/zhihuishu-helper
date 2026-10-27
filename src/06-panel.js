@@ -915,6 +915,15 @@
         </span>
       </div>
 
+      <div class="sec-title">课程中心（剩余课程）</div>
+      <div class="hint">进入课程中心页后，可查看还有多少门课未学完</div>
+      <div class="hint s-hub"></div>
+      <div class="row"><label></label>
+        <span>
+          <button class="mini-btn btn-refreshhub">刷新</button>
+        </span>
+      </div>
+
       <div class="sec-title">自动停止（达标自动结束并弹总结）</div>
       <div class="row"><label>停止条件</label>
         <select class="sel-stop sel-inp inp">
@@ -1165,6 +1174,29 @@
           ZHS.Log.info('学习记录已清空');
         };
       }
+
+      // 课程中心剩余课程（v0.6.66）：summary() 提供「还剩多少门未学」，仅课程中心页有效
+      const hubBox = box.querySelector('.s-hub');
+      const renderHub = async () => {
+        if (!hubBox) return;
+        if (!ZHS.CourseHub || !ZHS.CourseHub.isHubPage) { hubBox.textContent = '课程中心模块未加载'; return; }
+        if (!ZHS.CourseHub.isHubPage()) {
+          hubBox.textContent = '进入课程中心页后可查看剩余未学课程数';
+          return;
+        }
+        try {
+          const s = await ZHS.CourseHub.summary();
+          hubBox.textContent = '共 ' + s.total + ' 门｜剩余 ' + s.unfinished + ' 门未学完'
+            + (s.finished ? '｜已修完 ' + s.finished + ' 门' : '');
+          hubBox.title = '剩余未学：' + s.unfinished + ' 门\n已修完：' + s.finished + ' 门\n已放弃：' + s.failedCount + ' 门';
+        } catch (e) {
+          hubBox.textContent = '课程中心读取失败：' + e.message;
+        }
+      };
+      renderHub();
+
+      const btnRefreshHub = box.querySelector('.btn-refreshhub');
+      if (btnRefreshHub) btnRefreshHub.onclick = () => renderHub();
 
       // 保存 Key
       const btnSave = box.querySelector('.btn-savekey');
