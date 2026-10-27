@@ -27,6 +27,22 @@
 ### 门禁
 - `node build.js` → 20 模块 v0.6.66；`node tools/check-dist-fresh.js` 一致；`node test/run.js` → **721 通过 / 0 失败**（连跑稳定，非 flaky）
 
+### 补记（同版本内 · 文档漂移与呈现收尾）
+- **修文档漂移（11 处）**：上一轮只同步了 `package.json` + `CHANGELOG`，README / README_EN / `docs/PROJECT_MAP.md` /
+  CONTRIBUTING / PR 模板 / `docs/40-开发者笔记.md` 仍停在 **v0.6.65 + 717**（实测 0.6.66 / 721）。
+  这是同类问题第二次复发（v0.6.65 才修过 677→706），故本条连同下面的新门禁一起收口。
+- **新增第 ⑤ 条门禁 `tools/check-docs-consistency.js`**：校验版本号四件套（README / README_EN / PROJECT_MAP / CHANGELOG）
+  是否都提到当前版本、首屏是否残留旧版本号、以及各文档里的测试数是否自相矛盾；
+  传 `--tests <n>` 时再校验与实跑数字一致。CI 里把 `test/run.js` 实跑出的通过数喂给它 ——
+  **README 上的测试数从此由机器兜底**。已做「先红后绿」判别验证：注入 717 必红，恢复必绿。
+- **README / README_EN 安装区重写**：原先只给「装 Node → clone → build」一条路，
+  普通用户来仓库的第一诉求是「装上」而不是「构建」，属真实转化损失。
+  现改为：① jsDelivr 一键安装直链（推荐，零 Node）→ ② Releases 下载稳定版 → ③ 源码构建（要改代码才需要）。
+- **控制台 API 速查补 `zhs.learn()` / `zhs.gotoLesson(n)`**：v0.6.64 加的自动学习引擎 API 一直没进速查表，
+  功能宣称与文档不一致（与 M2 dead code 同类病），现已补齐。
+- **发布首个 GitHub Release v0.6.66**（含 `dist/zhihuishu-helper.user.js` 附件 + 安装说明 + 四条红线）。
+  此前 `latestRelease` 为 null，仓库没有稳定版下载入口。
+
 ---
 
 ## [0.6.65] - 2026-10-25

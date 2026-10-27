@@ -90,7 +90,17 @@ Round 7: 收尾   → 全部看完弹总结卡片，自动停止（真看完了�
 
 ### 安装
 
-**路线 A：装好即用（需要 Node，构建一次）**
+> 先装 [Tampermonkey](https://www.tampermonkey.net/)（Chrome / Edge / Firefox 都行），下面三条路线任选一条。
+
+**路线 A：一键安装（推荐 · 不用装 Node）**
+
+打开 [jsDelivr 一键安装直链](https://cdn.jsdelivr.net/gh/huanweide/zhihuishu-helper@master/dist/zhihuishu-helper.user.js) → 油猴会自动弹出安装确认 → 点「安装」完事。
+
+**路线 B：下载稳定版（不用装 Node）**
+
+到 [Releases](https://github.com/huanweide/zhihuishu-helper/releases) 下载 `zhihuishu-helper.user.js` 附件，把文件拖进浏览器即装。
+
+**路线 C：从源码构建（要改代码才需要）**
 
 ```bash
 git clone https://github.com/huanweide/zhihuishu-helper.git
@@ -101,10 +111,6 @@ node build.js          # 生成 dist/zhihuishu-helper.user.js
 
 然后用 Tampermonkey 打开 `dist/zhihuishu-helper.user.js` 即装。完整图文见 [安装说明](docs/20-使用说明.md)。
 
-**路线 B：三步装好**
-
-① 装 [Tampermonkey](https://www.tampermonkey.net/) 浏览器插件 → ② `git clone` 后 `node build.js` 生成 `dist/zhihuishu-helper.user.js` → ③ 用 Tampermonkey 打开该文件即装。
-
 ### 一次性跑起来
 
 ```bash
@@ -112,7 +118,7 @@ node build.js
 ```
 
 ```
-=== 构建 zhihuishu-helper v0.6.65 ===
+=== 构建 zhihuishu-helper v0.6.66 ===
   + 00-config.js
   + 01-util.js
   ...
@@ -120,26 +126,27 @@ node build.js
 [ok] 已生成 dist/zhihuishu-helper.user.js（20 模块）
 ```
 
-### 自检（改完代码必跑的四条门禁）
+### 自检（改完代码必跑的门禁）
 
 ```bash
 node build.js                    # ① 构建：src/*.js 按序拼装 → dist/*.user.js
 node tools/check-dist-fresh.js   # ② 校验 dist 与 src 一致（漏 build 会被挡下）
 node test/run.js                 # ③ 逻辑单测（jsdom + vm 模块注入）
 node test/screenshot.js          # ④ 截屏测试（需真机 Chrome，本地手动跑）
+node tools/check-docs-consistency.js --tests 721   # ⑤ 文档一致性（版本号/测试数不漂移，CI 强制）
 ```
 
 ```bash
 $ node tools/check-dist-fresh.js
-[ok] dist 与 src 一致（20 模块, v0.6.65）
+[ok] dist 与 src 一致（20 模块, v0.6.66）
 
 $ node test/run.js
 ==================================================
-通过 717 / 失败 0
+通过 721 / 失败 0
 全部通过 ✓
 ```
 
-> 第 ④ 条依赖真机浏览器，因此**不在 CI 里跑**；它的定位是「真机视觉验证」，不是门禁。CI 只跑 ①②③，这也是仓库 CI 徽章的真实依据。
+> 第 ④ 条依赖真机浏览器，因此**不在 CI 里跑**；它的定位是「真机视觉验证」，不是门禁。CI 跑 ①②③⑤——第 ⑤ 条会用实跑出来的通过数校验 README 上的数字，杜绝「版本升了、文档还写上一版」的漂移（实测已犯过两次）。这也是 CI 徽章的真实依据。
 
 ---
 
@@ -152,6 +159,8 @@ $ node test/run.js
 | `zhs.start()` | 启动主循环 |
 | `zhs.stop()` | 停下所有自动化动作 |
 | `zhs.next()` | 手动跳到下一个未完成章节 |
+| `zhs.learn()` | 手动触发「找下一门没学完的课」 |
+| `zhs.gotoLesson(3)` | 直接跳到第 3 个课时 |
 | `zhs.stats()` | 课程完成统计 |
 | `zhs.logs()` | 全部日志（数组） |
 | `zhs.clearResume()` | 清除本课程的续播记录 |
@@ -261,7 +270,7 @@ ZHS.Solver.channels.push({
 - [x] 断点续播（跨 iframe / 跨页面 / 断网恢复）
 - [x] 双通道答题（题库 + LLM）+ 离线启发式第三层
 - [x] 全自动学习引擎（进课程中心自动选课、学完自动跳下一门）
-- [x] 717 项逻辑单测 + 70 项截屏测试
+- [x] 721 项逻辑单测 + 70 项截屏测试
 - [x] 五套页面版本适配 + 结构兜底扫描
 - [ ] 更多平台的题库协议适配（目前仅 `TikuAdapter` 标准协议）
 - [ ] 面板多主题 / 自定义配色

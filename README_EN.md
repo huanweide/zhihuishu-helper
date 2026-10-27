@@ -87,7 +87,17 @@ Round 7: Finish   → summary card when everything is done, then auto-stop
 
 ### Install
 
-**Route A — build once (Node required)**
+> Install [Tampermonkey](https://www.tampermonkey.net/) first, then pick any route below.
+
+**Route A — one-click (recommended · no Node needed)**
+
+Open the [jsDelivr install link](https://cdn.jsdelivr.net/gh/huanweide/zhihuishu-helper@master/dist/zhihuishu-helper.user.js) → Tampermonkey prompts to install → click **Install**.
+
+**Route B — download a stable build (no Node needed)**
+
+Grab `zhihuishu-helper.user.js` from [Releases](https://github.com/huanweide/zhihuishu-helper/releases) and drag it into your browser.
+
+**Route C — build from source (only if you modify code)**
 
 ```bash
 git clone https://github.com/huanweide/zhihuishu-helper.git
@@ -97,10 +107,6 @@ node build.js          # produces dist/zhihuishu-helper.user.js
 ```
 
 Then open `dist/zhihuishu-helper.user.js` with Tampermonkey to install.
-
-**Route B — three steps**
-
-① Install [Tampermonkey](https://www.tampermonkey.net/) → ② `git clone`, then `node build.js` → ③ open the generated `dist/zhihuishu-helper.user.js` with Tampermonkey.
 
 The script auto-activates on `zhihuishu.com` / `zhihuishu.com.cn` / `zhida` course pages.
 
@@ -113,7 +119,7 @@ node build.js
 ```
 
 ```
-=== building zhihuishu-helper v0.6.65 ===
+=== building zhihuishu-helper v0.6.66 ===
   + 00-config.js
   + 01-util.js
   ...
@@ -132,11 +138,11 @@ node test/screenshot.js          # ④ screenshot tests (needs real Chrome — l
 
 ```bash
 $ node tools/check-dist-fresh.js
-[ok] dist matches src (20 modules, v0.6.65)
+[ok] dist matches src (20 modules, v0.6.66)
 
 $ node test/run.js
 ==================================================
-passed 717 / failed 0
+passed 721 / failed 0
 all passed ✓
 ```
 
@@ -260,7 +266,7 @@ ZHS.Solver.channels.push({
 - [x] Breakpoint resume (cross-iframe / cross-page / survives network loss)
 - [x] Dual-channel answering (bank + LLM) + offline heuristic third tier
 - [x] Fully-automatic learning engine (auto-pick courses, auto-hop when one finishes)
-- [x] 717 logic tests + 70 screenshot tests
+- [x] 721 logic tests + 70 screenshot tests
 - [x] 5 page-version adapters + structural fallback scan
 - [ ] More question-bank protocols (currently only the `TikuAdapter` standard protocol)
 - [ ] Panel themes / custom color schemes

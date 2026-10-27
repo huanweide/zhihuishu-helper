@@ -22,7 +22,7 @@ npm install          # 仅 jsdom / puppeteer-core，用于逻辑单测与截屏�
 src/*.js      20 个模块，按文件名排序拼装（见下方"加模块"）
 build.js      拼装入口；拼装规则单一真源在 tools/lib/bundle.js
 tools/        check-dist-fresh（产物新鲜度）、make-install-page 等
-test/run.js   逻辑单测（jsdom，当前 717 断言）
+test/run.js   逻辑单测（jsdom，当前 721 断言）
 test/screenshot.js  真机截屏测试（需本机 Chrome/Edge）
 dist/         构建产物，**不要手改**，它由 src 重算
 docs/         侦察报告、技术方案、踩坑记录、使用说明
@@ -48,7 +48,8 @@ docs/         侦察报告、技术方案、踩坑记录、使用说明
 ```bash
 node build.js                  # ① 拼装 dist
 node tools/check-dist-fresh.js # ② 校验 dist 与 src 一致（漏 build 会被挡下）
-node test/run.js               # ③ 逻辑单测必须全绿（当前 717 通过 / 0 失败）
+node test/run.js               # ③ 逻辑单测必须全绿（当前 721 通过 / 0 失败）
+node tools/check-docs-consistency.js --tests 721   # ④ 文档一致性（CI 强制）
 node test/screenshot.js        # ④ 可选：真机截屏（需本机浏览器）
 ```
 
