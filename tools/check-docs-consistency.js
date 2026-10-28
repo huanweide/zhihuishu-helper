@@ -3,7 +3,7 @@
  * 文档一致性门禁（第 ⑤ 条）
  *
  * 修的是「版本号/测试数漂移」这类反复复发的文档失真：
- * package.json 升了版本，CHANGELOG 写了，但 README / README_EN / PROJECT_MAP /
+ * package.json 升了版本，CHANGELOG 写了，但 README / PROJECT_MAP /
  * CONTRIBUTING / PR 模板还停在上一版 —— 实测已犯过两次（v0.6.65 漏改 677→706、
  * v0.6.66 漏改 717→721）。手工同步靠自觉，所以交给机器。
  *
@@ -26,20 +26,17 @@ const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 // CONTRIBUTING.md 不在此列：贡献指南讲的是流程，不需要跟着版本号走。
 const VERSION_FILES = [
   'README.md',
-  'README_EN.md',
   'docs/PROJECT_MAP.md',
   'CHANGELOG.md',
 ];
 
 // —— ② 首屏文档严禁残留旧版本号（历史陈述留在 docs/ 里，不进这条严检） ——
-const STRICT_NO_STALE = ['README.md', 'README_EN.md'];
+const STRICT_NO_STALE = ['README.md'];
 
 // —— ③ 测试数出现的位置（只取「当前状态」陈述，不含 docs/40 的历史演进表） ——
 const TEST_COUNT_PATTERNS = [
   ['README.md', /通过\s+(\d+)\s*\/\s*失败/g],
   ['README.md', /(\d+)\s*项逻辑单测/g],
-  ['README_EN.md', /passed\s+(\d+)\s*\/\s*failed/g],
-  ['README_EN.md', /(\d+)\s+logic tests/g],
   ['docs/PROJECT_MAP.md', /(\d+)\s*通过\s*\/\s*0\s*失败/g],
   ['CONTRIBUTING.md', /当前\s+(\d+)\s*(?:断言|通过)/g],
   ['.github/PULL_REQUEST_TEMPLATE.md', /当前基线：(\d+)\s*通过/g],

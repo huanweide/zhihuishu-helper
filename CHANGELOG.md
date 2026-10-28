@@ -4,6 +4,10 @@
 
 ---
 
+> 📌 **文档语言说明**：本仓库面向**中文受众**，默认仅维护**中文 README（即根目录 `README.md`）**。
+> 已移除英文版 `README_EN.md` —— 不再默认生成/维护英文文档，避免双份同步漂移与无谓负担。
+> GitHub 仓库页**默认渲染 `README.md`（中文）**，访客开箱即见中文，无需切换。
+
 ## [0.6.67] - 2026-10-28
 > round-58：**人类化与防检测 —— 在场感知 + 拟人化节奏 + 反暴力重试**
 
@@ -29,7 +33,7 @@
 
 ### 门禁
 - `node build.js` → 21 模块 v0.6.67；`node tools/check-dist-fresh.js` 一致；`node test/run.js` → **735 通过 / 0 失败**（720 + 新增 14，含 dist 校验项）
-- **文档（开源接受帮助）**：README / README_EN 顶部新增「用途与红线（开箱前必读）」速览（明确用途 ✅ + 不要用/红线 ⛔）；强化「开源协作 / 接受帮助」段（列出需要的帮助类型）；新增 `feature_request` 模板与 `CODE_OF_CONDUCT.md`；CONTRIBUTING 补「我们能一起做的事」并接入行为准则。
+- **文档（开源接受帮助）**：README 顶部新增「用途与红线（开箱前必读）」速览（明确用途 ✅ + 不要用/红线 ⛔）；强化「开源协作 / 接受帮助」段（列出需要的帮助类型）；新增 `feature_request` 模板与 `CODE_OF_CONDUCT.md`；CONTRIBUTING 补「我们能一起做的事」并接入行为准则。
 
 ---
 
@@ -57,14 +61,14 @@
 - `node build.js` → 20 模块 v0.6.66；`node tools/check-dist-fresh.js` 一致；`node test/run.js` → **721 通过 / 0 失败**（连跑稳定，非 flaky）
 
 ### 补记（同版本内 · 文档漂移与呈现收尾）
-- **修文档漂移（11 处）**：上一轮只同步了 `package.json` + `CHANGELOG`，README / README_EN / `docs/PROJECT_MAP.md` /
+- **修文档漂移（11 处）**：上一轮只同步了 `package.json` + `CHANGELOG`，README / `docs/PROJECT_MAP.md` /
   CONTRIBUTING / PR 模板 / `docs/40-开发者笔记.md` 仍停在 **v0.6.65 + 717**（实测 0.6.66 / 721）。
   这是同类问题第二次复发（v0.6.65 才修过 677→706），故本条连同下面的新门禁一起收口。
-- **新增第 ⑤ 条门禁 `tools/check-docs-consistency.js`**：校验版本号四件套（README / README_EN / PROJECT_MAP / CHANGELOG）
+- **新增第 ⑤ 条门禁 `tools/check-docs-consistency.js`**：校验版本号三件套（README / PROJECT_MAP / CHANGELOG）
   是否都提到当前版本、首屏是否残留旧版本号、以及各文档里的测试数是否自相矛盾；
   传 `--tests <n>` 时再校验与实跑数字一致。CI 里把 `test/run.js` 实跑出的通过数喂给它 ——
   **README 上的测试数从此由机器兜底**。已做「先红后绿」判别验证：注入 717 必红，恢复必绿。
-- **README / README_EN 安装区重写**：原先只给「装 Node → clone → build」一条路，
+- **README 安装区重写**：原先只给「装 Node → clone → build」一条路，
   普通用户来仓库的第一诉求是「装上」而不是「构建」，属真实转化损失。
   现改为：① jsDelivr 一键安装直链（推荐，零 Node）→ ② Releases 下载稳定版 → ③ 源码构建（要改代码才需要）。
 - **控制台 API 速查补 `zhs.learn()` / `zhs.gotoLesson(n)`**：v0.6.64 加的自动学习引擎 API 一直没进速查表，
