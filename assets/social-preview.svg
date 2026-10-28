@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="智慧树助手 zhihuishu-helper">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08131c"/>
+      <stop offset="0.55" stop-color="#0d2033"/>
+      <stop offset="1" stop-color="#05080e"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#13293d"/>
+      <stop offset="1" stop-color="#0b1a29"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 背景 -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <ellipse cx="1080" cy="80" rx="520" ry="300" fill="url(#glow)"/>
+
+  <!-- 左上：logo + 眉题 -->
+  <g transform="translate(96,96)" fill="none" stroke="url(#ring)" stroke-width="9" stroke-linecap="round">
+    <path d="M -30 -16 A 35 35 0 1 1 -12 30"/>
+    <path d="M -12 46 L -12 30 L -28 30"/>
+  </g>
+  <path transform="translate(96,96)" d="M -7 -14 L 15 0 L -7 14 Z" fill="url(#ring)"/>
+  <text x="150" y="106" fill="#7dd3fc" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="24" font-weight="700" letter-spacing="4">TAMPERMONKEY 油猴脚本</text>
+
+  <!-- 主标题 -->
+  <text x="92" y="240" fill="#e8f2ff" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="88" font-weight="800">智慧树<tspan fill="#4ade80">网课助手</tspan></text>
+  <text x="98" y="292" fill="#b9cde4" font-family="Consolas, Menlo, monospace" font-size="30">zhihuishu-helper</text>
+
+  <!-- 价值主张 -->
+  <text x="96" y="366" fill="#dcebfa" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="34">自动播放 · 断点续播 · AI 自动答题</text>
+  <text x="96" y="422" fill="#4ade80" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="36" font-weight="700">答不出来宁可留空，绝不替你瞎蒙</text>
+
+  <!-- 能力胶囊 -->
+  <g font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="24" fill="#a5d8ff">
+    <rect x="96" y="462" width="150" height="52" rx="26" fill="#38bdf81a" stroke="#2b5170"/>
+    <text x="121" y="496">自动播放</text>
+    <rect x="262" y="462" width="150" height="52" rx="26" fill="#38bdf81a" stroke="#2b5170"/>
+    <text x="287" y="496">断点续播</text>
+    <rect x="428" y="462" width="140" height="52" rx="26" fill="#38bdf81a" stroke="#2b5170"/>
+    <text x="461" y="496">AI 答题</text>
+    <rect x="584" y="462" width="196" height="52" rx="26" fill="#38bdf81a" stroke="#2b5170"/>
+    <text x="609" y="496">账号不出本机</text>
+  </g>
+
+  <!-- 底部 meta -->
+  <text x="96" y="586" fill="#6b8299" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="24">20 模块 · 721 项逻辑单测全绿 · CI 门禁 · MIT 许可</text>
+
+  <!-- 右侧：产品悬浮面板示意（视觉证据） -->
+  <g transform="translate(852,140)">
+    <rect x="0" y="0" width="332" height="330" rx="16" fill="url(#panel)" stroke="#2b5170" stroke-width="2"/>
+    <rect x="0" y="0" width="332" height="46" rx="16" fill="#0e2133"/>
+    <circle cx="26" cy="23" r="6" fill="#4ade80"/>
+    <text x="44" y="31" fill="#e8f2ff" font-family="Microsoft YaHei, sans-serif" font-size="20" font-weight="700">智慧树助手 · 面板</text>
+
+    <!-- 主按钮 -->
+    <rect x="22" y="66" width="288" height="44" rx="10" fill="#4ade8022" stroke="#4ade80"/>
+    <text x="112" y="95" fill="#4ade80" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="700">▶ 启动自动学习</text>
+
+    <!-- 次按钮 -->
+    <rect x="22" y="120" width="288" height="40" rx="10" fill="#38bdf81a" stroke="#2b5170"/>
+    <text x="86" y="147" fill="#a5d8ff" font-family="Microsoft YaHei, sans-serif" font-size="19">🎯 找下一门没学完的课</text>
+
+    <!-- 进度 -->
+    <text x="22" y="196" fill="#8aa4bd" font-family="Microsoft YaHei, sans-serif" font-size="17">课程体检 · 完成度 75%</text>
+    <rect x="22" y="208" width="288" height="12" rx="6" fill="#12293e"/>
+    <rect x="22" y="208" width="216" height="12" rx="6" fill="url(#ring)"/>
+
+    <!-- 日志行 -->
+    <g font-family="Consolas, Menlo, monospace" font-size="16.5" fill="#7d97b0">
+      <text x="22" y="252">✓ 已恢复到上次位置 12:40</text>
+      <text x="22" y="280">✓ 弹题：命中题库 → 校验通过</text>
+      <text x="22" y="308">→ 本节结束，自动切下一节</text>
+    </g>
+  </g>
+</svg>
