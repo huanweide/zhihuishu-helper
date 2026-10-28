@@ -16,7 +16,27 @@
 > **Auto-flow**: open course page → scan the syllabus → mute + speed + anti-pause playback → on quiz: resolve via `bank → LLM → heuristic` → fill and verify → auto-advance → summary card when done
 > `detect → play → answer → advance → finish`
 
-[30-Second Demo](#-30-second-demo) · [What It Does](#-what-it-does) · [Features](#-features) · [Quick Start](#-quick-start) · [Console API](#-console-api) · [Architecture](#-architecture) · [Add a Channel](#-add-your-own-solving-channel) · [Roadmap](#-roadmap) · [Security Boundary](#-security-boundary) · [License](#-license)
+[30-Second Demo](#-30-second-demo) · [Intended Use & Prohibited](#-intended-use--prohibited-read-before-using) · [What It Does](#-what-it-does) · [Features](#-features) · [Quick Start](#-quick-start) · [Console API](#-console-api) · [Architecture](#-architecture) · [Add a Channel](#-add-your-own-solving-channel) · [Roadmap](#-roadmap) · [Open Collaboration](#-open-collaboration-we-welcome-help) · [Security Boundary](#-security-boundary) · [License](#-license)
+
+---
+
+## 📌 Intended Use & Prohibited (read before using)
+
+**What this script is for (✅)**
+- **Assist everyday study** — answering help for regular homework / chapter exercises / unit tests, plus autoplay, breakpoint resume, and automatic in-video quiz handling.
+- **Full auto-pilot (only when you step away)** — when you're not at the computer it resumes playback, picks courses in the hub, and hops to the next one — like "unattended托管".
+- **Human-like anti-detection** — yield-to-user presence (it does nothing while you're present), randomized think delays, and a jittered main loop, lowering the risk of being flagged as a bot.
+- **Hands it back to you when unsure** — if none of the three channels (bank / LLM / heuristic) resolves it, it leaves it blank for a human; never guesses.
+
+**⛔ Do NOT / red lines (violating them may get your account flagged or your PR rejected)**
+- **Do NOT use it for proctored exams.** Exam pages are strictly passive: it answers only when *you* open that page; it never navigates there and never answers a proctored paper on your behalf.
+- **Do NOT minimize the browser window** (shrinking is fine). Minimizing throttles timers to ~once per minute, freezing the main loop and voiding progress.
+- **Do NOT set speed above 1.8.** Beyond that the platform flags it as anomalous and stops recording progress.
+- **Do NOT expect it to act on your behalf while you are present.** While you're there it deliberately yields — no skipping, no answering — this is the core of anti-detection; control always stays with you.
+- **Do NOT hand-edit `dist/` or expect it to bypass captchas.** Hand-edits fail the consistency check and get overwritten on update; captchas are always handed to a human.
+- **Do NOT commercialize, redistribute, or hand your account / API key to any third party.** The script runs 100% locally and never collects any credentials.
+
+> Full boundaries, known limitations, and developer red lines are in [Security Boundary](#-security-boundary). The four untouchable developer red lines are in [CONTRIBUTING](CONTRIBUTING.md).
 
 ---
 
@@ -232,6 +252,7 @@ The default engine is a **2-second main loop over `detect → play → answer �
 | Filler | `src/12-filler.js` | write into controls and read back to verify |
 | Answer orchestration | `src/13-answerer.js` | collect → solve → fill as one flow |
 | Stats | `src/14-stats.js` | answer records + study-time stats |
+| Presence | `src/15-presence.js` | user-presence detection & yield-to-user base (activity/focus listeners) |
 
 ---
 
@@ -309,11 +330,19 @@ Also: personal study and research only; commercial use and redistribution are pr
 | [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md) | Module map (21 modules) + gate commands |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
-## 🎬 Contributing
+## 🤝 Open Collaboration — We Welcome Help
 
-Issues and PRs are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) — it covers the module layout, the four gates, and the four red lines this project never crosses.
+**This project welcomes all constructive help and takes every contribution seriously.** Whether you're filing a bug, proposing a feature, writing code, or improving docs, open an issue to talk first — that's far more likely to be accepted than dropping a big PR out of nowhere.
 
-When filing a bug, include the script version, the page-version code (wisdom / fusion / hike / legacy / card2025), and the panel's log tab contents.
+**We especially need these kinds of help 🤝**
+- 🐛 **Bug reports (with logs)** — include the script version, the page-version code (wisdom / fusion / hike / legacy / card2025), and the panel's "Logs" tab contents; a [bug-report template](.github/ISSUE_TEMPLATE/bug_report.md) is ready.
+- 💡 **Feature / improvement ideas** — start from real usage pain points; open an issue tagged `enhancement`; a [feature-request template](.github/ISSUE_TEMPLATE/feature_request.md) is ready.
+- 🧩 **Adapt new page versions** — when Zhihuishu redesigns, preset selectors may break; help add adapters or structural fallbacks.
+- 🔌 **New solving channels** — plug in your own question bank / campus answer source (see [Add a Channel](#-add-your-own-solving-channel)), remembering the hard rule: return `null` when unsure, never guess.
+- 📝 **Docs / translation** — make the usage guide and pitfall notes clearer, or help with the English docs.
+- ✅ **Tests** — add more discriminative tests to `test/run.js` guarding the red lines (never seek / never guess / yield-to-user).
+
+Before you start, read [CONTRIBUTING.md](CONTRIBUTING.md) — it covers the module layout, the four gates, and the four untouchable red lines (especially "never auto-jump to exam pages" and "never guess answers for the user"). By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## 🎬 Disclaimer
 

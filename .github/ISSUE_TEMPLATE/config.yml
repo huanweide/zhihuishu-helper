@@ -5,7 +5,7 @@ contact_links:
     about: 安装、配置、常见问题先看这里
   - name: 模块地图 / Module map
     url: https://github.com/huanweide/zhihuishu-helper/blob/master/docs/PROJECT_MAP.md
-    about: 想改代码先看这份地图，20 个模块按链路排列
+    about: 想改代码先看这份地图，21 个模块按链路排列
   - name: 功能建议 / Feature request
     url: https://github.com/huanweide/zhihuishu-helper/issues/new?labels=enhancement
     about: 新功能建议直接开 blank issue 并打 enhancement 标签

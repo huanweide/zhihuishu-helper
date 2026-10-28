@@ -29,6 +29,7 @@
 
 ### 门禁
 - `node build.js` → 21 模块 v0.6.67；`node tools/check-dist-fresh.js` 一致；`node test/run.js` → **735 通过 / 0 失败**（720 + 新增 14，含 dist 校验项）
+- **文档（开源接受帮助）**：README / README_EN 顶部新增「用途与红线（开箱前必读）」速览（明确用途 ✅ + 不要用/红线 ⛔）；强化「开源协作 / 接受帮助」段（列出需要的帮助类型）；新增 `feature_request` 模板与 `CODE_OF_CONDUCT.md`；CONTRIBUTING 补「我们能一起做的事」并接入行为准则。
 
 ---
 

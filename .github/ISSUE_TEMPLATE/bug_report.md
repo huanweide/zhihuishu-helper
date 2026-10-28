@@ -20,7 +20,7 @@ assignees: ''
 
 | 项 | 值 |
 |---|---|
-| 脚本版本 | e.g. v0.6.65（面板底部或脚本头部 `@version`） |
+| 脚本版本 | e.g. v0.6.67（面板底部或脚本头部 `@version`） |
 | 油猴版本 | e.g. Tampermonkey 5.x |
 | 浏览器 | e.g. Edge 130 / Chrome 131 |
 | 页面 URL | e.g. `https://studyvideoh5.zhihuishu.com/...` |
