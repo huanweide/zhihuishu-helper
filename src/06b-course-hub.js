@@ -831,6 +831,12 @@
         // 首次自动选课打 info 日志 + 面板提示，让用户看得见脚本在做什么。
         // 红线不受影响：只作用于听课链，绝不碰作业/考试页（06c-exam FORBIDDEN）。
         if (ZHS.config.autoLearn) {
+          // round-58：用户在场 → 让权，不自动点课（你在看课程中心，不该被代劳）。
+          // 离场（隐藏标签 / 静默超时）才接管 —— 与你「离机托管」的真实场景一致。
+          if (ZHS.Presence && ZHS.Presence.isUserPresent()) {
+            ZHS.Log.info('[课程中心] 你在场，已让权：不自动选课，请手动点「找下一门课」，或切走后自动接管');
+            return;
+          }
           ZHS.Log.info('[课程中心] 自动学习已开启，正在选择未学完课程开始学习');
           if (ZHS.panel) ZHS.panel.alert('自动学习：正在进入未学完的课程…', 'info', 4000);
           await runOnHub('auto-learn');

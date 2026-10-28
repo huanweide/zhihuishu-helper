@@ -19,10 +19,10 @@ npm install          # 仅 jsdom / puppeteer-core，用于逻辑单测与截屏�
 ## 2. 项目结构
 
 ```
-src/*.js      20 个模块，按文件名排序拼装（见下方"加模块"）
+src/*.js      21 个模块，按文件名排序拼装（见下方"加模块"）
 build.js      拼装入口；拼装规则单一真源在 tools/lib/bundle.js
 tools/        check-dist-fresh（产物新鲜度）、make-install-page 等
-test/run.js   逻辑单测（jsdom，当前 721 断言）
+test/run.js   逻辑单测（jsdom，当前 735 断言）
 test/screenshot.js  真机截屏测试（需本机 Chrome/Edge）
 dist/         构建产物，**不要手改**，它由 src 重算
 docs/         侦察报告、技术方案、踩坑记录、使用说明
@@ -40,6 +40,7 @@ docs/         侦察报告、技术方案、踩坑记录、使用说明
 | 入口 | `07-main` | 启动、运行时 API（`window.zhs`） |
 | 答题链路 | `08-questions` `09-bank` `10-llm` `11-solver` `11b-heuristic` `12-filler` `13-answerer` | 取题→题库/LLM→求解→启发式→回填→编排 |
 | 统计 | `14-stats` | 学习记录 |
+| 在场感知 | `15-presence` | 用户在场检测与让权基座（活动/聚焦态监听） |
 
 ## 3. 开发流程与门禁（**四条必须全绿**）
 
@@ -49,8 +50,8 @@ docs/         侦察报告、技术方案、踩坑记录、使用说明
 node build.js                  # ① 拼装 dist
 node tools/check-dist-fresh.js # ② 校验 dist 与 src 一致（漏 build 会被挡下）
 node tools/check-test-registry.js    # ③ 异步测试组登记检查（漏 await = 假绿）
-node test/run.js                     # ④ 逻辑单测必须全绿（当前 721 通过 / 0 失败）
-node tools/check-docs-consistency.js --tests 721   # ⑤ 文档一致性（CI 强制）
+node test/run.js                     # ④ 逻辑单测必须全绿（当前 735 通过 / 0 失败）
+node tools/check-docs-consistency.js --tests 735   # ⑤ 文档一致性（CI 强制）
 node test/screenshot.js        # ④ 可选：真机截屏（需本机浏览器）
 ```
 

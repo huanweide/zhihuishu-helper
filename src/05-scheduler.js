@@ -92,6 +92,8 @@
       }
       this._halted = false;
       ZHS.state.running = true;
+      // round-58：在场感知监听常驻挂载（幂等）。用户在场=让权、离场=接管的第一手信号。
+      try { if (ZHS.Presence && ZHS.Presence.bind) ZHS.Presence.bind(); } catch (e) {}
       // round-34：主循环启动时同步拉起防卡死看门狗（停止时由 stop() 一并清理定时器）
       try { if (ZHS.Guard && ZHS.Guard.start) ZHS.Guard.start(); } catch (e) {}
 
@@ -122,7 +124,7 @@
       // 原先 _transientReloads 全仓库只增不减，用满 3 次后即便用户手动重启也救不回来，
       // 第 4 次故障起永久失去自愈能力。手动启动 = 用户明确要求重来，理应重新给名额。
       if (!resume) this._transientReloads = 0;
-      this._timer = setInterval(() => this.tick(), LOOP_INTERVAL);
+      this._timer = setTimeout(() => this._loop(), LOOP_INTERVAL);
       this._initDialogObserver();   // round-31：弹题实时监听常驻挂载
       if (!resume) ZHS.Log.info('主循环已启动');
       // round-16【P3】：自愈恢复时静默体检 —— 只打日志、不弹「开始自动学习」提示。
@@ -235,7 +237,7 @@
      */
     stop(why) {
       if (this._timer) {
-        clearInterval(this._timer);
+        clearTimeout(this._timer);
         this._timer = null;
       }
       this._disposeDialogObserver();   // round-31：停主循环时一并卸载弹题监听
@@ -323,6 +325,39 @@
       } finally {
         this._busy = false;
       }
+    },
+
+    /**
+     * round-58：是否在「让权」态（用户在场 → 不代劳）。
+     * 调度器所有自动动作（切课 / 跳下一节 / 自动答弹题）都先问它。
+     * @returns {boolean}
+     */
+    _shouldYield() {
+      try { return !!(ZHS.Presence && ZHS.Presence.shouldYield()); } catch (e) { return false; }
+    },
+
+    /** 让权态的节流日志：用户在场时每 30s 最多提示一次，避免刷屏 */
+    _logYield(hint) {
+      const now = Date.now();
+      if (this._lastYieldLogAt && now - this._lastYieldLogAt < 30000) return;
+      this._lastYieldLogAt = now;
+      ZHS.Log.info('你在场，脚本已让权（' + (hint || '暂不自动推进') + '）；切走/离开 ' + (ZHS.config.userIdleSec || 90) + ' 秒后自动接管');
+    },
+
+    /**
+     * round-58：带随机抖动的循环驱动（替代固定 setInterval）。
+     * 完美 2 秒周期本身就是机器指纹；±0.5s 抖动让节拍不规则，更像真人操作间隙。
+     * 弹题检测仍由 MutationObserver 即时唤醒，与循环抖动无关，不会漏检。
+     */
+    _loop() {
+      if (!this._timer) return;
+      const self = this;
+      Promise.resolve(this.tick()).catch((e) => ZHS.Log.error('主循环异常：' + (e && e.message)))
+        .finally(() => {
+          if (!self._timer) return;     // 已被 stop 清掉
+          const jitter = Math.round(Math.random() * 1000 - 500);
+          self._timer = setTimeout(() => self._loop(), Math.max(800, LOOP_INTERVAL + jitter));
+        });
     },
 
     async _tickInner() {
@@ -505,7 +540,8 @@
             return;
           }
           this._navAwayNotified = false;
-          if (cfg.autoNext) await this.gotoNext('当前节点无视频');
+          if (cfg.autoNext && !this._shouldYield()) await this.gotoNext('当前节点无视频');
+          else if (cfg.autoNext && this._shouldYield()) this._logYield('不自动切课');
           this._noVideoTicks = 0;
         }
         return;
@@ -541,7 +577,8 @@
       }
 
       if (ZHS.Player.atEnd(video)) {
-        if (cfg.autoNext) await this.onLessonEnd(video);
+        if (cfg.autoNext && !this._shouldYield()) await this.onLessonEnd(video);
+        else if (cfg.autoNext && this._shouldYield()) this._logYield('本节点已结束，等你手动切下一节');
       }
     },
 
@@ -565,6 +602,15 @@
         ZHS.state.dialogActive = true;
         ZHS.state.dialogPhase = 'detected';
         ZHS.state.dialogLastAt = Date.now();
+
+        // round-58：在场让权 —— 用户在场时，弹题也不自动答、不自动关，全部交给用户。
+        // 你没切走我就不答下一道题、不抢你的方向盘；离场（隐藏标签 / 静默超时）才接管。
+        if (this._shouldYield()) {
+          ZHS.state.dialogPhase = 'pending-human';
+          ZHS.Log.debug('弹题在场让权：等你手动作答 / 关闭');
+          if (ZHS.Player) ZHS.Player.resetHumanPause();   // 别让「模拟离座」幽灵态挡住你关弹窗后的恢复
+          return;
+        }
 
         if (video && !video.paused) video.pause();
         if (ZHS.Player) ZHS.Player.resetSync();   // 弹题结束后要重新对一次账

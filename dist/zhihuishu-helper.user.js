@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.66
+// @version      0.6.67
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -38,7 +38,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.66";
+window.__ZHS_BUILD__.version = "0.6.67";
 
 /* ===== 00-config.js ===== */
 /**
@@ -138,6 +138,15 @@ window.__ZHS_BUILD__.version = "0.6.66";
     // 选项不一致的题绝不会误命中（选项串参与判等）。
     fuzzyCache: true,
 
+    // 在场感知 / 人类化（round-58）：用户在场时让权，离开/挂机才接管
+    // —— 真人在场却脚本代劳，是最扎眼的自动化指纹；只在你离开时动才最像挂机托管。
+    yieldToUser: true,   // 总开关：用户在场即让权（不抢答/不抢切课）
+    userIdleSec: 90,     // 静默多久算「人走开了」（秒）；隐藏标签页一律算离场
+
+    // 答题前延迟（round-58）：改成随机区间，固定值=机器特征
+    answerDelayMin: 2,   // 答题前最短等待（秒）
+    answerDelayMax: 6,   // 答题前最长等待（秒）
+
     // 通用
     debug: true,         // 控制台详细日志
     panelVisible: true,  // 悬浮面板
@@ -191,7 +200,7 @@ window.__ZHS_BUILD__.version = "0.6.66";
     'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
     'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
     'heuristicFallback', 'humanPause', 'fuzzyCache',
-    'debug', 'panelVisible', 'guardOverlays',
+    'debug', 'panelVisible', 'guardOverlays', 'yieldToUser',
   ];
 
   /** 单值布尔归一化；undefined/null 返回 undefined（表示「不覆盖」） */
@@ -3276,6 +3285,8 @@ window.__ZHS_BUILD__.version = "0.6.66";
       }
       this._halted = false;
       ZHS.state.running = true;
+      // round-58：在场感知监听常驻挂载（幂等）。用户在场=让权、离场=接管的第一手信号。
+      try { if (ZHS.Presence && ZHS.Presence.bind) ZHS.Presence.bind(); } catch (e) {}
       // round-34：主循环启动时同步拉起防卡死看门狗（停止时由 stop() 一并清理定时器）
       try { if (ZHS.Guard && ZHS.Guard.start) ZHS.Guard.start(); } catch (e) {}
 
@@ -3306,7 +3317,7 @@ window.__ZHS_BUILD__.version = "0.6.66";
       // 原先 _transientReloads 全仓库只增不减，用满 3 次后即便用户手动重启也救不回来，
       // 第 4 次故障起永久失去自愈能力。手动启动 = 用户明确要求重来，理应重新给名额。
       if (!resume) this._transientReloads = 0;
-      this._timer = setInterval(() => this.tick(), LOOP_INTERVAL);
+      this._timer = setTimeout(() => this._loop(), LOOP_INTERVAL);
       this._initDialogObserver();   // round-31：弹题实时监听常驻挂载
       if (!resume) ZHS.Log.info('主循环已启动');
       // round-16【P3】：自愈恢复时静默体检 —— 只打日志、不弹「开始自动学习」提示。
@@ -3419,7 +3430,7 @@ window.__ZHS_BUILD__.version = "0.6.66";
      */
     stop(why) {
       if (this._timer) {
-        clearInterval(this._timer);
+        clearTimeout(this._timer);
         this._timer = null;
       }
       this._disposeDialogObserver();   // round-31：停主循环时一并卸载弹题监听
@@ -3507,6 +3518,39 @@ window.__ZHS_BUILD__.version = "0.6.66";
       } finally {
         this._busy = false;
       }
+    },
+
+    /**
+     * round-58：是否在「让权」态（用户在场 → 不代劳）。
+     * 调度器所有自动动作（切课 / 跳下一节 / 自动答弹题）都先问它。
+     * @returns {boolean}
+     */
+    _shouldYield() {
+      try { return !!(ZHS.Presence && ZHS.Presence.shouldYield()); } catch (e) { return false; }
+    },
+
+    /** 让权态的节流日志：用户在场时每 30s 最多提示一次，避免刷屏 */
+    _logYield(hint) {
+      const now = Date.now();
+      if (this._lastYieldLogAt && now - this._lastYieldLogAt < 30000) return;
+      this._lastYieldLogAt = now;
+      ZHS.Log.info('你在场，脚本已让权（' + (hint || '暂不自动推进') + '）；切走/离开 ' + (ZHS.config.userIdleSec || 90) + ' 秒后自动接管');
+    },
+
+    /**
+     * round-58：带随机抖动的循环驱动（替代固定 setInterval）。
+     * 完美 2 秒周期本身就是机器指纹；±0.5s 抖动让节拍不规则，更像真人操作间隙。
+     * 弹题检测仍由 MutationObserver 即时唤醒，与循环抖动无关，不会漏检。
+     */
+    _loop() {
+      if (!this._timer) return;
+      const self = this;
+      Promise.resolve(this.tick()).catch((e) => ZHS.Log.error('主循环异常：' + (e && e.message)))
+        .finally(() => {
+          if (!self._timer) return;     // 已被 stop 清掉
+          const jitter = Math.round(Math.random() * 1000 - 500);
+          self._timer = setTimeout(() => self._loop(), Math.max(800, LOOP_INTERVAL + jitter));
+        });
     },
 
     async _tickInner() {
@@ -3689,7 +3733,8 @@ window.__ZHS_BUILD__.version = "0.6.66";
             return;
           }
           this._navAwayNotified = false;
-          if (cfg.autoNext) await this.gotoNext('当前节点无视频');
+          if (cfg.autoNext && !this._shouldYield()) await this.gotoNext('当前节点无视频');
+          else if (cfg.autoNext && this._shouldYield()) this._logYield('不自动切课');
           this._noVideoTicks = 0;
         }
         return;
@@ -3725,7 +3770,8 @@ window.__ZHS_BUILD__.version = "0.6.66";
       }
 
       if (ZHS.Player.atEnd(video)) {
-        if (cfg.autoNext) await this.onLessonEnd(video);
+        if (cfg.autoNext && !this._shouldYield()) await this.onLessonEnd(video);
+        else if (cfg.autoNext && this._shouldYield()) this._logYield('本节点已结束，等你手动切下一节');
       }
     },
 
@@ -3749,6 +3795,15 @@ window.__ZHS_BUILD__.version = "0.6.66";
         ZHS.state.dialogActive = true;
         ZHS.state.dialogPhase = 'detected';
         ZHS.state.dialogLastAt = Date.now();
+
+        // round-58：在场让权 —— 用户在场时，弹题也不自动答、不自动关，全部交给用户。
+        // 你没切走我就不答下一道题、不抢你的方向盘；离场（隐藏标签 / 静默超时）才接管。
+        if (this._shouldYield()) {
+          ZHS.state.dialogPhase = 'pending-human';
+          ZHS.Log.debug('弹题在场让权：等你手动作答 / 关闭');
+          if (ZHS.Player) ZHS.Player.resetHumanPause();   // 别让「模拟离座」幽灵态挡住你关弹窗后的恢复
+          return;
+        }
 
         if (video && !video.paused) video.pause();
         if (ZHS.Player) ZHS.Player.resetSync();   // 弹题结束后要重新对一次账
@@ -5349,6 +5404,12 @@ window.__ZHS_BUILD__.version = "0.6.66";
       <div class="row"><label>拟人随机暂停</label><button class="sw" data-cfg="humanPause"></button></div>
       <div class="hint">默认开启。播放中偶尔（平均二十多分钟一次）像真人一样暂停几十秒再继续，
         这是平台官方客户端自身的节奏，能进一步降低「机器挂机」特征。暂停期间不计学习时长。</div>
+
+      <div class="sec-title">人类化与防检测</div>
+      <div class="hint">在场感知：你坐在电脑前（标签页聚焦且近期有活动），脚本主动让权——不抢答、不抢切课、不抢跳下一节；你切走或离开超过阈值，脚本再接管自动推进。这是最像「挂机托管」的真实场景，也最不像机器。</div>
+      <div class="row"><label>用户在场让权</label><button class="sw" data-cfg="yieldToUser"></button></div>
+      <div class="row"><label>离场静默阈值(秒)</label><input type="number" class="inp" data-cfg-num="userIdleSec" min="10" max="600" style="width:72px"></div>
+      <div class="hint">最近一次鼠标/键盘活动超过这个秒数，就视为「人走开了」，脚本自动接管。默认 90 秒。</div>
 
       <div class="row"><label>学完自动进下一门</label><button class="sw" data-cfg="autoCourseHop"></button></div>
       <div class="hint">本课学完自动去课程中心找下一门</div>
@@ -7131,6 +7192,12 @@ window.__ZHS_BUILD__.version = "0.6.66";
         // 首次自动选课打 info 日志 + 面板提示，让用户看得见脚本在做什么。
         // 红线不受影响：只作用于听课链，绝不碰作业/考试页（06c-exam FORBIDDEN）。
         if (ZHS.config.autoLearn) {
+          // round-58：用户在场 → 让权，不自动点课（你在看课程中心，不该被代劳）。
+          // 离场（隐藏标签 / 静默超时）才接管 —— 与你「离机托管」的真实场景一致。
+          if (ZHS.Presence && ZHS.Presence.isUserPresent()) {
+            ZHS.Log.info('[课程中心] 你在场，已让权：不自动选课，请手动点「找下一门课」，或切走后自动接管');
+            return;
+          }
           ZHS.Log.info('[课程中心] 自动学习已开启，正在选择未学完课程开始学习');
           if (ZHS.panel) ZHS.panel.alert('自动学习：正在进入未学完的课程…', 'info', 4000);
           await runOnHub('auto-learn');
@@ -10609,9 +10676,11 @@ ${question}${optionText}
         // eslint-disable-next-line no-await-in-loop
         const r = await this.solve(q);
         out.push(Object.assign({}, q, { result: r }));
-        // 每题之间小延迟，模拟人类思考
-        const d = Number(ZHS.config.answerDelay) || 0;
-        if (d > 0) await U.sleep(d * 1000 + Math.random() * 1000);
+        // round-58：题间随机间隔（取配置区间 + 抖动），避免「匀速刷题」机器特征
+        const cfg = ZHS.config;
+        const min = Number(cfg.answerDelayMin || 2);
+        const max = Number(cfg.answerDelayMax || 6);
+        await U.sleep((min + Math.random() * (max - min)) * 1000);
       }
       return out;
     },
@@ -11621,8 +11690,8 @@ ${question}${optionText}
         return;
       }
 
-      // 已确认选中 → 等待一会让平台登记作答，再关
-      await U.sleep(1200);
+      // 已确认选中 → 等待一会让平台登记作答，再关（随机停留，更像真人）
+      await U.randomDelay(1.0, 2.5);
       ZHS.Log.info('无通道兜底已选中选项 ' + (selectedIdx + 1) + '，等待后关闭弹窗');
       const ok = await this.closeDialogAndResume({ noChannel: true });
       if (ok) { this._answeredSig = sig || ''; ZHS.Log.info('无通道兜底选中后成功关闭，恢复播放'); return; }
@@ -11681,7 +11750,7 @@ ${question}${optionText}
         await U.sleep(700);
         if (ZHS.Filler.isChecked(el)) {
           ZHS.Log.info('选项 ' + (i + 1) + ' 已确认选中，等待平台登记后关闭');
-          await U.sleep(1200);
+          await U.randomDelay(1.0, 2.5);
           const ok = await this.closeDialogAndResume({ noChannel: true });
           if (ok) { this._answeredSig = sig || ''; return true; }
           this._pendingHuman = true;
@@ -11860,9 +11929,11 @@ ${question}${optionText}
       // 对应用户在听课页要求的「给出时间 → 点击 X → 继续听课」顺序。
       await U.sleep(400);
       const Q = ZHS.Questions.Dialog;
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      // round-58：关窗重试封顶 2 次（原 3 次）。关不掉=平台拒绝（多半未作答），
+      // 连环猛关是高危指纹、也骚扰用户；封顶后安静转人工，绝不反复突破。间隔随机化。
+      for (let attempt = 1; attempt <= 2; attempt++) {
         const ok = Q.close();
-        await U.sleep(700 * attempt);
+        await U.randomDelay(0.6, 1.4);
 
         if (!Q.stillPresent()) {
           ZHS.Log.info('弹题已关闭' + (attempt > 1 ? '（第 ' + attempt + ' 次尝试）' : ''));
@@ -11962,6 +12033,20 @@ ${question}${optionText}
     },
 
     /**
+     * round-58：答题前「思考」延迟（拟人化随机区间，替代固定值）。
+     * 固定延迟=机器特征；人类答题前必然有停顿且时长不一。
+     * 区间取 config.answerDelayMin/Max（默认 2~6s），离得越久越不像瞬间作答。
+     */
+    async _thinkDelay() {
+      const cfg = ZHS.config;
+      const min = Number(cfg.answerDelayMin) || 2;
+      const max = Number(cfg.answerDelayMax) || 6;
+      const d = min + Math.random() * (max - min);
+      ZHS.Log.debug('答题前思考延迟 ' + d.toFixed(1) + ' 秒（拟人化随机）');
+      await U.sleep(d * 1000);
+    },
+
+    /**
      * 求解并作答当前分页
      * @returns {boolean} 是否**实际作答成功**（选项真的被选中，经 isChecked 自检）
      */
@@ -11973,6 +12058,9 @@ ${question}${optionText}
       }
 
       ZHS.Log.info('弹题：' + (q.title || '(无题干)').slice(0, 60) + ' 选项 ' + q.options.length + ' 个');
+
+      // round-58：作答前先来一段随机思考延迟，抹掉「弹出即答」的机器特征
+      await this._thinkDelay();
 
       const result = await ZHS.Solver.solve({
         title: q.title,
@@ -12031,6 +12119,12 @@ ${question}${optionText}
     async handleHomework(opts) {
       const manual = !!(opts && opts.manual);
       if (!manual && (!ZHS.config.autoAnswer || !ZHS.config.answerHomework)) return;
+      // round-58：作业/考试页 —— 你在场时绝不自动作答（「不主动答测试考试题目」）。
+      // 即便将来打开了「作业页自动答」，也只在你离开/挂机时才接管；手动触发不受此限。
+      if (!manual && ZHS.Presence && ZHS.Presence.shouldYield()) {
+        ZHS.Log.info('作业/考试页：你在场，已让权，不自动作答（切走/离开后脚本才会接管）');
+        return;
+      }
       if (this._running) return;
 
       const scene = ZHS.Questions.scene();
@@ -12060,9 +12154,11 @@ ${question}${optionText}
           } else {
             ZHS.Log.warn('第 ' + (q.index + 1) + ' 题回填失败');
           }
-          const d = Number(ZHS.config.answerDelay) || 0;
+          // round-58：题间随机间隔（取配置区间），避免「匀速刷题」机器特征
+          const cfg = ZHS.config;
+          const d = Number(cfg.answerDelayMin || 2) + Math.random() * ((Number(cfg.answerDelayMax || 6)) - (Number(cfg.answerDelayMin || 2)));
           // eslint-disable-next-line no-await-in-loop
-          if (d > 0) await U.sleep(d * 1000);
+          await U.sleep(d * 1000);
         }
         ZHS.Log.info('作业页作答完成');
       } finally {
@@ -12245,6 +12341,101 @@ ${question}${optionText}
   };
 
   ZHS.Stats = Stats;
+})();
+
+/* ===== 15-presence.js ===== */
+/**
+ * 在场感知模块（round-58 · 人类化与防检测核心基座）
+ *
+ * 解决的根问题（用户原话）：「用户不切换不答下一道题」——
+ * 你坐在电脑前，脚本就该让权：不抢答、不抢切课、不抢跳下一节；
+ * 你切走/挂机（标签隐藏或长时间不动），脚本再接管自动推进。
+ *
+ * 为什么是反检测的第一道关：
+ * 风控识别「机器」最稳的信号之一，就是「页面在自动答题/切课，而用户明明在焦点里」。
+ * 真人在场却由脚本代劳，是最扎眼的自动化指纹。把「在场=让权」焊死后，
+ * 脚本只在你离开时才动 —— 这与「挂机托管」的真实使用场景完全一致，反而最不像机器。
+ *
+ * 判定口径（可配置）：
+ *   isUserPresent() = yieldToUser 开 且 标签页聚焦 且 近 userIdleSec 秒内有任何活动。
+ *   隐藏标签页 / 静默超时 → 视为离场（挂机/切走），脚本恢复自动。
+ *
+ * 注意：本模块只做「感知」，不做「动作」。所有让权/接管决策都由调度器与答题器读它。
+ * 监听是 passive、全 passive，绝不阻塞页面事件。
+ */
+(function () {
+  'use strict';
+  const ZHS = window.ZHS;
+  if (!ZHS || !ZHS.Util) return;
+  // 重入守卫：SPA 二次注入时整个模块直接退出，避免监听器叠加
+  if (ZHS.__mod15_presence) return;
+  ZHS.__mod15_presence = true;
+
+  let _lastActivityAt = Date.now();
+  let _focused = true;
+  let _bound = false;
+
+  function markActivity() { _lastActivityAt = Date.now(); }
+  function onVisibility() {
+    _focused = !document.hidden;
+    if (_focused) markActivity();   // 切回标签即视为一次活动（用户在看）
+  }
+  function onFocus() { _focused = true; markActivity(); }
+  function onBlur() { _focused = false; }
+
+  function bind() {
+    if (_bound) return;
+    _bound = true;
+    // 用户「在场」的任何活动都算：鼠标移动/点击、键盘、滚动、滚轮、触摸。
+    // 这些是真人看课时必然零星发生的动作；脚本自动答题则几乎零交互 —— 形成可区分指纹。
+    const evs = ['mousemove', 'mousedown', 'keydown', 'click', 'scroll', 'wheel', 'touchstart', 'touchmove'];
+    for (const e of evs) {
+      try { window.addEventListener(e, markActivity, { passive: true }); } catch (_) { /* 忽略 */ }
+    }
+    try { document.addEventListener('visibilitychange', onVisibility); } catch (_) { /* 忽略 */ }
+    try { window.addEventListener('focus', onFocus); } catch (_) { /* 忽略 */ }
+    try { window.addEventListener('blur', onBlur); } catch (_) { /* 忽略 */ }
+    // 初始聚焦态：以当前页面是否可见为准
+    try { _focused = !document.hidden; } catch (_) { _focused = true; }
+  }
+
+  const Presence = {
+    /** 绑定监听（调度器 start 时调用一次，幂等） */
+    bind,
+
+    /** 最近一次用户活动时刻（ms） */
+    get lastActivityAt() { return _lastActivityAt; },
+    /** 标签页当前是否聚焦 */
+    get focused() { return _focused; },
+
+    /**
+     * 用户是否「在场」：脚本应让权（不代劳）。
+     * @returns {boolean}
+     */
+    isUserPresent() {
+      const cfg = ZHS.config;
+      if (!cfg.yieldToUser) return false;            // 开关关 → 永不让权（全程自动，老行为）
+      if (!_focused) return false;                   // 切到别的标签/窗口 → 离场（挂机接管）
+      const idleMs = Date.now() - _lastActivityAt;
+      const idleSec = Number(cfg.userIdleSec) || 90;
+      if (idleMs >= idleSec * 1000) return false;    // 静默超时 → 视为离场（人走开了）
+      return true;
+    },
+
+    /** 是否处于「让权」态（在场且开关开）——调度器/答题器统一问这个 */
+    shouldYield() { return this.isUserPresent(); },
+
+    /** 调试快照（面板/排查用） */
+    snapshot() {
+      return {
+        focused: _focused,
+        idleSec: Math.round((Date.now() - _lastActivityAt) / 1000),
+        present: this.isUserPresent(),
+      };
+    },
+  };
+
+  ZHS.Presence = Presence;
 })();
 
 })();

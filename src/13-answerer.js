@@ -402,8 +402,8 @@
         return;
       }
 
-      // 已确认选中 → 等待一会让平台登记作答，再关
-      await U.sleep(1200);
+      // 已确认选中 → 等待一会让平台登记作答，再关（随机停留，更像真人）
+      await U.randomDelay(1.0, 2.5);
       ZHS.Log.info('无通道兜底已选中选项 ' + (selectedIdx + 1) + '，等待后关闭弹窗');
       const ok = await this.closeDialogAndResume({ noChannel: true });
       if (ok) { this._answeredSig = sig || ''; ZHS.Log.info('无通道兜底选中后成功关闭，恢复播放'); return; }
@@ -462,7 +462,7 @@
         await U.sleep(700);
         if (ZHS.Filler.isChecked(el)) {
           ZHS.Log.info('选项 ' + (i + 1) + ' 已确认选中，等待平台登记后关闭');
-          await U.sleep(1200);
+          await U.randomDelay(1.0, 2.5);
           const ok = await this.closeDialogAndResume({ noChannel: true });
           if (ok) { this._answeredSig = sig || ''; return true; }
           this._pendingHuman = true;
@@ -641,9 +641,11 @@
       // 对应用户在听课页要求的「给出时间 → 点击 X → 继续听课」顺序。
       await U.sleep(400);
       const Q = ZHS.Questions.Dialog;
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      // round-58：关窗重试封顶 2 次（原 3 次）。关不掉=平台拒绝（多半未作答），
+      // 连环猛关是高危指纹、也骚扰用户；封顶后安静转人工，绝不反复突破。间隔随机化。
+      for (let attempt = 1; attempt <= 2; attempt++) {
         const ok = Q.close();
-        await U.sleep(700 * attempt);
+        await U.randomDelay(0.6, 1.4);
 
         if (!Q.stillPresent()) {
           ZHS.Log.info('弹题已关闭' + (attempt > 1 ? '（第 ' + attempt + ' 次尝试）' : ''));
@@ -743,6 +745,20 @@
     },
 
     /**
+     * round-58：答题前「思考」延迟（拟人化随机区间，替代固定值）。
+     * 固定延迟=机器特征；人类答题前必然有停顿且时长不一。
+     * 区间取 config.answerDelayMin/Max（默认 2~6s），离得越久越不像瞬间作答。
+     */
+    async _thinkDelay() {
+      const cfg = ZHS.config;
+      const min = Number(cfg.answerDelayMin) || 2;
+      const max = Number(cfg.answerDelayMax) || 6;
+      const d = min + Math.random() * (max - min);
+      ZHS.Log.debug('答题前思考延迟 ' + d.toFixed(1) + ' 秒（拟人化随机）');
+      await U.sleep(d * 1000);
+    },
+
+    /**
      * 求解并作答当前分页
      * @returns {boolean} 是否**实际作答成功**（选项真的被选中，经 isChecked 自检）
      */
@@ -754,6 +770,9 @@
       }
 
       ZHS.Log.info('弹题：' + (q.title || '(无题干)').slice(0, 60) + ' 选项 ' + q.options.length + ' 个');
+
+      // round-58：作答前先来一段随机思考延迟，抹掉「弹出即答」的机器特征
+      await this._thinkDelay();
 
       const result = await ZHS.Solver.solve({
         title: q.title,
@@ -812,6 +831,12 @@
     async handleHomework(opts) {
       const manual = !!(opts && opts.manual);
       if (!manual && (!ZHS.config.autoAnswer || !ZHS.config.answerHomework)) return;
+      // round-58：作业/考试页 —— 你在场时绝不自动作答（「不主动答测试考试题目」）。
+      // 即便将来打开了「作业页自动答」，也只在你离开/挂机时才接管；手动触发不受此限。
+      if (!manual && ZHS.Presence && ZHS.Presence.shouldYield()) {
+        ZHS.Log.info('作业/考试页：你在场，已让权，不自动作答（切走/离开后脚本才会接管）');
+        return;
+      }
       if (this._running) return;
 
       const scene = ZHS.Questions.scene();
@@ -841,9 +866,11 @@
           } else {
             ZHS.Log.warn('第 ' + (q.index + 1) + ' 题回填失败');
           }
-          const d = Number(ZHS.config.answerDelay) || 0;
+          // round-58：题间随机间隔（取配置区间），避免「匀速刷题」机器特征
+          const cfg = ZHS.config;
+          const d = Number(cfg.answerDelayMin || 2) + Math.random() * ((Number(cfg.answerDelayMax || 6)) - (Number(cfg.answerDelayMin || 2)));
           // eslint-disable-next-line no-await-in-loop
-          if (d > 0) await U.sleep(d * 1000);
+          await U.sleep(d * 1000);
         }
         ZHS.Log.info('作业页作答完成');
       } finally {

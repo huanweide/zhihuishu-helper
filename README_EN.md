@@ -119,12 +119,12 @@ node build.js
 ```
 
 ```
-=== building zhihuishu-helper v0.6.66 ===
+=== building zhihuishu-helper v0.6.67 ===
   + 00-config.js
   + 01-util.js
   ...
   + 14-stats.js
-[ok] wrote dist/zhihuishu-helper.user.js (20 modules)
+[ok] wrote dist/zhihuishu-helper.user.js (21 modules)
 ```
 
 ### Self-check (the four gates — run after any code change)
@@ -138,11 +138,11 @@ node test/screenshot.js          # ④ screenshot tests (needs real Chrome — l
 
 ```bash
 $ node tools/check-dist-fresh.js
-[ok] dist matches src (20 modules, v0.6.66)
+[ok] dist matches src (21 modules, v0.6.67)
 
 $ node test/run.js
 ==================================================
-passed 721 / failed 0
+passed 735 / failed 0
 all passed ✓
 ```
 
@@ -172,7 +172,7 @@ Open the console with `F12`:
 
 ## 🎬 Architecture
 
-The default engine is a **2-second main loop over `detect → play → answer → advance` with layered fallbacks** — not a monolithic script. 20 modules are concatenated along the pipeline; each layer does one job and each has a degradation path.
+The default engine is a **2-second main loop over `detect → play → answer → advance` with layered fallbacks** — not a monolithic script. 21 modules are concatenated along the pipeline; each layer does one job and each has a degradation path.
 
 ### Core concepts
 
@@ -266,7 +266,8 @@ ZHS.Solver.channels.push({
 - [x] Breakpoint resume (cross-iframe / cross-page / survives network loss)
 - [x] Dual-channel answering (bank + LLM) + offline heuristic third tier
 - [x] Fully-automatic learning engine (auto-pick courses, auto-hop when one finishes)
-- [x] 721 logic tests + 70 screenshot tests
+- [x] Human-like anti-detection (yield-to-user presence; natural pacing with jittered delays; capped retries)
+- [x] 735 logic tests + 70 screenshot tests
 - [x] 5 page-version adapters + structural fallback scan
 - [ ] More question-bank protocols (currently only the `TikuAdapter` standard protocol)
 - [ ] Panel themes / custom color schemes
@@ -305,7 +306,7 @@ Also: personal study and research only; commercial use and redistribution are pr
 | [docs/02-技术方案.md](docs/02-技术方案.md) | Module architecture, three main lines |
 | [docs/03-踩坑记录.md](docs/03-踩坑记录.md) | Real-device issues and triage order |
 | [docs/40-开发者笔记.md](docs/40-开发者笔记.md) | Developer notes: recon, reference survey, capability benchmark |
-| [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md) | Module map (20 modules) + gate commands |
+| [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md) | Module map (21 modules) + gate commands |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ## 🎬 Contributing

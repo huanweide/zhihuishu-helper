@@ -1,8 +1,8 @@
 # 项目索引（PROJECT MAP）
 
-> 最后更新：2026-10-25（round-55 全自动学习引擎 + LLM 正确率拉升后）
-> 状态：**v0.6.66**，油猴脚本 20 模块，逻辑单测 **721 通过 / 0 失败**
-> 本文件的模块数/测试数/命令已同步至 v0.6.66，以本版为准。
+> 最后更新：2026-10-28（round-58 人类化与防检测：在场感知 + 拟人节奏 + 反暴力重试）
+> 状态：**v0.6.67**，油猴脚本 21 模块，逻辑单测 **735 通过 / 0 失败**
+> 本文件的模块数/测试数/命令已同步至 v0.6.67，以本版为准。
 
 ---
 
@@ -10,7 +10,7 @@
 
 ```bash
 node build.js                  # 构建 → dist/zhihuishu-helper.user.js（版本号从 package.json 注入）
-node test/run.js               # 逻辑单测（jsdom，644 项断言）—— 改 src 后必跑
+node test/run.js               # 逻辑单测（jsdom，735 项断言）—— 改 src 后必跑
 node tools/check-dist-fresh.js # dist 与 src 一致性校验（漏 build 会被挡下）
 node test/screenshot.js        # 截屏测试（真实 Chrome，需本机起浏览器，另行跑）
 ```
@@ -49,7 +49,7 @@ node test/screenshot.js        # 截屏测试（真实 Chrome，需本机起浏�
 
 ---
 
-## 三、代码地图（v0.6.66，20 模块，按端到端链路排列）
+## 三、代码地图（v0.6.67，21 模块，按端到端链路排列）
 
 ```
 src/                              # 源码（按序拼装，文件名即加载序）
@@ -73,9 +73,10 @@ src/                              # 源码（按序拼装，文件名即加载�
 ├── 12-filler.js      315 行   回填层：多子目标×多点击方式 + SVG 选中态识别(#iconxuanzhong) + 选中自检 + 诊断转储
 ├── 13-answerer.js    832 行   答题编排：弹题签名防抖 + 标准链路 + 非标准 A/B + AI 随堂练习 + 多页 + 退避/转人工
 ├── 14-stats.js       145 行   统计层：答题明细(200 条上限) + 按天聚合 + 学习时长/习惯分
+├── 15-presence.js     93 行   在场感知：活动/聚焦监听 + isUserPresent/shouldYield（让权基座，反检测第一关）
 
 build.js                     ✅   构建：src/*.js → dist/*.user.js（版本从 package.json 注入）
-test/run.js                  ✅   逻辑单测：644 项断言（jsdom，两组之间互不共享状态）
+test/run.js                  ✅   逻辑单测：735 项断言（jsdom，两组之间互不共享状态）
 tools/check-dist-fresh.js    ✅   dist/src 一致性（漏 rebuild 的守门员）
 tools/zhs-cli.js             ✅   外置 CLI：start/connect/diag/deep/inject/run（用户只登录一次，见 skill zhihuishu-cli）
 tools/diag-probe.js          ✅   诊断探针：只读结构 dump + 切课策略穷举（CDP 注入用）
@@ -150,6 +151,10 @@ zhs.boot()                    // 面板挂载失败时的手动重撬
 | 导航守卫 | 调度器守卫 0（连续 3 轮读不到目录 → 自动回家） |
 | 验证码兜底 | 调度器守卫 1（不 await、直接 return、停手等人） |
 | 节奏防御 | 弹窗关闭 0.5~1.5s 随机、倍速 ≤1.5、拟人随机暂停 0.3%/tick、切课延迟 2~8s |
+| 在场让权 | `Presence.isUserPresent` + 调度器 `_shouldYield`：你在场不自动切课、不答作业/考试 |
+| 思考延迟 | `13-answerer._thinkDelay` 2~6s 随机（答题前，抹掉「弹出即答」机器特征） |
+| 主循环抖动 | `05-scheduler` 递归 setTimeout ±0.5s（消除「完美 2s 周期」指纹） |
+| 反暴力重试 | 弹窗关闭重试封顶 2 次，关不掉安静转人工，绝不连环猛关 |
 
 ---
 
@@ -165,14 +170,14 @@ zhs.boot()                    // 面板挂载失败时的手动重撬
 - [ ] 掌握度答题（studywisdomh5）——生态调研已定位，未开工
 - [ ] 真实站点全链路回归（需用户配合开调试 Edge）
 
-**当前门禁**：`node build.js` + `node test/run.js` **721 通过 / 0 失败**（v0.6.66，jsdom；截屏测试需真机 Chrome，另行跑）。
+**当前门禁**：`node build.js` + `node test/run.js` **735 通过 / 0 失败**（v0.6.67，jsdom；截屏测试需真机 Chrome，另行跑）。
 
 ---
 
 ## 六、发布流程（改完必走）
 
 ```bash
-node build.js && node test/run.js          # 门禁：构建 + 全量测试（644/0 才算过）
+node build.js && node test/run.js          # 门禁：构建 + 全量测试（735/0 才算过）
 # 版本铁律（本项目是两件套，不是 novel-smith 的五件套）：
 #   package.json 的 version + CHANGELOG.md 新增条目（build.js 从前者注入 dist）
 git add <显式文件>                          # 禁 git add -A；排调试产物（tools/dbg-*、*.last.json）

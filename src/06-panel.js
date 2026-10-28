@@ -830,6 +830,12 @@
       <div class="hint">默认开启。播放中偶尔（平均二十多分钟一次）像真人一样暂停几十秒再继续，
         这是平台官方客户端自身的节奏，能进一步降低「机器挂机」特征。暂停期间不计学习时长。</div>
 
+      <div class="sec-title">人类化与防检测</div>
+      <div class="hint">在场感知：你坐在电脑前（标签页聚焦且近期有活动），脚本主动让权——不抢答、不抢切课、不抢跳下一节；你切走或离开超过阈值，脚本再接管自动推进。这是最像「挂机托管」的真实场景，也最不像机器。</div>
+      <div class="row"><label>用户在场让权</label><button class="sw" data-cfg="yieldToUser"></button></div>
+      <div class="row"><label>离场静默阈值(秒)</label><input type="number" class="inp" data-cfg-num="userIdleSec" min="10" max="600" style="width:72px"></div>
+      <div class="hint">最近一次鼠标/键盘活动超过这个秒数，就视为「人走开了」，脚本自动接管。默认 90 秒。</div>
+
       <div class="row"><label>学完自动进下一门</label><button class="sw" data-cfg="autoCourseHop"></button></div>
       <div class="hint">本课学完自动去课程中心找下一门</div>
       <div class="row"><label>自动选课</label><button class="sw" data-cfg="autoCoursePick"></button></div>

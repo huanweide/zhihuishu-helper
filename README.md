@@ -118,12 +118,12 @@ node build.js
 ```
 
 ```
-=== 构建 zhihuishu-helper v0.6.66 ===
+=== 构建 zhihuishu-helper v0.6.67 ===
   + 00-config.js
   + 01-util.js
   ...
   + 14-stats.js
-[ok] 已生成 dist/zhihuishu-helper.user.js（20 模块）
+[ok] 已生成 dist/zhihuishu-helper.user.js（21 模块）
 ```
 
 ### 自检（改完代码必跑的门禁）
@@ -133,17 +133,17 @@ node build.js                      # ① 构建：src/*.js 按序拼装 → dist
 node tools/check-dist-fresh.js     # ② 校验 dist 与 src 一致（漏 build 会被挡下）
 node tools/check-test-registry.js  # ③ 测试组登记检查（异步组漏 await = 假绿）
 node test/run.js                   # ④ 逻辑单测（jsdom + vm 模块注入）
-node tools/check-docs-consistency.js --tests 721  # ⑤ 文档一致性（版本号/测试数不漂移）
+node tools/check-docs-consistency.js --tests 735  # ⑤ 文档一致性（版本号/测试数不漂移）
 node test/screenshot.js            # ⑥ 截屏测试（需真机 Chrome，本地手动跑）
 ```
 
 ```bash
 $ node tools/check-dist-fresh.js
-[ok] dist 与 src 一致（20 模块, v0.6.66）
+[ok] dist 与 src 一致（21 模块, v0.6.67）
 
 $ node test/run.js
 ==================================================
-通过 721 / 失败 0
+通过 735 / 失败 0
 全部通过 ✓
 ```
 
@@ -274,7 +274,8 @@ ZHS.Solver.channels.push({
 - [x] 断点续播（跨 iframe / 跨页面 / 断网恢复）
 - [x] 双通道答题（题库 + LLM）+ 离线启发式第三层
 - [x] 全自动学习引擎（进课程中心自动选课、学完自动跳下一门）
-- [x] 721 项逻辑单测 + 70 项截屏测试
+- [x] 人类化与防检测（在场让权：你在场不代劳；拟人节奏：随机思考延迟 + 抖动主循环；反暴力重试：弹窗关不掉即转人工）
+- [x] 735 项逻辑单测 + 70 项截屏测试
 - [x] 五套页面版本适配 + 结构兜底扫描
 - [ ] 更多平台的题库协议适配（目前仅 `TikuAdapter` 标准协议）
 - [ ] 面板多主题 / 自定义配色

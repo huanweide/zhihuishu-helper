@@ -95,6 +95,15 @@
     // 选项不一致的题绝不会误命中（选项串参与判等）。
     fuzzyCache: true,
 
+    // 在场感知 / 人类化（round-58）：用户在场时让权，离开/挂机才接管
+    // —— 真人在场却脚本代劳，是最扎眼的自动化指纹；只在你离开时动才最像挂机托管。
+    yieldToUser: true,   // 总开关：用户在场即让权（不抢答/不抢切课）
+    userIdleSec: 90,     // 静默多久算「人走开了」（秒）；隐藏标签页一律算离场
+
+    // 答题前延迟（round-58）：改成随机区间，固定值=机器特征
+    answerDelayMin: 2,   // 答题前最短等待（秒）
+    answerDelayMax: 6,   // 答题前最长等待（秒）
+
     // 通用
     debug: true,         // 控制台详细日志
     panelVisible: true,  // 悬浮面板
@@ -148,7 +157,7 @@
     'exitFullscreenOnPanel', 'autoAnswer', 'bankEnabled', 'llmEnabled',
     'answerDialog', 'answerHomework', 'autoCloseDialog', 'gatedRandom',
     'heuristicFallback', 'humanPause', 'fuzzyCache',
-    'debug', 'panelVisible', 'guardOverlays',
+    'debug', 'panelVisible', 'guardOverlays', 'yieldToUser',
   ];
 
   /** 单值布尔归一化；undefined/null 返回 undefined（表示「不覆盖」） */

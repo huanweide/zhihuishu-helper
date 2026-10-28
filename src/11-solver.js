@@ -286,9 +286,11 @@
         // eslint-disable-next-line no-await-in-loop
         const r = await this.solve(q);
         out.push(Object.assign({}, q, { result: r }));
-        // 每题之间小延迟，模拟人类思考
-        const d = Number(ZHS.config.answerDelay) || 0;
-        if (d > 0) await U.sleep(d * 1000 + Math.random() * 1000);
+        // round-58：题间随机间隔（取配置区间 + 抖动），避免「匀速刷题」机器特征
+        const cfg = ZHS.config;
+        const min = Number(cfg.answerDelayMin || 2);
+        const max = Number(cfg.answerDelayMax || 6);
+        await U.sleep((min + Math.random() * (max - min)) * 1000);
       }
       return out;
     },

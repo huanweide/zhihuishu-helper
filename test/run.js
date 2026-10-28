@@ -4121,6 +4121,58 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
   })();
   await _v66;
 
+  // ===================== round-58：在场感知 + 让权闸门 =====================
+  const _v67 = (async () => {
+    console.log('\n=== O. 在场感知与让权闸门（round-58 · v0.6.67）===');
+    {
+      const { win } = makeEnv('<html><body></body></html>');
+      const ZHS = win.ZHS;
+
+      ok('O1 Presence 模块已挂载', !!ZHS.Presence);
+      ok('O2 isUserPresent / shouldYield 已暴露', typeof ZHS.Presence.isUserPresent === 'function' && typeof ZHS.Presence.shouldYield === 'function');
+      ZHS.Presence.bind();   // 绑定监听，否则 _focused/_lastActivityAt 不更新
+
+      // 默认配置：在场让权开、静默阈值 90s、答题延迟区间 2~6s
+      ok('O3 默认 yieldToUser=true', ZHS.config.yieldToUser === true);
+      ok('O4 默认 userIdleSec=90', ZHS.config.userIdleSec === 90);
+      ok('O5 默认 answerDelayMin=2', ZHS.config.answerDelayMin === 2);
+      ok('O6 默认 answerDelayMax=6', ZHS.config.answerDelayMax === 6);
+
+      const cfgOn = JSON.stringify({ yieldToUser: true, userIdleSec: 90 });
+      const cfgOff = JSON.stringify({ yieldToUser: false, userIdleSec: 90 });
+
+      // 开启 + 聚焦 + 刚有活动 → 在场（让权=true）
+      win.GM_setValue('zhs-helper-config', cfgOn);
+      win.dispatchEvent(new win.Event('mousemove'));
+      ok('O7 开启+聚焦+刚有活动→在场(true)', ZHS.Presence.isUserPresent() === true);
+      ok('O8 shouldYield 与 isUserPresent 一致', ZHS.Presence.shouldYield() === true);
+
+      // 隐藏标签（派发 visibilitychange）→ 离场：用户在别的窗口/标签
+      Object.defineProperty(win.document, 'hidden', { configurable: true, get: () => true });
+      win.document.dispatchEvent(new win.Event('visibilitychange'));
+      ok('O9 隐藏标签→离场(false)', ZHS.Presence.isUserPresent() === false);
+      Object.defineProperty(win.document, 'hidden', { configurable: true, get: () => false });
+      win.document.dispatchEvent(new win.Event('visibilitychange'));
+      ok('O10 切回标签→重新在场(true)', ZHS.Presence.isUserPresent() === true);
+
+      // 开关关 → 永不让权（全程自动，老行为）
+      win.GM_setValue('zhs-helper-config', cfgOff);
+      ok('O11 开关关→永不让权(false)', ZHS.Presence.isUserPresent() === false);
+
+      // 重新开启，鼠标/键盘活动即时更新「最近活动」→ 在场
+      win.GM_setValue('zhs-helper-config', cfgOn);
+      win.dispatchEvent(new win.Event('keydown'));
+      ok('O12 键盘活动后→在场(true)', ZHS.Presence.isUserPresent() === true);
+
+      // 调度器让权闸门委托给 Presence
+      ok('O13 调度器._shouldYield 已暴露', typeof ZHS.Scheduler._shouldYield === 'function');
+      ok('O14 调度器让权闸门与 Presence 一致', ZHS.Scheduler._shouldYield() === ZHS.Presence.shouldYield());
+
+      stopAllTimers();
+    }
+  })();
+  await _v67;
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {
