@@ -1659,7 +1659,6 @@ API：`record(title, result)` / `addStudyTime(ms)` / `summary()` / `reset()` / `
 - **面板 UI 升级**：正文字号从 12px 放大到 14px（标题/列表/日志同步放大），长时间看课更舒适。
 - **瑞宝宝个人三件套入口**（作者默认收尾操作固化）：
   - GitHub Star 入口，带 ReTri 渐变水印样式 + ⭐，引导给作者点 star
-  - 赞助通道「项目永久免费，给作者点杯奶茶吧 🧋」，点击展开微信收款码
   - 硅基流动 API 获取栏：注册链接 `https://cloud.siliconflow.cn/i/axOmWfWi`（邀请码 axOmWfWi），注明其为 DeepSeek / 大模型中转站，稳定且价格友好
 - **开源上架 GitHub**：`huanweide/zhihuishu-helper`，附带一键安装页 `dist/install.html`
 

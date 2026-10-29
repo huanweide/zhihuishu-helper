@@ -361,7 +361,7 @@ ZHS.Solver.channels.push({
 
 ## 🎬 License
 
-[MIT](LICENSE) © ReTri · 樊斯瑞
+[MIT](LICENSE) © ReTri · huanweide
 
 ---
 
@@ -371,11 +371,10 @@ ZHS.Solver.channels.push({
 
 [![Star](https://img.shields.io/github/stars/huanweide/zhihuishu-helper?style=social)](https://github.com/huanweide/zhihuishu-helper)
 
-也可微信扫码自愿赞助（收款码见 `sponsor/wechat-qr.png`，纯静态图片、不含任何密钥）。
 
 ---
 
-## 🧰 更多开源工具（by ReTri · 樊斯瑞）
+## 🧰 更多开源工具（by ReTri · huanweide）
 
 - 🎬 字幕 / 视频：[bili-subtitle-universal](https://github.com/huanweide/bili-subtitle-universal) · [live-subtitle](https://github.com/huanweide/live-subtitle) · [video-brief](https://github.com/huanweide/video-brief)
 - 🩺 代码健康全家桶（18 轴零依赖 CLI）：[family-showcase](https://github.com/huanweide/family-showcase)
