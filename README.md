@@ -2,6 +2,8 @@
   <img src="assets/banner.svg" alt="智慧树助手 zhihuishu-helper">
 </p>
 
+<p align="center"><sub>English: 暂未提供（No English docs yet）</sub></p>
+
 # 🎬 智慧树助手（zhihuishu-helper）
 
 [![License](https://img.shields.io/github/license/huanweide/zhihuishu-helper)](LICENSE)
@@ -361,7 +363,7 @@ ZHS.Solver.channels.push({
 
 ## 🎬 License
 
-[MIT](LICENSE) © ReTri · huanweide
+[MIT](LICENSE) © huanweide
 
 ---
 
@@ -374,7 +376,7 @@ ZHS.Solver.channels.push({
 
 ---
 
-## 🧰 更多开源工具（by ReTri · huanweide）
+## 🧰 更多开源工具（by huanweide）
 
 - 🎬 字幕 / 视频：[bili-subtitle-universal](https://github.com/huanweide/bili-subtitle-universal) · [live-subtitle](https://github.com/huanweide/live-subtitle) · [video-brief](https://github.com/huanweide/video-brief)
 - 🩺 代码健康全家桶（18 轴零依赖 CLI）：[family-showcase](https://github.com/huanweide/family-showcase)
