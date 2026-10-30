@@ -2,7 +2,7 @@
   <img src="assets/banner.svg" alt="智慧树助手 zhihuishu-helper">
 </p>
 
-<p align="center"><sub>English: 暂未提供（No English docs yet）</sub></p>
+<p align="center"><sub>**English** · [README_EN.md](./README_EN.md)</sub></p>
 
 # 🎬 智慧树助手（zhihuishu-helper）
 
