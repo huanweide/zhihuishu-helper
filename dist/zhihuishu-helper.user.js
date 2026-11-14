@@ -23,6 +23,7 @@
 // @connect      *
 // @run-at       document-idle
 // @license      MIT
+// @homepageURL  https://github.com/huanweide/zhihuishu-helper
 // @supportURL   https://github.com/huanweide/zhihuishu-helper/issues
 // 分发地址刻意选 jsdelivr 而不是 raw.githubusercontent.com：
 // 实测 master 上已经是新版本时，raw 的 CDN 仍可能回吐上一个版本（2026-09 观察到
