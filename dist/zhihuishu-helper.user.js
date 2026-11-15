@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.67
+// @version      0.6.68
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -39,7 +39,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.67";
+window.__ZHS_BUILD__.version = "0.6.68";
 
 /* ===== 00-config.js ===== */
 /**
@@ -2565,16 +2565,107 @@ window.__ZHS_BUILD__.version = "0.6.67";
       } catch (e) { /* 忽略 */ }
     },
 
-    /** 设置倍速（硬上限 1.5 —— 与 00-config.js 的配置钳位保持同一数值） */
-    setSpeed(v, speed) {
+    /**
+     * 设置倍速（温和交互层 P1 · docs/31-温和交互层升级方案.md D1）
+     *
+     * L1：hover 展开平台倍速菜单 → 拟真点击目标档位项，让页面自己的代码改
+     *     playbackRate 并同步 UI——脚本不直改属性、不手改 span（旧实现直改后
+     *     手动同步 .speedBox span，自造了「播放器内部≠界面」的检测点）。
+     * L3：菜单点不到（CSS :hover 展开 JS 合成不了 / 跨域 iframe / 改版）才
+     *     回落直改 + 同步 UI（能力不缩水），并打日志说明降级原因。
+     *
+     * 硬上限 1.5 —— 与 00-config.js 的配置钳位保持同一数值。
+     */
+    async setSpeed(v, speed) {
       if (!v) return;
       const s = Math.min(Math.max(Number(speed) || 1, 0.5), 1.5);
       try {
-        if (Math.abs(v.playbackRate - s) > 0.01) v.playbackRate = s;
-        // 同步 UI，避免平台检测播放器倍速与界面不一致
-        const span = document.querySelector('.speedBox span');
-        if (span) span.innerText = 'X ' + s;
+        if (Math.abs(v.playbackRate - s) > 0.01) {
+          if (!(await this._clickSpeedMenuItem(v, s))) {
+            // L3 回落：直改 + 同步 UI（菜单不可用时与旧行为一致）
+            v.playbackRate = s;
+            const span = document.querySelector('.speedBox span');
+            if (span) span.innerText = 'X ' + s;
+            ZHS.Log.debug('倍速菜单未生效，已降级直改 playbackRate=' + s);
+          }
+        }
       } catch (e) { /* 忽略 */ }
+    },
+
+    /**
+     * L1 温和路径：点击平台倍速菜单项（温和交互层 P1）
+     *
+     * 选择器依据 docs/01-侦察报告：`.speedBox` / `.speedList [rate="1.5"]` /
+     * `.speedTab15`（1.5 档独立 tab）。已知坑（docs/03-踩坑记录）：部分版本
+     * rate 属性 "1" 与 "1.0" 双写——用 parseFloat 归一化匹配，天然兼容。
+     *
+     * CSS :hover 伪类展开的菜单 JS 合成不了（浏览器安全限制），此时如实返回
+     * false 交给 L3 回落；JS 监听 mouseenter/mauseover 展开的版本则可正常触发。
+     *
+     * @returns {Promise<boolean>} 是否走通了菜单点击且页面真的改了速率
+     */
+    async _clickSpeedMenuItem(v, target) {
+      try {
+        const box = document.querySelector('.speedBox');
+        const list = document.querySelector('.speedList');
+        if (!box && !list) return false;
+
+        // ① 拟人 hover：mousemove → mouseover/mouseenter 派发到控制栏与倍速盒，
+        //   触发页面自己的「hover 展开菜单」逻辑（JS 监听型）
+        const ev = (el, type) => {
+          try {
+            const r = el.getBoundingClientRect();
+            el.dispatchEvent(new MouseEvent(type, {
+              bubbles: true, cancelable: true, view: window,
+              clientX: r.x + r.width / 2, clientY: r.y + r.height / 2,
+            }));
+          } catch (e2) { /* 忽略单个事件失败 */ }
+        };
+        const bar = document.querySelector('.controlsBar');
+        for (const el of [bar, box, list]) {
+          if (!el) continue;
+          ev(el, 'mousemove');
+          ev(el, 'mouseover');
+          ev(el, 'mouseenter');
+        }
+        // 拟人反应时间：等页面 JS 展开菜单
+        if (U.sleep) await U.sleep(150 + Math.round(Math.random() * 250));
+
+        // ② 菜单可见性：getComputedStyle 判定（jsdom/真机一致；不依赖 offsetParent）
+        if (!list) return false;
+        try {
+          const cs = getComputedStyle(list);
+          if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+        } catch (e2) { /* 读不到样式时按可见处理，继续尝试点击 */ }
+
+        // ③ 找目标档位项：rate 属性匹配（parseFloat 归一化，兼容 "1"/"1.0"）→ 文本数字兜底
+        const items = Array.from(list.querySelectorAll('[rate], li'));
+        const num = (el) => {
+          const attr = el.getAttribute && el.getAttribute('rate');
+          if (attr) return parseFloat(attr);
+          const t = (el.textContent || '').replace(/[^0-9.]/g, '');
+          return parseFloat(t);
+        };
+        const item = items.find((el) => Number.isFinite(num(el)) && Math.abs(num(el) - target) < 0.001);
+        if (!item) return false;
+
+        // ④ 拟真点击菜单项（真机教训：裸 click() 在智慧树目录上曾整页跳门户）
+        const fire = U.realClickHuman || U.realClick || ((x) => { x.click(); return true; });
+        if (!fire(item)) return false;
+
+        // ⑤ 验收：读 playbackRate 确认页面真的改了（1.2s 内轮询，页面 handler 可能异步）
+        const deadline = Date.now() + 1200;
+        while (Date.now() < deadline) {
+          if (Math.abs(v.playbackRate - target) < 0.01) {
+            ZHS.Log.debug('倍速已通过平台菜单点击生效：' + target);
+            return true;
+          }
+          if (U.sleep) await U.sleep(150); else await new Promise((r) => setTimeout(r, 150));
+        }
+        return false;
+      } catch (e) {
+        return false;
+      }
     },
 
     /**

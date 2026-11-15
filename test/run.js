@@ -4173,6 +4173,92 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
   })();
   await _v67;
 
+  // ============================================================
+  // 第 71 组：倍速温和化（温和交互层 P1 · docs/31）
+  //
+  // 原则：优先点击平台自带倍速菜单（.speedList [rate]），让页面自己的代码
+  // 改 playbackRate——脚本不得直改属性、不得手动同步 .speedBox span 文本
+  //（旧实现自造的「播放器内部≠界面」检测点，见 docs/31-温和交互层升级方案.md D1）。
+  // 判别：改前（直改属性）场景 A 必红；改后（菜单点击）全绿。
+  // ============================================================
+  const _v68 = (async () => {
+    console.log('\n=== 71. 倍速温和化（P1：优先点菜单，页面自己改状态）===');
+
+    // ---- A. 菜单可见 + 页面有 handler → 页面 handler 改状态，脚本不直改、不碰 span ----
+    {
+      const { win } = makeEnv(
+        '<html><body><video></video>'
+        + '<div class="speedBox"><span>X 1.0</span></div>'
+        + '<ul class="speedList" style="display:block">'
+        + '<li rate="1.0">1.0x</li><li rate="1.25">1.25x</li><li rate="1.5">1.5x</li>'
+        + '</ul></body></html>'
+      );
+      const ZHS = win.ZHS;
+      const v = win.document.querySelector('video');
+      // 模拟「页面自己的」倍速 handler（prism-player 真实行为：点菜单项 → 改速率 → 同步 UI）
+      let fired = 0;
+      win.document.querySelectorAll('.speedList li').forEach((li) => {
+        li.addEventListener('click', () => {
+          fired++;
+          v.playbackRate = parseFloat(li.getAttribute('rate'));
+          win.document.querySelector('.speedBox span').innerText = 'X ' + li.getAttribute('rate');
+        });
+      });
+      await ZHS.Player.setSpeed(v, 1.5);
+      eq('71A1 playbackRate 由页面 handler 改成 1.5', v.playbackRate, 1.5);
+      eq('71A2 页面 handler 恰被拟真点击一次', fired, 1);
+      eq('71A3 span 由页面 handler 同步（脚本未手改文本）', win.document.querySelector('.speedBox span').innerText, 'X 1.5');
+      stopAllTimers();
+    }
+
+    // ---- B. 无菜单 → 回落直改（能力不缩水） ----
+    {
+      const { win } = makeEnv('<html><body><video></video></body></html>');
+      const v = win.document.querySelector('video');
+      await win.ZHS.Player.setSpeed(v, 1.5);
+      eq('71B1 无菜单回落直改 playbackRate=1.5', v.playbackRate, 1.5);
+      stopAllTimers();
+    }
+
+    // ---- C. 菜单存在但隐藏（CSS :hover 型，JS 合成不了）→ 如实回落直改 ----
+    {
+      const { win } = makeEnv(
+        '<html><body><video></video>'
+        + '<div class="speedBox"><span>X 1.0</span></div>'
+        + '<ul class="speedList" style="display:none"><li rate="1.5">1.5x</li></ul></body></html>'
+      );
+      const v = win.document.querySelector('video');
+      await win.ZHS.Player.setSpeed(v, 1.5);
+      eq('71C1 隐藏菜单回落直改 playbackRate=1.5', v.playbackRate, 1.5);
+      stopAllTimers();
+    }
+
+    // ---- D. rate="1" 与 "1.0" 双写兼容（docs/03-踩坑记录 已知坑） ----
+    {
+      const { win } = makeEnv(
+        '<html><body><video></video>'
+        + '<div class="speedBox"><span>X 1.5</span></div>'
+        + '<ul class="speedList" style="display:block">'
+        + '<li rate="1">1x</li><li rate="1.5">1.5x</li></ul></body></html>'
+      );
+      const ZHS = win.ZHS;
+      const v = win.document.querySelector('video');
+      let hitRate = null;
+      win.document.querySelectorAll('.speedList li').forEach((li) => {
+        li.addEventListener('click', () => {
+          hitRate = li.getAttribute('rate');
+          v.playbackRate = parseFloat(hitRate);
+        });
+      });
+      v.playbackRate = 1.5;   // 先置于非目标速率，否则「已是目标速率」守卫直接跳过（行为正确）
+      await ZHS.Player.setSpeed(v, 1);
+      eq('71D1 目标 1 倍速命中 rate="1" 项', hitRate, '1');
+      eq('71D2 playbackRate 归一化为 1', v.playbackRate, 1);
+      stopAllTimers();
+    }
+  })();
+  await _v68;
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {

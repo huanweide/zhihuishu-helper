@@ -1,8 +1,8 @@
 # 项目索引（PROJECT MAP）
 
-> 最后更新：2026-10-28（round-58 人类化与防检测：在场感知 + 拟人节奏 + 反暴力重试）
-> 状态：**v0.6.67**，油猴脚本 21 模块，逻辑单测 **735 通过 / 0 失败**
-> 本文件的模块数/测试数/命令已同步至 v0.6.67，以本版为准。
+> 最后更新：2026-11-15（round-59 温和交互层 P1：倍速走平台菜单，不再直改属性）
+> 状态：**v0.6.68**，油猴脚本 21 模块，逻辑单测 **742 通过 / 0 失败**
+> 本文件的模块数/测试数/命令已同步至 v0.6.68，以本版为准。
 
 ---
 
@@ -10,7 +10,7 @@
 
 ```bash
 node build.js                  # 构建 → dist/zhihuishu-helper.user.js（版本号从 package.json 注入）
-node test/run.js               # 逻辑单测（jsdom，735 项断言）—— 改 src 后必跑
+node test/run.js               # 逻辑单测（jsdom，742 项断言）—— 改 src 后必跑
 node tools/check-dist-fresh.js # dist 与 src 一致性校验（漏 build 会被挡下）
 node test/screenshot.js        # 截屏测试（真实 Chrome，需本机起浏览器，另行跑）
 ```
@@ -45,6 +45,8 @@ node test/screenshot.js        # 截屏测试（真实 Chrome，需本机起浏�
 | [`docs/05-切集与反作弊调研.md`](docs/05-切集与反作弊调研.md) | **八条硬约束**（切集/seek/验证码/节奏）——本项目宪法 | 改播放/切课/答题逻辑前必读 |
 | [`docs/06-GitHub生态全景调研.md`](docs/06-GitHub生态全景调研.md) | 50+ 竞品调研、三技术路线、法律风险地图 | 找新思路/评估方案时 |
 | [`docs/07-Greasyfork发布指引.md`](docs/07-Greasyfork发布指引.md) | Greasyfork 上架步骤、描述文案、双源同步与风险自查 | 发新版要同步 Greasyfork 时 |
+| [`docs/08-封禁风险与技术路径调研.md`](docs/08-封禁风险与技术路径调研.md) | 四路证据交叉验证：换路线不降封号风险，主战场是行为拟人化 | 评估技术路线/风险时 |
+| [`docs/31-温和交互层升级方案.md`](docs/31-温和交互层升级方案.md) | 交互触点分级（L1 原生点击/L3 裸 API 兜底）+ 逐触点改造方案 | 改播放控制层前必读 |
 | [`docs/11-测试报告.md`](docs/11-测试报告.md) | 两层测试体系、覆盖明细 | 想了解测试怎么跑 |
 | [`docs/90-快照与回溯.md`](docs/90-快照与回溯.md) | 快照机制 + 恢复步骤 | 想回退代码时 |
 
@@ -77,7 +79,7 @@ src/                              # 源码（按序拼装，文件名即加载�
 ├── 15-presence.js     93 行   在场感知：活动/聚焦监听 + isUserPresent/shouldYield（让权基座，反检测第一关）
 
 build.js                     ✅   构建：src/*.js → dist/*.user.js（版本从 package.json 注入）
-test/run.js                  ✅   逻辑单测：735 项断言（jsdom，两组之间互不共享状态）
+test/run.js                  ✅   逻辑单测：742 项断言（jsdom，两组之间互不共享状态）
 tools/check-dist-fresh.js    ✅   dist/src 一致性（漏 rebuild 的守门员）
 tools/zhs-cli.js             ✅   外置 CLI：start/connect/diag/deep/inject/run（用户只登录一次，见 skill zhihuishu-cli）
 tools/diag-probe.js          ✅   诊断探针：只读结构 dump + 切课策略穷举（CDP 注入用）
@@ -171,14 +173,14 @@ zhs.boot()                    // 面板挂载失败时的手动重撬
 - [ ] 掌握度答题（studywisdomh5）——生态调研已定位，未开工
 - [ ] 真实站点全链路回归（需用户配合开调试 Edge）
 
-**当前门禁**：`node build.js` + `node test/run.js` **735 通过 / 0 失败**（v0.6.67，jsdom；截屏测试需真机 Chrome，另行跑）。
+**当前门禁**：`node build.js` + `node test/run.js` **742 通过 / 0 失败**（v0.6.68，jsdom；截屏测试需真机 Chrome，另行跑）。
 
 ---
 
 ## 六、发布流程（改完必走）
 
 ```bash
-node build.js && node test/run.js          # 门禁：构建 + 全量测试（735/0 才算过）
+node build.js && node test/run.js          # 门禁：构建 + 全量测试（742/0 才算过）
 # 版本铁律（本项目是两件套，不是 novel-smith 的五件套）：
 #   package.json 的 version + CHANGELOG.md 新增条目（build.js 从前者注入 dist）
 git add <显式文件>                          # 禁 git add -A；排调试产物（tools/dbg-*、*.last.json）
