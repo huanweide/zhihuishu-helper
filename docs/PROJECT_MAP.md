@@ -1,8 +1,8 @@
 # 项目索引（PROJECT MAP）
 
-> 最后更新：2026-11-15（round-59 温和交互层 P1：倍速走平台菜单，不再直改属性）
-> 状态：**v0.6.68**，油猴脚本 21 模块，逻辑单测 **742 通过 / 0 失败**
-> 本文件的模块数/测试数/命令已同步至 v0.6.68，以本版为准。
+> 最后更新：2026-11-15（round-60 温和交互层 P2~P5：播放控制全面走平台原生 UI）
+> 状态：**v0.6.69**，油猴脚本 21 模块，逻辑单测 **762 通过 / 0 失败**
+> 本文件的模块数/测试数/命令已同步至 v0.6.69，以本版为准。
 
 ---
 
@@ -10,7 +10,7 @@
 
 ```bash
 node build.js                  # 构建 → dist/zhihuishu-helper.user.js（版本号从 package.json 注入）
-node test/run.js               # 逻辑单测（jsdom，742 项断言）—— 改 src 后必跑
+node test/run.js               # 逻辑单测（jsdom，762 项断言）—— 改 src 后必跑
 node tools/check-dist-fresh.js # dist 与 src 一致性校验（漏 build 会被挡下）
 node test/screenshot.js        # 截屏测试（真实 Chrome，需本机起浏览器，另行跑）
 ```
@@ -79,7 +79,7 @@ src/                              # 源码（按序拼装，文件名即加载�
 ├── 15-presence.js     93 行   在场感知：活动/聚焦监听 + isUserPresent/shouldYield（让权基座，反检测第一关）
 
 build.js                     ✅   构建：src/*.js → dist/*.user.js（版本从 package.json 注入）
-test/run.js                  ✅   逻辑单测：742 项断言（jsdom，两组之间互不共享状态）
+test/run.js                  ✅   逻辑单测：762 项断言（jsdom，两组之间互不共享状态）
 tools/check-dist-fresh.js    ✅   dist/src 一致性（漏 rebuild 的守门员）
 tools/zhs-cli.js             ✅   外置 CLI：start/connect/diag/deep/inject/run（用户只登录一次，见 skill zhihuishu-cli）
 tools/diag-probe.js          ✅   诊断探针：只读结构 dump + 切课策略穷举（CDP 注入用）
@@ -173,14 +173,14 @@ zhs.boot()                    // 面板挂载失败时的手动重撬
 - [ ] 掌握度答题（studywisdomh5）——生态调研已定位，未开工
 - [ ] 真实站点全链路回归（需用户配合开调试 Edge）
 
-**当前门禁**：`node build.js` + `node test/run.js` **742 通过 / 0 失败**（v0.6.68，jsdom；截屏测试需真机 Chrome，另行跑）。
+**当前门禁**：`node build.js` + `node test/run.js` **762 通过 / 0 失败**（v0.6.69，jsdom；截屏测试需真机 Chrome，另行跑）。
 
 ---
 
 ## 六、发布流程（改完必走）
 
 ```bash
-node build.js && node test/run.js          # 门禁：构建 + 全量测试（742/0 才算过）
+node build.js && node test/run.js          # 门禁：构建 + 全量测试（762/0 才算过）
 # 版本铁律（本项目是两件套，不是 novel-smith 的五件套）：
 #   package.json 的 version + CHANGELOG.md 新增条目（build.js 从前者注入 dist）
 git add <显式文件>                          # 禁 git add -A；排调试产物（tools/dbg-*、*.last.json）

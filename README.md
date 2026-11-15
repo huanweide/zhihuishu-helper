@@ -52,7 +52,7 @@ GitHub 上同类项目不少：[ocsjs/ocsjs](https://github.com/ocsjs/ocsjs)（�
 | 断点续播 | ✅ 跨 iframe / 跨页面 / 重启浏览器都接得回 | — | — |
 | 防作废设计 | **绝不 seek**（拖进度必触发验证码）、倍速硬上限 1.5、验证码停手等人 | — | — |
 | 监考考试 | **坚决不碰**（代码级红线，不是口头承诺） | — | — |
-| 质量保障 | 742 项逻辑单测 + CI 门禁 + 5 套页面版本适配 | 社区维护 | 社区维护 |
+| 质量保障 | 762 项逻辑单测 + CI 门禁 + 5 套页面版本适配 | 社区维护 | 社区维护 |
 
 一句话定位：**OCS 适合多平台通吃；fuckZHS / Autovisor 适合愿意折腾 Python 的；本项目适合「只想把智慧树挂完、还要保住学习记录」的人。**
 
@@ -138,11 +138,11 @@ ZHS.Solver.channels.push({
 ```bash
 node build.js                      # 构建：src/*.js 按序拼装 → dist/*.user.js
 node tools/check-dist-fresh.js     # dist 与 src 一致性
-node test/run.js                   # 逻辑单测（742 项，jsdom）
-node tools/check-docs-consistency.js --tests 742   # 文档数字不漂移
+node test/run.js                   # 逻辑单测（762 项，jsdom）
+node tools/check-docs-consistency.js --tests 762   # 文档数字不漂移
 ```
 
-> 门禁基线：当前 **v0.6.68**，通过 742 / 失败 0——README 与文档里的版本号、测试数由第 ⑤ 条命令机器把关。
+> 门禁基线：当前 **v0.6.69**，通过 762 / 失败 0——README 与文档里的版本号、测试数由第 ⑤ 条命令机器把关。
 
 - **欢迎的贡献**：报 bug（带日志与页面版本代号）、适配新页面版本、新增求解通道、补文档翻译、补测试用例。开工前读 [贡献指南](CONTRIBUTING.md)（含四条不可触碰红线），参与即同意 [行为准则](CODE_OF_CONDUCT.md)。
 
@@ -163,7 +163,7 @@ node tools/check-docs-consistency.js --tests 742   # 文档数字不漂移
 
 ## 🗺️ 路线图
 
-- [x] 自动播放 / 断点续播 / 三通道答题 / 全自动学习引擎 / 人类化防检测 / 742 项单测 + 70 项截屏测试 / 五套页面版本适配
+- [x] 自动播放 / 断点续播 / 三通道答题 / 全自动学习引擎 / 人类化防检测 / 温和交互层（所有播放控制优先点平台原生按钮）/ 762 项单测 + 70 项截屏测试 / 五套页面版本适配
 - [ ] 更多平台的题库协议适配（目前支持 `TikuAdapter` 标准协议）
 - [ ] 章节测试的批量导出与复盘
 - [ ] 真机 E2E 纳入 CI（当前依赖真机 Chrome，仅本地跑）

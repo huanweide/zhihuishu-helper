@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树网课助手
 // @namespace    https://github.com/huanweide/zhihuishu-helper
-// @version      0.6.68
+// @version      0.6.69
 // @description  智慧树自动播放 + 断点续播 + AI 自动答题 + 全自动看完收尾
 // @author       ReTri
 // 带子域与裸域都写上：只写通配子域匹配不到 https://zhihuishu.com/ 本身，
@@ -39,7 +39,7 @@
 
 /* ===== 构建注入 ===== */
 window.__ZHS_BUILD__ = window.__ZHS_BUILD__ || {};
-window.__ZHS_BUILD__.version = "0.6.68";
+window.__ZHS_BUILD__.version = "0.6.69";
 
 /* ===== 00-config.js ===== */
 /**
@@ -2292,7 +2292,23 @@ window.__ZHS_BUILD__.version = "0.6.68";
       if (!el) return false;
       const cat = ZHS.Catalog;
 
-      // 先试「无点击」策略：spa → url
+      // 温和交互层 P5（docs/31 §3.5）：gotoNext 场景优先点平台原生「下一节/继续学习」
+      // 按钮——用平台自己的 UI，比直调 SPA 内部方法更温和（页面自己的代码改状态）。
+      // 验收（_waitSwitched）失败自动回落 spa/url，能力不缩水。
+      if (opt.allowNativeNext) {
+        try {
+          const fired = await this._viaNativeNext();
+          if (fired && await this._waitSwitched(el, opt.fromKey, opt.timeout || 2500)) {
+            this.lastStrategy = 'nativeNext';
+            ZHS.Log.info('[Nav] 策略『nativeNext』跳转成功并验收');
+            return true;
+          }
+        } catch (e) {
+          this.lastError = 'nativeNext: ' + e.message;
+        }
+      }
+
+      // 再试「无点击」策略：spa → url
       if (!opt.humanOnly) {
         for (const name of ['spa', 'url']) {
           try {
@@ -2307,20 +2323,6 @@ window.__ZHS_BUILD__.version = "0.6.68";
             this.lastError = name + ': ' + e.message;
             ZHS.Log.debug('[Nav] 策略『' + name + '』异常：' + e.message);
           }
-        }
-      }
-
-      // 策略③：平台原生下一节/继续按钮（仅 gotoNext 场景允许）
-      if (opt.allowNativeNext) {
-        try {
-          const fired = await this._viaNativeNext();
-          if (fired && await this._waitSwitched(el, opt.fromKey, opt.timeout || 2500)) {
-            this.lastStrategy = 'nativeNext';
-            ZHS.Log.info('[Nav] 策略『nativeNext』跳转成功并验收');
-            return true;
-          }
-        } catch (e) {
-          this.lastError = 'nativeNext: ' + e.message;
         }
       }
 
@@ -2554,10 +2556,45 @@ window.__ZHS_BUILD__.version = "0.6.68";
       return Math.min(100, Math.round((v.currentTime / v.duration) * 100));
     },
 
-    /** 静音（volume=0 比 muted 属性更稳，平台会重置 muted） */
-    mute(v) {
+    /**
+     * 静音（温和交互层 P3 · docs/31 D2）
+     *
+     * L1：点击平台静音按钮（.volumeBox 等），让页面自己的代码切静音；
+     * L3：按钮不可用或点击未生效才直改 volume=0（volume 比 muted 属性稳，
+     *     平台会重置 muted——回落保留此已知最稳路径，能力不缩水）。
+     * 已静音时直接返回（切换键语义：再点会取消静音）。
+     */
+    async mute(v) {
       if (!v) return;
       try {
+        if (v.muted || v.volume === 0) return;   // 已静音：绝不点切换键
+        // L1：点击静音按钮（播放器壳内优先）
+        const host = (v.closest && v.closest(
+          '.prism-player, .video-js, .txp-wrapper, .txp-video-container, .player, .playBox, .video-container'
+        )) || document;
+        const SELS = ['.volumeBox', '.prism-volume', '.vjs-mute-control', '[class*="muteBtn"]', '[class*="mute-btn"]'];
+        let clicked = false;
+        for (const s of SELS) {
+          let btn = null;
+          try { btn = host.querySelector(s); } catch (e2) { /* 单选择器失败不影响其它 */ }
+          if (btn && this._visible(btn)) {
+            const fire = U.realClickHuman || U.realClick || ((x) => { x.click(); return true; });
+            if (fire(btn)) { clicked = true; break; }
+          }
+        }
+        // 验收：0.9s 内轮询确认页面真的切了静音
+        if (clicked) {
+          const deadline = Date.now() + 900;
+          while (Date.now() < deadline) {
+            if (v.muted || v.volume === 0) {
+              ZHS.Log.debug('已通过平台静音按钮静音');
+              return;
+            }
+            if (U.sleep) await U.sleep(150); else await new Promise((r) => setTimeout(r, 150));
+          }
+          ZHS.Log.debug('静音按钮点击未生效，降级直接设置 volume=0');
+        }
+        // L3 兜底：volume=0 比 muted 属性更稳，平台会重置 muted
         v.volume = 0;
         v.muted = true;
         const box = document.querySelector('.volumeBox');
@@ -2671,6 +2708,10 @@ window.__ZHS_BUILD__.version = "0.6.68";
     /**
      * 确保播放：暂停且未结束 → 尝试恢复
      * 返回是否触发了播放
+     *
+     * 温和交互层 P2（docs/31）：优先点击播放器自带的播放按钮（UI 层，页面自己的
+     * 代码恢复播放），验收 1.2s 内真的播起来；按钮不存在或点了没反应才降级裸
+     * v.play() 兜底——能力不缩水，降级打日志可审计。
      */
     async ensurePlaying(v) {
       if (!v || v.ended) return false;
@@ -2683,7 +2724,20 @@ window.__ZHS_BUILD__.version = "0.6.68";
         return false;
       }
       try {
-        this.mute(v);                       // 必须静音才能绕过自动播放策略
+        await this.mute(v);                 // 必须静音才能绕过自动播放策略（P3 温和化）
+        // P2：L1 点击播放器播放按钮 → 验收真的播了
+        if (this.clickPlayButton(v)) {
+          const deadline = Date.now() + 1200;
+          while (Date.now() < deadline) {
+            if (!v.paused) {
+              ZHS.Log.debug('已通过播放器播放按钮恢复播放');
+              return true;
+            }
+            if (U.sleep) await U.sleep(150); else await new Promise((r) => setTimeout(r, 150));
+          }
+          ZHS.Log.debug('播放按钮点击未生效，降级直接调用 play()');
+        }
+        // L3 兜底：裸 play
         const p = v.play();
         if (p && typeof p.catch === 'function') p.catch(() => {});
         ZHS.Log.debug('检测到暂停，已尝试恢复播放');
@@ -2692,6 +2746,15 @@ window.__ZHS_BUILD__.version = "0.6.68";
         ZHS.Log.debug('恢复播放失败：' + e.message);
         return false;
       }
+    },
+
+    /** 元素可见性（getComputedStyle 判定；jsdom 与真机行为一致，不依赖布局的 offsetParent） */
+    _visible(el) {
+      try {
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+      } catch (e) { /* 读不到样式按可见处理 */ }
+      return true;
     },
 
     /**
@@ -2713,6 +2776,16 @@ window.__ZHS_BUILD__.version = "0.6.68";
      */
     clickPlayButton(v) {
       if (!v || !v.paused) return false;   // 已在播或非法 → 不点（避免切换成暂停）
+      return this._clickPlayToggle(v);
+    },
+
+    /**
+     * 播放/暂停切换键点击（无 paused 守卫的内核）。
+     * 温和交互层 P4：maybeHumanPause「模拟离座」时播放中点它 = 点暂停键，最像真人。
+     * 可见性用 getComputedStyle 判定（jsdom 无布局，offsetParent 恒 null 会误杀）。
+     * @returns {boolean} 是否找到可见切换键并点击
+     */
+    _clickPlayToggle(v) {
       try {
         // 播放器容器优先级：video 的祖先播放器壳 > document
         const host = (v.closest && v.closest(
@@ -2726,14 +2799,15 @@ window.__ZHS_BUILD__.version = "0.6.68";
           'button[aria-label*="播放"]', 'button[title*="播放"]',
           '.play-button', '.btn-play',                              // 通用
         ];
+        const fire = U.realClickHuman || U.realClick || ((x) => { x.click(); return true; });
         for (const s of SELS) {
           try {
             const btns = host.querySelectorAll(s);
             for (const b of btns) {
-              // 只点布局可见的按钮（big-play 在已播态常被隐藏，点了无效）
-              if (b && b.offsetParent !== null) {
-                b.click();
-                ZHS.Log.debug('已点击播放器播放按钮：' + s);
+              // 只点可见按钮（big-play 在已播态常被隐藏，点了无效）
+              if (b && this._visible(b)) {
+                fire(b);
+                ZHS.Log.debug('已点击播放器播放/暂停切换键：' + s);
                 return true;
               }
             }
@@ -2744,8 +2818,8 @@ window.__ZHS_BUILD__.version = "0.6.68";
           const txt = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, '');
           const byText = Array.from(host.querySelectorAll(
             'button, [role="button"], .el-button, .btn, [class*="play"]'
-          )).find((b) => /^(播放|开始|▶|►)$/.test(txt(b)) && b.offsetParent !== null);
-          if (byText) { byText.click(); ZHS.Log.debug('已点击播放按钮（文本匹配）'); return true; }
+          )).find((b) => /^(播放|开始|▶|►)$/.test(txt(b)) && this._visible(b));
+          if (byText) { fire(byText); ZHS.Log.debug('已点击播放按钮（文本匹配）'); return true; }
         } catch (e) { /* 忽略 */ }
         return false;
       } catch (e) {
@@ -2954,7 +3028,12 @@ window.__ZHS_BUILD__.version = "0.6.68";
       this._humanPauseLastMs = dur * 1000;
       this._humanPauseUntil = now + dur * 1000;
       this._humanPauseResumeLogged = false;
-      try { video.pause(); } catch (e) { /* 暂停失败不影响主流程 */ }
+      // 温和交互层 P4（docs/31 D5）：真人「离座」是点暂停键再走——优先点播放器的
+      // 播放/暂停切换键（播放中点它 = 暂停，页面自己的代码改状态）；找不到按钮才
+      // 裸 video.pause() 兜底，行为不变。
+      if (!this._clickPlayToggle(video)) {
+        try { video.pause(); } catch (e) { /* 暂停失败不影响主流程 */ }
+      }
       ZHS.Log.info('拟人化随机暂停：模拟真人中途离开，暂停 ' + dur + ' 秒后自动恢复'
         + '（平台官方客户端同款节奏，降低挂机特征）');
       return true;

@@ -4259,6 +4259,248 @@ Promise.all([_n3, _n4, _stopCond, _fakeFin, _manualAns, _noreplay, _transient, _
   })();
   await _v68;
 
+  // ============================================================
+  // 第 72~74 组：温和交互层 P2~P4（docs/31 · 播放控制层）
+  // P2 播放恢复 UI 前置：ensurePlaying 先点播放器播放按钮，裸 play 只兜底
+  // P3 静音温和化：mute 先点平台静音按钮，volume=0 只兜底
+  // P4 拟人暂停点暂停键：真人「离座」是点暂停键再走，裸 pause 只兜底
+  // 判别：改前（直改 API）必红；改后（UI 点击）全绿。
+  // ============================================================
+  const _v69 = (async () => {
+    console.log('\n=== 72. 播放恢复 UI 前置（P2）===');
+    // ---- A. 播放按钮存在 + 页面 handler → 点按钮恢复，裸 play 不被调 ----
+    {
+      const { win } = makeEnv(
+        '<html><body><video></video>'
+        + '<div class="player"><button class="prism-big-play-btn">播放</button></div></body></html>'
+      );
+      const ZHS = win.ZHS;
+      const v = win.document.querySelector('video');
+      let btnCalls = 0, playCalls = 0;
+      Object.defineProperty(v, 'paused', { get: () => v.__paused, set: (x) => { v.__paused = x; }, configurable: true });
+      v.__paused = true;
+      Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+      Object.defineProperty(v, 'currentTime', { value: 100, configurable: true });
+      v.play = function () { playCalls++; this.__paused = false; return Promise.resolve(); };
+      win.document.querySelector('.prism-big-play-btn').addEventListener('click', () => {
+        btnCalls++; v.__paused = false;     // 页面播放器自己的行为：点按钮 → 开始播放
+      });
+      const r = await ZHS.Player.ensurePlaying(v);
+      ok('72A1 按钮路径恢复成功', r === true);
+      eq('72A2 页面播放按钮被点击', btnCalls, 1);
+      eq('72A3 裸 play() 未被调用（UI 路径优先）', playCalls, 0);
+      eq('72A4 播放确实恢复', v.paused, false);
+      stopAllTimers();
+    }
+    // ---- B. 无播放按钮 → 回落裸 play（能力不缩水） ----
+    {
+      const { win } = makeEnv('<html><body><video></video></body></html>');
+      const v = win.document.querySelector('video');
+      let playCalls = 0;
+      Object.defineProperty(v, 'paused', { get: () => v.__paused, set: (x) => { v.__paused = x; }, configurable: true });
+      v.__paused = true;
+      Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+      Object.defineProperty(v, 'currentTime', { value: 100, configurable: true });
+      v.play = function () { playCalls++; this.__paused = false; return Promise.resolve(); };
+      const r = await win.ZHS.Player.ensurePlaying(v);
+      ok('72B1 无按钮回落裸 play 成功', r === true && playCalls === 1);
+      stopAllTimers();
+    }
+    // ---- C. 按钮 handler 不生效（点了没播）→ 1.2s 验收后降级裸 play ----
+    {
+      const { win } = makeEnv(
+        '<html><body><video></video>'
+        + '<div class="player"><button class="prism-big-play-btn">播放</button></div></body></html>'
+      );
+      const v = win.document.querySelector('video');
+      let playCalls = 0;
+      Object.defineProperty(v, 'paused', { get: () => v.__paused, set: (x) => { v.__paused = x; }, configurable: true });
+      v.__paused = true;
+      Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+      Object.defineProperty(v, 'currentTime', { value: 100, configurable: true });
+      v.play = function () { playCalls++; this.__paused = false; return Promise.resolve(); };
+      win.document.querySelector('.prism-big-play-btn').addEventListener('click', () => { /* 点了但没反应 */ });
+      const r = await win.ZHS.Player.ensurePlaying(v);
+      ok('72C1 按钮无效时降级裸 play 且恢复成功', r === true && playCalls === 1 && v.paused === false);
+      stopAllTimers();
+    }
+
+    console.log('\n=== 73. 静音温和化（P3）===');
+    // ---- A. 静音按钮存在 + 页面 handler → 点按钮静音，不直改 volume ----
+    {
+      const { win } = makeEnv(
+        '<html><body><video></video>'
+        + '<div class="player"><div class="volumeBox"><span>音量</span></div></div></body></html>'
+      );
+      const ZHS = win.ZHS;
+      const v = win.document.querySelector('video');
+      let btnCalls = 0;
+      v.volume = 1;
+      v.addEventListener('volumechange', () => {});   // no-op，仅为贴近真实
+      win.document.querySelector('.volumeBox').addEventListener('click', () => {
+        btnCalls++; v.muted = true; v.volume = 0;     // 页面播放器自己的行为：点音量钮 → 静音
+      });
+      await ZHS.Player.mute(v);
+      eq('73A1 页面静音按钮被点击', btnCalls, 1);
+      eq('73A2 静音生效（页面 handler 完成）', v.muted === true && v.volume === 0, true);
+      stopAllTimers();
+    }
+    // ---- B. 无静音按钮 → 回落 volume=0（旧行为，能力不缩水） ----
+    {
+      const { win } = makeEnv('<html><body><video></video></body></html>');
+      const v = win.document.querySelector('video');
+      v.volume = 1;
+      await win.ZHS.Player.mute(v);
+      eq('73B1 无按钮回落直改 volume=0', v.volume === 0 && v.muted === true, true);
+      stopAllTimers();
+    }
+    // ---- C. 已静音 → 不点按钮（切换键语义：再点会取消静音） ----
+    {
+      const { win } = makeEnv(
+        '<html><body><video></video>'
+        + '<div class="player"><div class="volumeBox"><span>音量</span></div></div></body></html>'
+      );
+      const v = win.document.querySelector('video');
+      let btnCalls = 0;
+      v.muted = true; v.volume = 0;
+      win.document.querySelector('.volumeBox').addEventListener('click', () => { btnCalls++; });
+      await win.ZHS.Player.mute(v);
+      eq('73C1 已静音时不再点击（防切换成有声）', btnCalls, 0);
+      stopAllTimers();
+    }
+
+    console.log('\n=== 74. 拟人暂停点暂停键（P4）===');
+    // ---- A. 播放器切换键存在 + 页面 handler → 触发暂停时点按钮，不裸调 pause ----
+    {
+      const { win } = makeEnv(
+        '<html><body><video></video>'
+        + '<div class="player"><button class="prism-play-btn">暂停</button></div></body></html>'
+      );
+      const ZHS = win.ZHS;
+      const P = ZHS.Player;
+      const v = win.document.querySelector('video');
+      let btnCalls = 0, pauseCalls = 0;
+      Object.defineProperty(v, 'paused', { get: () => v.__paused, set: (x) => { v.__paused = x; }, configurable: true });
+      v.__paused = false;
+      Object.defineProperty(v, 'ended', { value: false, configurable: true });
+      Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+      Object.defineProperty(v, 'currentTime', { value: 120, configurable: true });
+      v.pause = function () { pauseCalls++; };
+      win.document.querySelector('.prism-play-btn').addEventListener('click', () => {
+        btnCalls++; v.__paused = true;      // 页面播放器自己的行为：点切换键 → 暂停
+      });
+      ZHS.setConfig({ humanPause: true, humanPauseChance: 1 });
+      const triggered = P.maybeHumanPause(v);
+      ok('74A1 拟人暂停触发', triggered === true);
+      eq('74A2 页面切换键被点击（像真人点暂停）', btnCalls, 1);
+      eq('74A3 裸 pause() 未被调用', pauseCalls, 0);
+      eq('74A4 暂停确实生效', v.paused, true);
+      P.resetHumanPause();
+      stopAllTimers();
+    }
+    // ---- B. 无切换键 → 回落裸 pause（行为不变） ----
+    {
+      const { win } = makeEnv('<html><body><video></video></body></html>');
+      const ZHS = win.ZHS;
+      const P = ZHS.Player;
+      const v = win.document.querySelector('video');
+      let pauseCalls = 0;
+      Object.defineProperty(v, 'paused', { get: () => v.__paused, set: (x) => { v.__paused = x; }, configurable: true });
+      v.__paused = false;
+      Object.defineProperty(v, 'ended', { value: false, configurable: true });
+      Object.defineProperty(v, 'duration', { value: 600, configurable: true });
+      Object.defineProperty(v, 'currentTime', { value: 120, configurable: true });
+      v.pause = function () { pauseCalls++; };
+      ZHS.setConfig({ humanPause: true, humanPauseChance: 1 });
+      ok('74B1 无按钮回落裸 pause 仍触发', P.maybeHumanPause(v) === true && pauseCalls === 1);
+      P.resetHumanPause();
+      stopAllTimers();
+    }
+  })();
+  await _v69;
+
+  // ============================================================
+  // 第 75 组：导航链序温和化（P5 · docs/31 §3.5）
+  // gotoNext 场景（allowNativeNext）优先点平台原生「下一节」按钮（用平台自己的 UI），
+  // spa 内部方法直调降为回落。判别：改前 spa 优先（红），改后 nativeNext 优先（绿）。
+  // ============================================================
+  const _v70 = (async () => {
+    console.log('\n=== 75. 导航链序温和化（P5：原生按钮优先）===');
+    // ---- A. 同时有 spa 句柄 + 原生下一节按钮 + allowNativeNext → 优先 nativeNext ----
+    {
+      const { win } = makeEnv(
+        '<html><body><button class="next-btn">下一节</button></body></html>'
+      );
+      const ZHS = win.ZHS;
+      const realCat = ZHS.Catalog;
+      const other = { __id: 'O' };
+      const target = {
+        __id: 'T',
+        __vue__: { $emit: () => { state.cur = target; } },   // spa 句柄可用（回落时才轮到它）
+      };
+      const state = { cur: other };
+      ZHS.Catalog = {
+        items: () => [target, other],
+        current: () => state.cur,
+        itemTitle: (e) => e.__id,
+        clickAndVerify: async () => { throw new Error('不应被调用'); },
+        findByName: (k) => [target, other].find((e) => e.__id === k) || null,
+      };
+      // 平台自己的行为：点「下一节」按钮 → 切到下一节（此处下一节 = target）
+      win.document.querySelector('.next-btn').addEventListener('click', () => { state.cur = target; });
+      const okR = await ZHS.Nav.jumpTo(target, { allowNativeNext: true, fromKey: 'O' });
+      eq('75A1 nativeNext 路径跳转成功', okR, true);
+      eq('75A2 原生按钮策略优先于 spa 直调', ZHS.Nav.lastStrategy, 'nativeNext');
+      ZHS.Catalog = realCat;
+      stopAllTimers();
+    }
+    // ---- B. 无 allowNativeNext → 维持 spa 优先（非 gotoNext 场景不受影响） ----
+    {
+      const { win } = makeEnv('<html><body></body></html>');
+      const ZHS = win.ZHS;
+      const realCat = ZHS.Catalog;
+      const other = { __id: 'O' };
+      const target = { __id: 'T', __vue__: { $emit: () => { state.cur = target; } } };
+      const state = { cur: other };
+      ZHS.Catalog = {
+        items: () => [target, other],
+        current: () => state.cur,
+        itemTitle: (e) => e.__id,
+        clickAndVerify: async () => { throw new Error('不应被调用'); },
+        findByName: (k) => [target, other].find((e) => e.__id === k) || null,
+      };
+      const okR = await ZHS.Nav.jumpTo(target, { fromKey: 'O' });
+      eq('75B1 无 allowNativeNext 时 spa 仍优先', okR === true && ZHS.Nav.lastStrategy === 'spa', true);
+      ZHS.Catalog = realCat;
+      stopAllTimers();
+    }
+    // ---- C. 原生按钮点击无效 → 验收失败回落 spa（回落链完整） ----
+    {
+      const { win } = makeEnv(
+        '<html><body><button class="next-btn">下一节</button></body></html>'
+      );
+      const ZHS = win.ZHS;
+      const realCat = ZHS.Catalog;
+      const other = { __id: 'O' };
+      const target = { __id: 'T', __vue__: { $emit: () => { state.cur = target; } } };
+      const state = { cur: other };
+      ZHS.Catalog = {
+        items: () => [target, other],
+        current: () => state.cur,
+        itemTitle: (e) => e.__id,
+        clickAndVerify: async () => { throw new Error('不应被调用'); },
+        findByName: (k) => [target, other].find((e) => e.__id === k) || null,
+      };
+      // 按钮无 handler：点击后页面无反应 → _waitSwitched 超时失败 → 回落 spa
+      const okR = await ZHS.Nav.jumpTo(target, { allowNativeNext: true, fromKey: 'O' });
+      eq('75C1 nativeNext 无效时回落 spa 成功', okR, true);
+      eq('75C2 回落后策略为 spa', ZHS.Nav.lastStrategy, 'spa');
+      ZHS.Catalog = realCat;
+      stopAllTimers();
+    }
+  })();
+  await _v70;
+
   console.log('\n' + '='.repeat(50));
   console.log(`通过 ${pass} / 失败 ${fail}`);
   if (failures.length) {

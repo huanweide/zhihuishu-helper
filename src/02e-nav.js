@@ -36,7 +36,23 @@
       if (!el) return false;
       const cat = ZHS.Catalog;
 
-      // 先试「无点击」策略：spa → url
+      // 温和交互层 P5（docs/31 §3.5）：gotoNext 场景优先点平台原生「下一节/继续学习」
+      // 按钮——用平台自己的 UI，比直调 SPA 内部方法更温和（页面自己的代码改状态）。
+      // 验收（_waitSwitched）失败自动回落 spa/url，能力不缩水。
+      if (opt.allowNativeNext) {
+        try {
+          const fired = await this._viaNativeNext();
+          if (fired && await this._waitSwitched(el, opt.fromKey, opt.timeout || 2500)) {
+            this.lastStrategy = 'nativeNext';
+            ZHS.Log.info('[Nav] 策略『nativeNext』跳转成功并验收');
+            return true;
+          }
+        } catch (e) {
+          this.lastError = 'nativeNext: ' + e.message;
+        }
+      }
+
+      // 再试「无点击」策略：spa → url
       if (!opt.humanOnly) {
         for (const name of ['spa', 'url']) {
           try {
@@ -51,20 +67,6 @@
             this.lastError = name + ': ' + e.message;
             ZHS.Log.debug('[Nav] 策略『' + name + '』异常：' + e.message);
           }
-        }
-      }
-
-      // 策略③：平台原生下一节/继续按钮（仅 gotoNext 场景允许）
-      if (opt.allowNativeNext) {
-        try {
-          const fired = await this._viaNativeNext();
-          if (fired && await this._waitSwitched(el, opt.fromKey, opt.timeout || 2500)) {
-            this.lastStrategy = 'nativeNext';
-            ZHS.Log.info('[Nav] 策略『nativeNext』跳转成功并验收');
-            return true;
-          }
-        } catch (e) {
-          this.lastError = 'nativeNext: ' + e.message;
         }
       }
 

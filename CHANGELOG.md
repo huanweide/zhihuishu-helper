@@ -8,6 +8,35 @@
 > 已移除英文版 `README_EN.md` —— 不再默认生成/维护英文文档，避免双份同步漂移与无谓负担。
 > GitHub 仓库页**默认渲染 `README.md`（中文）**，访客开箱即见中文，无需切换。
 
+## [0.6.69] - 2026-11-15
+> round-60：**温和交互层 P2~P5 —— 播放控制全面走平台原生 UI**（docs/31 方案全部落地）
+
+### 变更（交互哲学升级收官：所有播放控制 L1 优先、裸 API 只兜底）
+- **P2 播放恢复 UI 前置**：`ensurePlaying` 先点播放器自带的播放按钮（复用 round-50 的
+  `clickPlayButton`），验收 1.2s 内真的播起来；按钮不存在或点击无效才裸 `v.play()` 兜底。
+  `checkStall` 的卡死唤醒**有意保持**裸 `play()`——卡死场景播放键处于暂停态图标，点它反而会暂停。
+- **P3 静音温和化**：`mute` 改 async，已静音直接返回（切换键语义：再点会取消静音）；
+  优先点 `.volumeBox` / prism / video.js 静音按钮，验收 0.9s；回落保留 `volume=0`（平台会重置
+  `muted` 属性，此为已知最稳路径，日志说明降级）。
+- **P4 拟人暂停点暂停键**：`maybeHumanPause` 触发时优先点播放器的播放/暂停切换键
+  （真人「离座」本来就是点暂停再走），页面自己的代码改 paused；找不到按钮裸 `pause()` 兜底。
+  为此抽出 `_clickPlayToggle`（无 paused 守卫内核），`clickPlayButton` 对外签名不变。
+- **P5 导航链序温和化**：`jumpTo` 在 gotoNext 场景（`allowNativeNext`）把平台原生
+  「下一节/继续学习」按钮提到 spa 直调**之前**——用平台自己的 UI 比直调 Vue/React 内部方法
+  更温和；验收失败自动回落 spa/url，非 gotoNext 场景链序不变。
+- **可见性判定统一 `_visible()`**（getComputedStyle）：替换 `offsetParent !== null`——
+  jsdom 无布局时 offsetParent 恒 null 会误杀按钮，真机行为一致。
+- 范式：所有触点 = L1 原生 UI 点击 → 验收 → L3 裸 API 兜底（降级必打日志，面板日志页可审计）。
+
+### 测试
+- 新增 `test/run.js` 第 72~75 组 **15 条**判别测试：UI 优先（裸 API 不被调）、按钮无效降级、
+  已静音防切换、无按钮回落、nativeNext 优先 + 回落链完整。72~74 组改前红（TDD）→ 全绿。
+
+### 门禁
+- `node test/run.js` → **762 通过 / 0 失败**（742 + 新增 20，含 dist 校验项）
+
+---
+
 ## [0.6.68] - 2026-11-15
 > round-59：**温和交互层 P1 —— 倍速走平台菜单，不再直改属性**（docs/31-温和交互层升级方案.md）
 

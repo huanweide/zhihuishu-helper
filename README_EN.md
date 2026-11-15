@@ -54,7 +54,7 @@ Similar projects on GitHub: [ocsjs/ocsjs](https://github.com/ocsjs/ocsjs) (multi
 | Resume | ✅ cross-iframe / cross-page / browser restart | — | — |
 | Anti-voiding | **never seeks** (dragging triggers captcha), speed hard-capped at 1.5×, captcha = hands off | — | — |
 | Proctored exams | **strictly untouched** (a code-level red line, not a promise) | — | — |
-| Quality | 742 logic unit tests + CI gates + 5 page-version adapters | community | community |
+| Quality | 762 logic unit tests + CI gates + 5 page-version adapters | community | community |
 
 One-line positioning: **OCS for multi-platform coverage; fuckZHS / Autovisor if you're comfortable with Python; this one if you just want Zhihuishu done while keeping your study records.**
 
@@ -129,10 +129,10 @@ ZHS.Solver.channels.push({
 node build.js                      # build: src/*.js → dist/*.user.js
 node tools/check-dist-fresh.js     # dist matches src
 node test/run.js                   # logic unit tests (jsdom)
-node tools/check-docs-consistency.js --tests 742   # doc numbers don't drift
+node tools/check-docs-consistency.js --tests 762   # doc numbers don't drift
 ```
 
-> Gate baseline: currently **v0.6.68**, passed 742 / failed 0.
+> Gate baseline: currently **v0.6.69**, passed 762 / failed 0.
 
 - **Contributions welcome**: bug reports (with logs and page-version code), new page-version adapters, solver channels, docs / translation, test cases. Read [CONTRIBUTING.md](CONTRIBUTING.md) (four untouchable red lines) before starting; participating means agreeing to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -153,7 +153,7 @@ For personal study and research only; commercial use and distribution prohibited
 
 ## 🗺️ Roadmap
 
-- [x] Auto-play / resume / three-channel answering / full auto-learning engine / humanized anti-detection / 742 unit tests + 70 screenshot tests / five page-version adapters
+- [x] Auto-play / resume / three-channel answering / full auto-learning engine / humanized anti-detection / gentle-interaction layer (all playback via native platform buttons) / 762 unit tests + 70 screenshot tests / five page-version adapters
 - [ ] More question-bank protocol adapters (currently `TikuAdapter` standard protocol)
 - [ ] Batch export & review of chapter tests
 - [ ] Real-device E2E in CI (currently local Chrome only)
