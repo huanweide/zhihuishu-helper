@@ -91,6 +91,8 @@ GitHub 上同类项目不少：[ocsjs/ocsjs](https://github.com/ocsjs/ocsjs)（�
 
 也可以到 [Releases](https://github.com/huanweide/zhihuishu-helper/releases) 下载 `zhihuishu-helper.user.js` 拖进浏览器。要改代码才需要走源码构建：`git clone` 后 `npm install && node build.js`，详见 [安装说明](docs/20-使用说明.md)。
 
+想锁定版本（不让脚本随 `master` 自动更新）：把直链里的 `@master` 换成 [Releases](https://github.com/huanweide/zhihuishu-helper/releases) 里对应的 tag 即可。
+
 ### 用起来
 
 ```bash
