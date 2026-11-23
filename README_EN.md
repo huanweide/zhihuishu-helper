@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="#-quick-start">Install</a> · <a href="#-how-it-compares">Comparison</a> · <a href="#-security-boundary">Security Boundary</a> · <a href="./README.md">中文</a>
+  <a href="#-where-to-start">Where to start</a> · <a href="#-quick-start">Install</a> · <a href="#-how-it-compares">Comparison</a> · <a href="#-security-boundary">Security Boundary</a> · <a href="./README.md">中文</a>
 </p>
 
 <p align="center">
@@ -15,9 +15,9 @@
   <a href="https://github.com/huanweide/zhihuishu-helper/stargazers"><img src="https://img.shields.io/github/stars/huanweide/zhihuishu-helper?style=social" alt="Stars"></a>
 </p>
 
-**Install → open the course page → click "Start" → go to sleep.** Muted speed-up auto-play, resumable progress, auto-answering of popup questions (never a blind guess) — all inside your own browser, your account never passes through any third-party server.
+**Install → open the course page → click "Start" → go to sleep.** Muted speed-up auto-play, resumable progress, auto-answering of popup questions (never a blind guess).
 
-A Tampermonkey userscript dedicated to Zhihuishu (智慧树 / 知到). In one line: it remembers and finishes the three things "where am I / what do I answer / who's next" for you.
+A Tampermonkey userscript dedicated to Zhihuishu (智慧树 / 知到): it remembers and finishes the three things "where am I / what do I answer / who's next" for you. Everything runs in your own browser — your account never passes through any third-party server.
 
 <p align="center">
   <img src="docs/screenshots/panel.png" alt="Zhihuishu Helper control panel on a real course page" width="720">
@@ -25,6 +25,15 @@ A Tampermonkey userscript dedicated to Zhihuishu (智慧树 / 知到). In one li
 <p align="center"><sub>The floating panel on a real course page: status / logs / settings — start and it takes over</sub></p>
 
 ---
+
+## 🧭 Where to Start
+
+| Your situation | Start here |
+|---|---|
+| Just want the course done | [Two-step install](#-quick-start) → read the three rules |
+| Want homework / chapter tests answered too | [Configure a bank or DeepSeek key](docs/20-使用说明.md) |
+| Worried about account safety | [Security Boundary](#-security-boundary) → [ban-risk research](docs/08-封禁风险与技术路径调研.md) |
+| Want to change code / add a solver channel | [Development](#-development) → [PROJECT_MAP](docs/PROJECT_MAP.md) |
 
 ## ⚡ 30-Second Overview
 
@@ -49,11 +58,10 @@ Similar projects on GitHub: [ocsjs/ocsjs](https://github.com/ocsjs/ocsjs) (multi
 | Form | userscript in your daily browser | browser extension | Python environment / desktop app |
 | Setup | install Tampermonkey → drag the script, two steps | extension + config | install Python + deps |
 | Account & data | **100% local**, no third party | bring your own bank service | protocol / automation direct |
-| Stealth | `navigator.webdriver=false` natively + human-like pacing | depends on config | protocol fingerprint / Playwright webdriver flag |
-| Answering | bank → LLM → offline heuristic; **all fail → blank, never a guess** | bank configurable | trade-offs vary |
+| Answering | bank → LLM → offline heuristic; **all fail → blank** | bank configurable | trade-offs vary |
 | Resume | ✅ cross-iframe / cross-page / browser restart | — | — |
-| Anti-voiding | **never seeks** (dragging triggers captcha), speed hard-capped at 1.5×, captcha = hands off | — | — |
-| Proctored exams | **strictly untouched** (a code-level red line, not a promise) | — | — |
+| Anti-voiding | never seeks, speed hard-capped at 1.5×, captcha = hands off | — | — |
+| Detection footprint | no `navigator.webdriver` flag + human-like pacing | depends on config | protocol / Playwright fingerprint |
 | Quality | 762 logic unit tests + CI gates + 5 page-version adapters | community | community |
 
 One-line positioning: **OCS for multi-platform coverage; fuckZHS / Autovisor if you're comfortable with Python; this one if you just want Zhihuishu done while keeping your study records.**
@@ -81,7 +89,11 @@ Full module map: [PROJECT_MAP](docs/PROJECT_MAP.md); platform recon & selector n
 1. Install [Tampermonkey](https://www.tampermonkey.net/) (Chrome / Edge / Firefox)
 2. Open the [jsDelivr one-click install link](https://cdn.jsdelivr.net/gh/huanweide/zhihuishu-helper@master/dist/zhihuishu-helper.user.js) → click "Install"
 
+After installing, open any Zhihuishu course page: if the panel appears bottom-right, it's working; if not, see the [Usage Guide](docs/20-使用说明.md).
+
 Or grab `zhihuishu-helper.user.js` from [Releases](https://github.com/huanweide/zhihuishu-helper/releases) and drag it into the browser. Building from source: `git clone`, `npm install`, `node build.js` — see the [Usage Guide](docs/20-使用说明.md).
+
+To pin a version (stop auto-updating from `master`), replace `@master` in the link with the tag from [Releases](https://github.com/huanweide/zhihuishu-helper/releases).
 
 ### Read before use (three rules, violating them voids progress)
 
@@ -140,12 +152,13 @@ node tools/check-docs-consistency.js --tests 762   # doc numbers don't drift
 
 ## 🛡️ Security Boundary
 
-This project will **never**:
-
-1. **Auto-navigate to homework / exam pages** — sit-and-wait only: it acts when you arrive.
-2. **Seek (drag) the player progress** — dragging triggers the Tencent Turing slider captcha; progress recovery re-clicks the section title and lets the platform position itself.
-3. **Blindly guess answers** — better blank than wrong.
-4. **Collect any credentials** — API keys live only in your local Tampermonkey config.
+| It will | It will never |
+|---|---|
+| Play, pause, advance (preferring native platform buttons) | Auto-navigate to homework / exam pages (sit-and-wait only) |
+| Remember progress across iframe / page / browser restart | Seek (drag) the player — dragging triggers the Turing slider captcha |
+| Take answers from bank / LLM / offline heuristic | Blindly guess: all channels fail → leave it blank for you |
+| Keep API keys in your local Tampermonkey config | Collect or upload any credentials |
+| Yield when you are operating | Answer proctored exams (a code-level red line, not a promise) |
 
 For personal study and research only; commercial use and distribution prohibited; use at your own risk, complying with Zhihuishu's terms and your school's regulations.
 
