@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="#-快速开始">安装</a> · <a href="#-和同类脚本比有什么不同">对比</a> · <a href="#-安全边界">安全边界</a> · <a href="README_EN.md">English</a> · <a href="docs/20-使用说明.md">完整文档</a>
+  <a href="#-从哪开始">从哪开始</a> · <a href="#-快速开始">安装</a> · <a href="#-和同类脚本比有什么不同">对比</a> · <a href="#-安全边界">安全边界</a> · <a href="README_EN.md">English</a> · <a href="docs/20-使用说明.md">完整文档</a>
 </p>
 
 <p align="center">
@@ -13,9 +13,9 @@
   <a href="https://github.com/huanweide/zhihuishu-helper/stargazers"><img src="https://img.shields.io/github/stars/huanweide/zhihuishu-helper?style=social" alt="Stars"></a>
 </p>
 
-**装上 → 打开网课页 → 点「启动」→ 去睡觉。** 静音倍速自动播放、进度断了能接上、弹题自动答（答不上不瞎猜），全程跑在你自己的浏览器里，账号不经过任何第三方服务器。
+**装上 → 打开网课页 → 点「启动」→ 去睡觉。** 静音倍速自动播放、进度断了能接上、弹题自动答（答不上不瞎猜）。
 
-一个 Tampermonkey 油猴脚本，专精智慧树 / 知到。用户侧一句话：它把「学到哪、答什么、下一节是谁」这三件事替你记住并做完。
+一个专精智慧树 / 知到的 Tampermonkey 油猴脚本：把「学到哪、答什么、下一节是谁」这三件事替你记住并做完。全程跑在你自己的浏览器里，账号不经过任何第三方服务器。
 
 <p align="center">
   <img src="docs/screenshots/panel.png" alt="智慧树助手控制面板（真实课程页面）" width="720">
@@ -23,6 +23,15 @@
 <p align="center"><sub>真实课程页面上的悬浮面板：状态 / 日志 / 设置，启动即托管</sub></p>
 
 ---
+
+## 🧭 从哪开始
+
+| 你的情况 | 从这里看 |
+|---|---|
+| 只想把课挂完 | [两步安装](#-快速开始) → 看完三条红线 |
+| 想连作业 / 章节测试一起答 | [配置题库或 DeepSeek Key](docs/20-使用说明.md) |
+| 担心账号安全 | [安全边界](#-安全边界) → [封禁风险调研](docs/08-封禁风险与技术路径调研.md) |
+| 想改代码 / 加求解通道 | [参与开发](#-参与开发) → [PROJECT_MAP](docs/PROJECT_MAP.md) |
 
 ## ⚡ 30 秒看懂
 
@@ -47,11 +56,10 @@ GitHub 上同类项目不少：[ocsjs/ocsjs](https://github.com/ocsjs/ocsjs)（�
 | 形态 | 油猴脚本，浏览器原生跑 | 浏览器扩展 | Python 环境 / 桌面程序 |
 | 上手门槛 | 装油猴 → 拖入脚本，两步 | 装扩展 + 配置 | 装 Python + 依赖 |
 | 账号与数据 | **全程本地**，账号不交第三方 | 需自配题库服务 | 协议 / 自动化直连 |
-| 隐蔽性 | `navigator.webdriver=false` 天然无自动化标志 + 拟人节奏 | 取决于配置 | 协议流请求特征明显 / Playwright 带 webdriver 标志 |
-| 答题策略 | 题库 → LLM → 离线启发式，**三通道全失手就留空，绝不瞎蒙** | 题库可配 | 各有取舍 |
+| 答题策略 | 题库 → LLM → 离线启发式，**三通道全失手就留空** | 题库可配 | 各有取舍 |
 | 断点续播 | ✅ 跨 iframe / 跨页面 / 重启浏览器都接得回 | — | — |
-| 防作废设计 | **绝不 seek**（拖进度必触发验证码）、倍速硬上限 1.5、验证码停手等人 | — | — |
-| 监考考试 | **坚决不碰**（代码级红线，不是口头承诺） | — | — |
+| 防作废 | 绝不 seek、倍速硬上限 1.5、验证码停手等人 | — | — |
+| 检测特征 | 无 `navigator.webdriver` 标志 + 拟人节奏 | 取决于配置 | 协议流 / Playwright 特征明显 |
 | 质量保障 | 762 项逻辑单测 + CI 门禁 + 5 套页面版本适配 | 社区维护 | 社区维护 |
 
 一句话定位：**OCS 适合多平台通吃；fuckZHS / Autovisor 适合愿意折腾 Python 的；本项目适合「只想把智慧树挂完、还要保住学习记录」的人。**
@@ -78,6 +86,8 @@ GitHub 上同类项目不少：[ocsjs/ocsjs](https://github.com/ocsjs/ocsjs)（�
 
 1. 装 [Tampermonkey](https://www.tampermonkey.net/)（Chrome / Edge / Firefox 都行）
 2. 打开 [jsDelivr 一键安装直链](https://cdn.jsdelivr.net/gh/huanweide/zhihuishu-helper@master/dist/zhihuishu-helper.user.js) → 点油猴弹出的「安装」
+
+装好后打开任意智慧树课程页，右下角出现控制面板即成功；没出现先看 [安装说明](docs/20-使用说明.md)。
 
 也可以到 [Releases](https://github.com/huanweide/zhihuishu-helper/releases) 下载 `zhihuishu-helper.user.js` 拖进浏览器。要改代码才需要走源码构建：`git clone` 后 `npm install && node build.js`，详见 [安装说明](docs/20-使用说明.md)。
 
@@ -150,12 +160,13 @@ node tools/check-docs-consistency.js --tests 762   # 文档数字不漂移
 
 ## 🛡️ 安全边界
 
-本项目**永远不会**：
-
-1. **自动跳转到作业页 / 考试页** —— 只守株待兔，你人到了它才动。
-2. **seek（拖动）播放器进度** —— 拖动必触发腾讯 Turing 滑块；进度补齐走「重新点本节标题，让平台自己定位」。
-3. **替你瞎蒙答案** —— 宁可留空交人工。
-4. **收集任何凭据** —— API Key 只存你本地油猴配置，不进代码、不上传。
+| 会做 | 永远不会 |
+|---|---|
+| 播放、暂停、切下一节（优先点平台原生按钮） | 自动跳转到作业页 / 考试页（只守株待兔，你人到了它才动） |
+| 记住进度，跨 iframe / 跨页面 / 重启恢复 | seek（拖动）播放器进度——拖动必触发腾讯 Turing 滑块 |
+| 从题库 / LLM / 离线启发式取答案 | 替你瞎蒙：三通道全失手就留空交人工 |
+| 把 API Key 存在本地油猴配置 | 收集或上传任何凭据 |
+| 你在操作时主动让权 | 代答监考考试（代码级红线，不是口头承诺） |
 
 仅限个人学习研究使用，禁止商用与传播；使用风险自负，并请遵守智慧树平台条款与所在学校规定。
 
